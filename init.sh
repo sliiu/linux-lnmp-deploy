@@ -215,6 +215,7 @@ is_firewall_on()  { systemctl is-active firewalld &>/dev/null; }
 is_docker_ok()    { command -v docker &>/dev/null && docker info &>/dev/null; }
 is_zsh_ok()       { [[ -d /usr/local/share/ohmyzsh ]]; }
 is_cybersec_ok()  { [[ -f "$CYBERSEC_MARKER" ]]; }
+is_saferm_ok()     { [[ -x /usr/local/bin/saferm ]]; }
 container_ok()    { docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^lnmp-${1}$"; }
 container_any()   { docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^lnmp-${1}$"; }
 
@@ -1705,6 +1706,9 @@ show_status() {
   _s=$(is_zsh_ok && echo "已安装" || echo "未安装")
   printf "  %-20s %s\n" "Oh-My-Zsh" "$_s"
 
+  _s=$(is_saferm_ok && echo "已安装" || echo "未安装")
+  printf "  %-20s %s\n" "saferm" "$_s"
+
   _s=$(is_cybersec_ok && echo "已加固" || echo "未配置")
   printf "  %-20s %s\n" "等保" "$_s"
 
@@ -1965,7 +1969,7 @@ _interactive_install_one() {
   idx=$(menu_select "选择要安装的组件" \
     "BBR" "Firewalld" "Docker" "Oh-My-Zsh" "SSH 安全" "LNMP (全部)" \
     "LNMP - nginx" "LNMP - php" "LNMP - mysql" "LNMP - redis" "LNMP - acme" \
-    "Wheel 管理员" "等保加固" "Devops 用户")
+    "Wheel 管理员" "等保加固" "Devops 用户" "saferm 安全删除")
 
   case "$idx" in
     0)  install_bbr ;;
@@ -1989,6 +1993,7 @@ _interactive_install_one() {
     11) WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
     12) setup_cyber_users ;;
     13) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
+    14) install_saferm ;;
   esac
   conf_save
 }
@@ -1997,7 +2002,8 @@ _interactive_uninstall_one() {
   local idx
   idx=$(menu_select "选择要卸载的组件" \
     "BBR" "Firewalld" "Docker" "Oh-My-Zsh" "SSH (恢复默认)" \
-    "LNMP (全部)" "LNMP - nginx" "LNMP - php" "LNMP - mysql" "LNMP - redis" "LNMP - acme")
+    "LNMP (全部)" "LNMP - nginx" "LNMP - php" "LNMP - mysql" "LNMP - redis" "LNMP - acme" \
+    "saferm")
 
   case "$idx" in
     0)  uninstall_bbr ;;
@@ -2011,6 +2017,7 @@ _interactive_uninstall_one() {
     8)  uninstall_lnmp "mysql" ;;
     9)  uninstall_lnmp "redis" ;;
     10) uninstall_lnmp "acme" ;;
+    11) uninstall_saferm ;;
   esac
   conf_save
 }
@@ -2034,6 +2041,365 @@ _interactive_config() {
   esac
   conf_save
   ok "配置已更新"
+}
+
+# ═══════════════════════════════════════════════
+#  saferm（合并自 saferm.sh，安装到 /usr/local/bin/saferm）
+# ═══════════════════════════════════════════════
+install_saferm() {
+  hr; info "安装 saferm（/var/trash 安全删除）"; echo ""
+  cat > /usr/local/bin/saferm <<'SAFEEOF'
+#!/bin/bash
+##
+## saferm.sh
+## A script to safely remove files by moving them to GNOME/KDE trash instead of direct deletion.
+## Created by Lucas Zhang
+## Contact: <lucas@qing-u.com>
+##
+## Created on  Mon Feb 17 10:10:18 2025 Lucas Zhang
+## Last modified Mon Feb 17 12:49:26 2025 Lucas Zhang
+##
+## Original author: Eemil Lagerspetz
+##
+
+version="1.1"
+
+## Configuration
+cleanup_days=60     # Remove files from trash after specified days (0 to disable)
+auto_cleanup=""     # Enable automatic cleanup on each run (empty to disable)
+max_trash_size=1024 # Maximum trash size in MB (0 for unlimited)
+
+## trashbin definitions
+trash_dir="/var/trash"
+
+## flags (change these to change default behaviour)
+recursive=""    # Recursive directory deletion (disabled by default)
+verbose="true"  # Verbose output for better user experience
+force=""        # Special file deletion protection (disabled by default)
+unsafe=""       # Safe deletion mode by default
+no_log=""       # Enable logging by default
+cleanup_only="" # Normal operation mode by default
+
+## possible flags (recursive, verbose, force, unsafe)
+# don't touch this unless you want to create/destroy flags
+flaglist="r v f u q n c"
+
+# Colors
+blue='\e[1;34m'
+red='\e[1;31m'
+norm='\e[0m'
+
+trash_dev() { stat -c '%d' "$1" 2>/dev/null || echo ""; }
+
+if [ ! -d "${trash_dir}" ]; then
+	sudo mkdir -p "${trash_dir}"
+	sudo chmod 1777 "${trash_dir}"
+fi
+if [ ! -d "${trash_dir}/files" ]; then
+	sudo mkdir -p "${trash_dir}/files"
+	sudo chmod 1777 "${trash_dir}/files"
+fi
+if [ ! -d "${trash_dir}/logs" ]; then
+	sudo mkdir -p "${trash_dir}/logs"
+	sudo chmod 1777 "${trash_dir}/logs"
+fi
+trash="${trash_dir}/files"
+
+
+usagemessage() {
+	echo -e "This is ${blue}saferm.sh$norm $version with LXDE and Gnome3 detection.
+    Features:
+    - Prompts for unsafe deletion when cross-filesystem moves are required
+    - Supports unsafe deletion mode (regular rm) that bypasses trash
+    - Automatically creates trash and trashinfo directories if they don't exist
+    - Handles symbolic link deletion
+    - Improved user permission handling\n"
+	echo -e "Usage: ${blue}/path/to/saferm.sh$norm [${blue}OPTIONS$norm] [$blue--$norm] ${blue}files and directories to remove safely$norm"
+	echo -e "${blue}OPTIONS$norm:"
+	echo -e "$blue-r$norm      Enable recursive directory removal"
+	echo -e "$blue-f$norm      Enable deletion of special files (devices, etc.)"
+	echo -e "$blue-u$norm      Enable unsafe mode (bypass trash and delete permanently)"
+	echo -e "$blue-v$norm      Enable verbose mode (default in this version)"
+	echo -e "$blue-q$norm      Enable quiet mode (opposite of verbose)"
+	echo -e "$blue-n$norm      Disable logging to trashinfo"
+	echo -e "$blue-a$norm      Enable automatic trash cleanup"
+	echo -e "$blue-c$norm      Run trash cleanup only (no file deletion)"
+}
+
+trashinfo() {
+	bname=$(basename -- "$2")
+	fname="${trash_dir}/logs/${bname}.trashinfo"
+	cat <<EOF >"${fname}"
+[Trash Info]
+Path=$1
+DeletionDate=$(date +%Y-%m-%dT%H:%M:%S)
+EOF
+}
+
+setflags() {
+	flags_set=""
+	for k in $flaglist; do
+		if [[ "$1" =~ $k ]]; then
+			flags_set="$flags_set $k"
+		fi
+	done
+
+	for k in $flags_set; do
+		if [ "$k" == "v" ]; then
+			verbose="true"
+		elif [ "$k" == "r" ]; then
+			recursive="true"
+		elif [ "$k" == "f" ]; then
+			force="true"
+		elif [ "$k" == "u" ]; then
+			unsafe="true"
+		elif [ "$k" == "q" ]; then
+			unset verbose
+		elif [ "$k" == "n" ]; then
+			no_log="true"
+		elif [ "$k" == "c" ]; then
+			cleanup_only="true"
+			auto_cleanup="true"
+		elif [ "$k" == "a" ]; then
+			auto_cleanup="true"
+		fi
+	done
+}
+
+performdelete() {
+	# "delete" = move to trash
+	if [ -n "$unsafe" ]; then
+		if [ -n "$verbose" ]; then echo -e "Deleting $red$1$norm"; fi
+		#UNSAFE: permanently remove files.
+		rm -rf -- "$1"
+	else
+		if [ -n "$verbose" ]; then echo -e "Moving $blue$1$norm to $red${trash}$norm"; fi
+		# Check if target file exists
+		filename=$(basename -- "$1")
+		if [ -e "${trash}/${filename}" ]; then
+			# If exists, rename target file to filename_timestamp
+			timestamp=$(date +%Y%m%d_%H%M%S)
+			# Also update original file's trashinfo
+			if [ -f "${trash_dir}/logs/${filename}.trashinfo" ]; then
+				mv "${trash_dir}/logs/${filename}.trashinfo" "${trash_dir}/logs/${filename}_${timestamp}.trashinfo"
+			fi
+			mv "${trash}/${filename}" "${trash}/${filename}_${timestamp}"
+		fi
+		mv -- "$1" "${trash}" # Move new file to trash
+	fi
+}
+
+askfs() {
+	[ ! -e "$1" ] && [ ! -L "$1" ] && return
+	if [ "$(trash_dev "$1")" != "$(trash_dev "${trash}")" ]; then
+		unset answer
+		while true; do
+			echo -e "Warning: $blue$1$norm is on a different device than trash. Proceed with unsafe deletion (y/n)?"
+			read -r -n 1 answer
+			echo
+			case $answer in
+			[Yy]*)
+				unsafe="yes"
+				break
+				;;
+			[Nn]*)
+				return
+				;;
+			*)
+				echo "Please enter 'y' for yes or 'n' for no."
+				;;
+			esac
+		done
+	fi
+}
+
+complain() {
+	msg=""
+	if [ ! -e "$1" -a ! -L "$1" ]; then # does not exist
+		msg="File does not exist:"
+	elif [ ! -w "$1" -a ! -L "$1" ]; then # not writable
+		msg="File is not writable:"
+	elif [ ! -f "$1" -a ! -d "$1" -a -z "$force" ]; then # Special or sth else.
+		msg="Is not a regular file or directory (and -f not specified):"
+	elif [ -f "$1" ]; then # is a file
+		act="true" # operate on files by default
+	elif [ -d "$1" -a -n "$recursive" ]; then # is a directory and recursive is enabled
+		act="true"
+	elif [ -d "$1" -a -z "${recursive}" ]; then
+		msg="Is a directory (and -r not specified):"
+	else
+		# not file or dir. This branch should not be reached.
+		msg="No such file or directory:"
+	fi
+}
+
+asknobackup() {
+	unset answer
+	while true; do
+		echo -e "Error: Unable to move $blue$1$norm to trash. Proceed with unsafe deletion (y/n)?"
+		read -r -n 1 answer
+		echo
+		case $answer in
+		[Yy]*)
+			unsafe="yes"
+			performdelete "$1"
+			ret=$?
+			break
+			;;
+		[Nn]*)
+			break
+			;;
+		*)
+			echo "Please enter 'y' for yes or 'n' for no."
+			;;
+		esac
+	done
+	# Reset temporary unsafe flag
+	unset unsafe
+}
+
+deletefiles() {
+	for k in "$@"; do
+		fdesc="$blue$k$norm"
+		complain "${k}"
+		if [ -n "$msg" ]; then
+			echo -e "$msg $fdesc."
+		else
+			orig_path=$(readlink -f -- "$k" 2>/dev/null || realpath -- "$k" 2>/dev/null || echo "${PWD}/${k#./}")
+			if [ -z "$unsafe" ]; then
+				askfs "${k}"
+			fi
+			do_unsafe=""
+			[ -n "$unsafe" ] && do_unsafe=1
+			performdelete "${k}"
+			ret=$?
+			if [[ "$answer" == [yY] ]]; then
+				unset unsafe
+				unset answer
+			fi
+			if [ ! "$ret" -eq 0 ]; then
+				asknobackup "${k}"
+			fi
+			if [ -z "$no_log" ] && [ "$ret" -eq 0 ] && [ -z "$do_unsafe" ]; then
+				trashinfo "${orig_path}" "${k}"
+			fi
+		fi
+	done
+}
+
+# Add function to get folder size (in MB)
+get_folder_size() {
+	local folder="$1"
+	local size=$(du -sm "$folder" | cut -f1)
+	echo "$size"
+}
+
+# Modify cleanup function with space limit cleanup
+cleanup_trash() {
+	# Skip cleanup if disabled and not explicitly requested
+	if { [ "$cleanup_days" -eq 0 ] && [ "$max_trash_size" -eq 0 ]; } || [ -z "$auto_cleanup" ]; then
+		return 0
+	fi
+	if [ -n "$verbose" ]; then
+		echo -e "Starting trash cleanup..."
+	fi
+	# Time-based cleanup
+	if [ "$cleanup_days" -gt 0 ]; then
+		current_time=$(date +%s)
+		expire_time=$((current_time - cleanup_days * 86400))
+
+		find "${trash}" -type f -print0 | while IFS= read -r -d '' file; do
+			filename=$(basename "$file")
+			trashinfo_file="${trash_dir}/logs/${filename}.trashinfo"
+
+			file_time=$(stat -c %Y "$file")
+
+			if [ $file_time -lt $expire_time ]; then
+				if [ -n "$verbose" ]; then
+					echo -e "Deleting expired file: ${blue}${filename}${norm}"
+				fi
+				rm -f "$file"
+				[ -f "$trashinfo_file" ] && rm -f "$trashinfo_file"
+			fi
+		done
+	fi
+
+	# Size-based cleanup
+	if [ "$max_trash_size" -gt 0 ]; then
+		current_size=$(get_folder_size "${trash}")
+		if [ "$current_size" -gt "$max_trash_size" ]; then
+			if [ -n "$verbose" ]; then
+				echo -e "Current trash size: ${blue}${current_size}MB${norm} exceeds limit of ${blue}${max_trash_size}MB${norm}"
+				echo -e "Removing oldest files to free up space..."
+			fi
+
+			# Get all files sorted by time (oldest first)
+			find "${trash}" -type f -printf '%T@ %p\n' | sort -n | while read -r timestamp filepath; do
+				filename=$(basename "$filepath")
+				trashinfo_file="${trash_dir}/logs/${filename}.trashinfo"
+
+				if [ -n "$verbose" ]; then
+					echo -e "Deleting old file: ${blue}${filename}${norm}"
+				fi
+
+				rm -f "$filepath"
+				[ -f "$trashinfo_file" ] && rm -f "$trashinfo_file"
+
+				# Recheck size
+				current_size=$(get_folder_size "${trash}")
+				if [ "$current_size" -le "$max_trash_size" ]; then
+					if [ -n "$verbose" ]; then
+						echo -e "Cleanup complete: Current size ${blue}${current_size}MB${norm} is within limit"
+					fi
+					break
+				fi
+			done
+		fi
+	fi
+	if [ -n "$verbose" ]; then
+		echo -e "Cleanup process completed"
+	fi
+}
+
+# find out which flags were given
+afteropts="" # boolean for end-of-options reached
+for k in "$@"; do
+	# if starts with dash and before end of options marker (--)
+	if [ "${k:0:1}" == "-" -a -z "$afteropts" ]; then
+		if [ "${k:1:2}" == "-" ]; then # if end of options marker
+			afteropts="true"
+		else # option(s)
+			setflags "$k" # set flags
+		fi
+	else # not starting with dash, or after end-of-opts
+		files[++i]="$k"
+	fi
+done
+
+# Cleanup trash
+cleanup_trash
+
+# If cleanup only mode, exit after cleanup
+if [ -n "$cleanup_only" ]; then
+	exit 0
+fi
+
+if [ -z "${files[1]}" ]; then # no parameters?
+	usagemessage # tell them how to use this
+	exit 0
+fi
+
+# do the work
+deletefiles "${files[@]}"
+SAFEEOF
+  chmod 755 /usr/local/bin/saferm
+  ok "已写入 /usr/local/bin/saferm"
+}
+
+uninstall_saferm() {
+  hr; info "卸载 saferm"; echo ""
+  rm -f /usr/local/bin/saferm
+  ok "已移除 /usr/local/bin/saferm"
 }
 
 # ═══════════════════════════════════════════════
@@ -2065,6 +2431,7 @@ usage() {
   wheel       Wheel 管理员
   cyber       等保加固
   devops      Devops 部署用户
+  saferm      安全删除脚本（/var/trash，安装到 /usr/local/bin/saferm）
 
 安装选项:
   --gh-proxy=URL          GitHub 代理
@@ -2152,6 +2519,7 @@ main() {
         wheel)    setup_wheel_user ;;
         cyber)    setup_cyber_users ;;
         devops)   setup_devops_user ;;
+        saferm)   install_saferm ;;
         *)        die "未知组件: $target" ;;
       esac
       conf_save
@@ -2172,6 +2540,7 @@ main() {
         mysql)    uninstall_lnmp "mysql" ;;
         redis)    uninstall_lnmp "redis" ;;
         acme)     uninstall_lnmp "acme" ;;
+        saferm)   uninstall_saferm ;;
         *)        die "未知组件: $target" ;;
       esac
       conf_save
