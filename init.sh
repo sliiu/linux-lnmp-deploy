@@ -112,7 +112,7 @@ _git_clone_retry() {
   local url="$1" dir="$2"
   local attempts="${3:-5}" wait="${4:-5}" i
   for ((i = 1; i <= attempts; i++)); do
-    rm -rf "$dir"
+    /bin/rm -rf "$dir"
     if env GIT_HTTP_LOW_SPEED_LIMIT=500 GIT_HTTP_LOW_SPEED_TIME=600 \
       git -c http.version=HTTP/1.1 -c http.postBuffer=524288000 \
       clone --depth=1 --single-branch "$url" "$dir"; then
@@ -296,7 +296,7 @@ install_zsh() {
   run_pkg install -y zsh
 
   local gh_url="${GH_PROXY:+${GH_PROXY}/}https://github.com"
-  rm -rf /usr/local/share/ohmyzsh
+  /bin/rm -rf /usr/local/share/ohmyzsh
 
   _git_clone_retry "${gh_url}/ohmyzsh/ohmyzsh.git" /usr/local/share/ohmyzsh \
     || die "clone ohmyzsh 失败（可重试或在向导中选择 GitHub 代理）"
@@ -321,6 +321,9 @@ source $ZSH/oh-my-zsh.sh
 [[ -f /etc/p10k.zsh ]] && source /etc/p10k.zsh
 alias ll="ls -l"
 alias la="ls -la"
+# >>> saferm init.sh >>>
+[ -f /etc/profile.d/saferm-rm.sh ] && . /etc/profile.d/saferm-rm.sh
+# <<< saferm init.sh <<<
 ZEOF
 
   cat > /etc/zshenv <<'ZEOF'
@@ -502,9 +505,9 @@ PEOF
 
 uninstall_zsh() {
   hr; info "卸载 Oh-My-Zsh"; echo ""
-  rm -rf /usr/local/share/ohmyzsh
+  /bin/rm -rf /usr/local/share/ohmyzsh
   if [[ -f /etc/zshrc.bak ]]; then mv /etc/zshrc.bak /etc/zshrc; fi
-  rm -f /etc/p10k.zsh /etc/zshenv
+  /bin/rm -f /etc/p10k.zsh /etc/zshenv
   local bash_bin="/bin/bash"
   for u in root "${WHEEL_USER:-}" "${DEVOPS_USER:-}" "${CYBER_ORDINARY:-}" "${CYBER_AUDIT:-}" "${CYBER_SAFE:-}"; do
     if [[ -n "$u" ]] && id "$u" &>/dev/null; then chsh -s "$bash_bin" "$u" 2>/dev/null || true; fi
@@ -546,7 +549,7 @@ install_docker() {
 _install_docker_alinux() {
   dnf update dnf -y 2>/dev/null || true
   dnf clean packages 2>/dev/null || true
-  rm -f /etc/yum.repos.d/docker*.repo
+  /bin/rm -f /etc/yum.repos.d/docker*.repo
 
   if fetch_url "http://mirrors.cloud.aliyuncs.com/docker-ce/linux/centos/docker-ce.repo" "/tmp/docker-ce.repo"; then
     cp /tmp/docker-ce.repo /etc/yum.repos.d/docker-ce.repo
@@ -555,7 +558,7 @@ _install_docker_alinux() {
     fetch_url "https://mirrors.aliyun.com/docker-ce/linux/centos/docker-ce.repo" "/etc/yum.repos.d/docker-ce.repo"
     sed -i 's|download.docker.com|mirrors.aliyun.com/docker-ce|g' /etc/yum.repos.d/docker-ce.repo
   fi
-  rm -f /tmp/docker-ce.repo
+  /bin/rm -f /tmp/docker-ce.repo
 
   grep -q "Alibaba Cloud Linux 3" /etc/os-release 2>/dev/null \
     && dnf -y install dnf-plugin-releasever-adapter --repo alinux3-plus 2>/dev/null || true
@@ -660,7 +663,7 @@ uninstall_docker() {
   elif command -v apt-get &>/dev/null; then
     apt-get remove -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin 2>/dev/null || true
   fi
-  rm -f /usr/local/bin/docker-compose
+  /bin/rm -f /usr/local/bin/docker-compose
   ok "Docker 已卸载"
 }
 
@@ -1656,9 +1659,9 @@ uninstall_lnmp() {
       cd "$DATA_DIR" && compose_cmd -f "$COMPOSE_FILE" down -v 2>/dev/null || true
     fi
     LNMP_SERVICES=""
-    rm -f "$COMPOSE_FILE"
+    /bin/rm -f "$COMPOSE_FILE"
     if confirm "是否删除数据目录 ${DATA_DIR}？" "n"; then
-      rm -rf "$DATA_DIR"
+      /bin/rm -rf "$DATA_DIR"
     fi
   else
     local new_services=""
@@ -2046,8 +2049,41 @@ _interactive_config() {
 # ═══════════════════════════════════════════════
 #  saferm（合并自 saferm.sh，安装到 /usr/local/bin/saferm）
 # ═══════════════════════════════════════════════
+_install_saferm_rm_alias() {
+  mkdir -p /etc/profile.d
+  cat > /etc/profile.d/saferm-rm.sh <<'EOF'
+# init.sh: 交互 shell 中 rm -> saferm
+alias rm='/usr/local/bin/saferm'
+EOF
+  chmod 644 /etc/profile.d/saferm-rm.sh
+  local f
+  for f in /etc/bash.bashrc /etc/bashrc /etc/zshrc; do
+    [[ -f "$f" ]] || continue
+    grep -qF 'saferm init.sh' "$f" && continue
+    cat >> "$f" <<'EOF'
+
+# >>> saferm init.sh >>>
+[ -f /etc/profile.d/saferm-rm.sh ] && . /etc/profile.d/saferm-rm.sh
+# <<< saferm init.sh <<<
+EOF
+  done
+}
+
+# 安装 saferm 后在本 bash 进程内启用 rm 别名（须配合全脚本使用 /bin/rm，避免误走 saferm）
+_saferm_apply_to_current_shell() {
+  [[ -f /etc/profile.d/saferm-rm.sh ]] || return 0
+  shopt -s expand_aliases 2>/dev/null || true
+  # shellcheck disable=SC1091
+  source /etc/profile.d/saferm-rm.sh
+}
+
+_saferm_drop_current_shell_alias() {
+  unalias rm 2>/dev/null || true
+  shopt -u expand_aliases 2>/dev/null || true
+}
+
 install_saferm() {
-  hr; info "安装 saferm（/var/trash 安全删除）"; echo ""
+  hr; info "安装 saferm（/var/trash 安全删除 + 全局 rm 别名）"; echo ""
   cat > /usr/local/bin/saferm <<'SAFEEOF'
 #!/bin/bash
 ##
@@ -2393,13 +2429,22 @@ fi
 deletefiles "${files[@]}"
 SAFEEOF
   chmod 755 /usr/local/bin/saferm
-  ok "已写入 /usr/local/bin/saferm"
+  _install_saferm_rm_alias
+  _saferm_apply_to_current_shell
+  ok "已写入 /usr/local/bin/saferm，并已配置 alias rm -> saferm（本会话已 source）"
 }
 
 uninstall_saferm() {
   hr; info "卸载 saferm"; echo ""
-  rm -f /usr/local/bin/saferm
-  ok "已移除 /usr/local/bin/saferm"
+  _saferm_drop_current_shell_alias
+  /bin/rm -f /usr/local/bin/saferm
+  /bin/rm -f /etc/profile.d/saferm-rm.sh
+  local f
+  for f in /etc/zshrc /etc/bash.bashrc /etc/bashrc; do
+    [[ -f "$f" ]] || continue
+    sed -i '/# >>> saferm init.sh >>>/,/# <<< saferm init.sh <<</d' "$f"
+  done
+  ok "已移除 /usr/local/bin/saferm 与 rm 别名配置"
 }
 
 # ═══════════════════════════════════════════════

@@ -18,7 +18,7 @@ curl -fsSL -o deploy.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/ra
 ## 脚本一览
 
 - **`init.sh`**：以 **root** 安装/配置 BBR、防火墙、Docker、LNMP 容器、SSH、用户与可选等保加固；
-  写入 `/etc/lnmp-env.conf`。
+  写入 `/etc/lnmp-env.conf`；可选安装 **saferm**（见下文「saferm」）。
 - **`deploy-site.sh`**：以 **root** 在已有 LNMP 栈上 **新增/更新/删除** 站点：Nginx、可选 Git、SSL
   （acme.sh）、Laravel 或静态前端。
 
@@ -53,7 +53,8 @@ curl -fsSL -o deploy.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/ra
   SSH 端口与 root 策略、LNMP 组件列表等。
 - 可选模块：**SSH 加固**、**等保三权用户**、**BBR**、**Oh-My-Zsh**、**Firewalld**、
   **Docker**、**LNMP（docker-compose）**、**wheel 管理员**、**devops 用户**（将 `DEVOPS_USER`
-  加入组 **`devops`**，sudoers 为 `%devops NOPASSWD: /usr/local/bin/deploy-site.sh`）。
+  加入组 **`devops`**，sudoers 为 `%devops NOPASSWD: /usr/local/bin/deploy-site.sh`）、
+  **saferm**（安全删除脚本，见「saferm」一节）。
 - LNMP：`/data/docker-lnmp/docker-compose.yml`，容器名 `lnmp-nginx`、`lnmp-php`、`lnmp-mysql`、
   `lnmp-redis`、`lnmp-acme`（按勾选组件）。
 
@@ -80,13 +81,77 @@ curl -fsSL -o deploy.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/ra
    sudo ./init.sh install docker --docker-mirrors=https://docker.m.daocloud.io
    sudo ./init.sh install lnmp --php-version=8.3 --mysql-pwd='你的root密码' --acme-email=you@example.com
    sudo ./init.sh install ssh --ssh-port=22 --root-login=key
+   sudo ./init.sh install saferm   # 可选：安装安全删除到 /usr/local/bin/saferm
    ```
+
+### saferm（安全删除）
+
+**作用**：在服务器上用「回收站」方式处理删除——默认把路径 **移动到** **`/var/trash/files`**，而不是直接
+`rm`，降低误删不可恢复的风险。与桌面环境的 GNOME/KDE 回收站无关，是 **本机固定目录** 的集中暂存区。
+
+**安装 / 卸载**（脚本内容内嵌在 `init.sh` 中，安装时释放到系统路径）：
+
+```bash
+sudo ./init.sh install saferm      # 写入 /usr/local/bin/saferm 并 chmod +x
+sudo ./init.sh uninstall saferm    # 删除 /usr/local/bin/saferm（不自动清空 /var/trash）
+```
+
+交互模式：**「安装单个组件」** 中选 **saferm 安全删除**；卸载在 **「卸载单个组件」** 中选 **saferm**。
+`sudo ./init.sh status` 中会显示 saferm 是否已安装。
+
+**目录与权限**（首次运行 `saferm` 时若不存在会 `sudo mkdir` 并 `chmod 1777`）：
+
+| 路径 | 用途 |
+|------|------|
+| `/var/trash` | 回收站根 |
+| `/var/trash/files` | 被删除文件/目录的实际存放处（`mv` 目标） |
+| `/var/trash/logs/*.trashinfo` | 元数据：原始路径、删除时间（类似 FreeDesktop Trash 的 trashinfo） |
+
+**默认行为概要**：
+
+- **普通文件**：直接 `mv` 进 `/var/trash/files`；若同名已存在，会把已有项改名为带时间戳的后缀，避免覆盖。
+- **目录**：须加 **`-r`** 才处理目录，否则报错提示。
+- **设备文件等特殊类型**：默认拒绝；加 **`-f`** 才允许（随后若未开 `-u`，仍会尝试进回收站，视权限而定）。
+- **跨文件系统**：`mv` 不能跨设备完成「移动」时，脚本用 **`stat` 设备号**判断与回收站是否同盘；不同盘时会 **提示** 是否改为 **永久删除**（`rm`）。若坚持进回收站，需自行先拷贝到同盘再删，或接受提示走 `rm`。
+- **`-u`（unsafe）**：绕过回收站，等同 `rm -rf`，请谨慎使用。
+
+**常用选项**（可合并，如 `-rv`；`--` 之后按字面路径处理）：
+
+| 选项 | 含义 |
+|------|------|
+| `-r` | 递归处理目录 |
+| `-f` | 允许特殊文件等 |
+| `-u` | 永久删除，不进回收站 |
+| `-v` / `-q` | 详细输出（默认偏详细）/ 安静 |
+| `-n` | 不写 `.trashinfo` |
+| `-a` | 本次运行顺带按策略清理回收站 |
+| `-c` | **仅清理回收站**，不删命令行给出的路径 |
+
+**回收站清理**（在已安装的 **`/usr/local/bin/saferm` 脚本开头** 改常量即可，改后即时生效）：
+
+- `cleanup_days`：超过若干天的 **文件** 可被清理（`0` 表示不按天清理）。
+- `max_trash_size`：回收站总大小上限（MB，`0` 表示不限制）；超出时按文件时间删最旧的。
+- `auto_cleanup`：非空时，**每次**执行 saferm 都会尝试执行上述清理；否则仅在使用 **`-a`** 或 **`-c`** 时清理。
+
+清理实现依赖 **GNU** `find`（如 `-printf`）、`stat -c` 等，适用于常见 **Linux** ECS 环境。
+
+**使用示例**：
+
+```bash
+saferm /tmp/foo.txt
+saferm -r /path/to/dir
+saferm -a /data/tmp/old.log          # 删除并触发清理（若脚本里开启了 auto_cleanup 则不必 -a）
+saferm -c                             # 只跑清理逻辑
+saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
+```
+
+执行 **`install saferm`** 后会写入 **`/etc/profile.d/saferm-rm.sh`**（`alias rm='/usr/local/bin/saferm'`），并在 **`/etc/bash.bashrc`**、**`/etc/bashrc`**（若存在）、**`/etc/zshrc`**（若已存在且尚无标记块）末尾追加一行 **source** 该文件；**`install zsh`** 生成的 **`/etc/zshrc`** 模板内也含同一段。新开会话后交互式 **`rm`** 即走 saferm；**`uninstall saferm`** 会删掉 profile 片段并 **sed** 去掉上述标记块。`init.sh` 在安装 saferm 成功后会 **在本脚本进程内 `source` 该文件并开启 `expand_aliases`**，便于同一会话里继续用菜单时 `rm` 即 saferm；脚本内真实删除已统一为 **`/bin/rm`**，避免误进回收站。卸载 saferm 时会 **`unalias rm`** 并关闭 `expand_aliases`。你本地 SSH 外层 shell 仍须 **重新登录** 或自行 `source /etc/profile.d/saferm-rm.sh` 才生效（子进程无法改父 shell 环境）。
 
 ### 菜单项对照
 
 - **1 全新安装**：多选模块后一次性执行。
-- **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器等。
-- **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录。
+- **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器 / **saferm** 等。
+- **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录；可卸载 **saferm**。
 - **4 更新配置**：代理、镜像、Alpine 源、PHP 版本/扩展、SSH、ACME 邮箱、**ACME SSL 默认方式**、
   devops 用户等。
 - **5 查看状态**：BBR、Docker、容器、SSH、等保标记等。
