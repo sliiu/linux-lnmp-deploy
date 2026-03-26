@@ -10,7 +10,7 @@
 curl -fsSL -o init.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/init.sh
 
 # deploy-site 站点部署
-curl -fsSL -o deploy.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh
+curl -fsSL -o deploy-site.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh
 ```
 
 `deploy.sh` 与仓库中的 **`deploy-site.sh`** 为同一文件；下载后请 `chmod +x init.sh deploy.sh`，部署到系统路径时建议仍命名为 **`/usr/local/bin/deploy-site.sh`**（与 `init.sh` 里 sudoers 一致）。
@@ -99,7 +99,7 @@ sudo ./init.sh uninstall saferm    # 删除 /usr/local/bin/saferm（不自动清
 交互模式：**「安装单个组件」** 中选 **saferm 安全删除**；卸载在 **「卸载单个组件」** 中选 **saferm**。
 `sudo ./init.sh status` 中会显示 saferm 是否已安装。
 
-**目录与权限**（首次运行 `saferm` 时若不存在会 `sudo mkdir` 并 `chmod 1777`）：
+**目录与权限**：**`install saferm`** 时会直接创建 **`/var/trash`**、**`files`**、**`logs`** 并 **`chmod 1777`**；若目录被删，**首次再执行 `saferm`** 时脚本内仍会尝试创建（可能 `sudo`）。
 
 | 路径 | 用途 |
 |------|------|
@@ -149,7 +149,7 @@ saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
 
 ### 菜单项对照
 
-- **1 全新安装**：多选模块后一次性执行。
+- **1 全新安装**：多选模块（含可选 **saferm**）后一次性执行。
 - **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器 / **saferm** 等。
 - **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录；可卸载 **saferm**。
 - **4 更新配置**：代理、镜像、Alpine 源、PHP 版本/扩展、SSH、ACME 邮箱、**ACME SSL 默认方式**、

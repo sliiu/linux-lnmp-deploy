@@ -1900,13 +1900,14 @@ _interactive_full_install() {
   hr; info "完整安装向导"; hr; echo ""
 
   local sel
-  sel=$(menu_multi "选择要安装的模块" "SSH 安全策略" "等保加固" "BBR" "Oh-My-Zsh" "Firewalld" "Docker" "LNMP" "Wheel 管理员")
+  sel=$(menu_multi "选择要安装的模块" "SSH 安全策略" "等保加固" "BBR" "Oh-My-Zsh" "Firewalld" "Docker" "LNMP" "Wheel 管理员" "saferm 安全删除")
 
-  local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_wheel=0
+  local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
     case "$idx" in
       0) sel_ssh=1 ;; 1) sel_cyber=1 ;; 2) sel_bbr=1 ;; 3) sel_zsh=1 ;;
       4) sel_fire=1 ;; 5) sel_docker=1 ;; 6) sel_lnmp=1 ;; 7) sel_wheel=1 ;;
+      8) sel_saferm=1 ;;
     esac
   done
 
@@ -1941,6 +1942,7 @@ _interactive_full_install() {
   fi
   if [[ $sel_ssh -eq 1 ]]; then printf "  %-20s %s\n" "SSH" "root=${ROOT_LOGIN}, 端口=${SSH_PORT}"; fi
   if [[ $sel_wheel -eq 1 ]]; then printf "  %-20s %s\n" "Wheel 管理员" "$WHEEL_USER"; fi
+  if [[ $sel_saferm -eq 1 ]]; then printf "  %-20s %s\n" "saferm" "安装"; fi
   echo ""
 
   confirm "确认执行？" "y" || { warn "已取消"; return; }
@@ -1959,6 +1961,7 @@ _interactive_full_install() {
   if [[ $sel_lnmp -eq 1 ]]; then install_lnmp; fi
   if [[ $sel_zsh -eq 1 ]]; then install_zsh; fi
   if [[ $sel_ssh -eq 1 ]]; then install_ssh; fi
+  if [[ $sel_saferm -eq 1 ]]; then install_saferm; fi
 
   conf_save
 
@@ -2429,9 +2432,11 @@ fi
 deletefiles "${files[@]}"
 SAFEEOF
   chmod 755 /usr/local/bin/saferm
+  mkdir -p /var/trash/files /var/trash/logs
+  chmod 1777 /var/trash /var/trash/files /var/trash/logs
   _install_saferm_rm_alias
   _saferm_apply_to_current_shell
-  ok "已写入 /usr/local/bin/saferm，并已配置 alias rm -> saferm（本会话已 source）"
+  ok "已写入 /usr/local/bin/saferm，已创建 /var/trash，并已配置 alias rm -> saferm（本会话已 source）"
 }
 
 uninstall_saferm() {
