@@ -1,0 +1,51 @@
+#!/bin/sh
+# ============================================================
+#  prepare-commit-msg hook
+#  从分支名提取 Issue 编号，自动追加到提交信息末尾
+#
+#  支持的分支命名：
+#    feature/123-xxx     fix/I456-xxx       feat/#42-login
+#    fix/#IHQ475-bug   feature/IHQ123-xxx
+# ============================================================
+
+COMMIT_MSG_FILE="$1"
+COMMIT_SOURCE="$2"   # message | template | merge | squash | commit
+
+# 跳过 merge / squash / amend
+case "$COMMIT_SOURCE" in
+    merge|squash|commit) exit 0 ;;
+esac
+
+BRANCH_NAME=$(git symbolic-ref --short HEAD 2>/dev/null || echo "")
+[ -z "$BRANCH_NAME" ] && exit 0
+
+# 优先匹配显式前缀：I456 (Gitee) 或 #123/#ihq5ym (GitHub) 或 ihq5ym (Gitee 无#前缀)
+ISSUE_NUMBER=$(echo "$BRANCH_NAME" | grep -oE "(#|I)[A-Za-z0-9]+|[A-Za-z][A-Za-z0-9]{2,}" | head -1)
+
+# 降级：匹配纯数字（feature/123-login → #123）或字母数字（feature/IHQ475-fix → #IHQ475）
+if [ -z "$ISSUE_NUMBER" ]; then
+    RAW_NUM=$(echo "$BRANCH_NAME" | grep -oE "(^|[^a-zA-Z])[0-9]{1,6}([^a-zA-Z]|$)" \
+              | grep -oE "[0-9]+" | head -1)
+    [ -n "$RAW_NUM" ] && ISSUE_NUMBER="#${RAW_NUM}"
+    
+    # 如果没有找到数字，尝试匹配字母数字组合（如 IHQ475）
+    if [ -z "$ISSUE_NUMBER" ]; then
+        RAW_ALPHA_NUM=$(echo "$BRANCH_NAME" | grep -oE "(^|[^a-zA-Z])[A-Z0-9]{3,}([^a-zA-Z]|$)" \
+                       | grep -oE "[A-Z0-9]+" | head -1)
+        [ -n "$RAW_ALPHA_NUM" ] && ISSUE_NUMBER="#${RAW_ALPHA_NUM}"
+    fi
+fi
+
+[ -z "$ISSUE_NUMBER" ] && exit 0
+
+# 已包含 Issue 引用时不重复追加（支持大小写格式）
+if grep -qE "(#[A-Za-z0-9]+|I[0-9]+|[A-Za-z][A-Za-z0-9]+)" "$COMMIT_MSG_FILE"; then
+    exit 0
+fi
+
+# 在第一行末尾追加 Issue 引用
+sed -i.bak "1s/$/ Refs $ISSUE_NUMBER/" "$COMMIT_MSG_FILE"
+rm -f "${COMMIT_MSG_FILE}.bak"
+
+CYAN="\033[0;36m"; DIM="\033[2m"; RESET="\033[0m"; BOLD="\033[1m"
+printf "  ${CYAN}💡 已自动关联 ${BOLD}$ISSUE_NUMBER${RESET}${CYAN}（来自分支 ${DIM}$BRANCH_NAME${RESET}${CYAN}）${RESET}\n"

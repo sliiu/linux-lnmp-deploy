@@ -1,0 +1,88 @@
+#!/bin/sh
+# ============================================================
+#  commit-msg hook
+#  1. 校验是否关联 Issue（三种格式均可）
+#  2. 调用 commitlint 校验 Conventional Commits 格式
+# ============================================================
+
+RED="\033[0;31m"; YELLOW="\033[0;33m"; CYAN="\033[0;36m"
+BOLD="\033[1m";   DIM="\033[2m";       RESET="\033[0m"
+
+commit_msg=$(cat "$1")
+
+# ── 跳过特殊提交 ────────────────────────────────────────────
+# Merge 提交不强制要求 Issue
+if echo "$commit_msg" | grep -qE "^Merge (branch|pull request|remote-tracking)"; then
+    exit 0
+fi
+# WIP 提交跳过 Issue 校验，但仍走 commitlint
+if echo "$commit_msg" | grep -qiE "^(wip|WIP)[[:space:]:!]"; then
+    printf "${YELLOW}  ⚡ WIP 提交，跳过 Issue 关联校验${RESET}\n"
+    pnpm exec commitlint --config .config/commitlint.config.js --edit "$1"
+    exit $?
+fi
+
+# ── Issue 关联校验 ──────────────────────────────────────────
+# 支持格式：
+#   GitHub 风格:    Closes #123 | Fixes #IHQ475 | Refs I456 | Closes IHQ5YM
+#   Gitee 小写风格: closes #ihq5ym | fix #ihq5ym | link #ihq5ym
+#   纯编号:         #123 | #IHQ475 | I456 | IHQ5YM | #ihq5ym
+#   Issue URL:      https://github.com/.../issues/123
+#                   https://gitee.com/.../issues/IHQ5YM
+# 注意：支持 GitHub 风格和 Gitee 小写风格（带或不带 # 前缀）
+ISSUE_PATTERN='(Closes|Fixes|Refs|closes|fixes|close|fix|link|linked|linking|relate|related|relating)[[:space:]]+(#[A-Za-z0-9]+|I[0-9]+|[A-Za-z][A-Za-z0-9]+)|(#[A-Za-z0-9]+|I[0-9]+|[A-Za-z][A-Za-z0-9]+)|https://(github|gitee)\.com/[^/]+/[^/]+/issues/([A-Za-z0-9]+)'
+
+# 提取远程仓库信息用于错误提示
+REMOTE_URL=$(git remote get-url origin 2>/dev/null || echo "")
+IS_GITEE=false
+if echo "$REMOTE_URL" | grep -q "gitee\.com"; then
+    IS_GITEE=true
+fi
+
+if ! echo "$commit_msg" | grep -qE "$ISSUE_PATTERN"; then
+    printf "\n"
+    printf "${RED}${BOLD}  ╔══════════════════════════════════════════════╗${RESET}\n"
+    printf "${RED}${BOLD}  ║  ✖  提交被拒绝：必须关联 Issue              ║${RESET}\n"
+    printf "${RED}${BOLD}  ╚══════════════════════════════════════════════╝${RESET}\n"
+    printf "\n"
+    
+    if [ "$IS_GITEE" = "true" ]; then
+        printf "${YELLOW}${BOLD}  📍 检测到 Gitee 仓库，Issue 格式说明:${RESET}\n\n"
+        printf "${CYAN}  Gitee Issue 格式（推荐小写）:${RESET}\n"
+        printf "${DIM}    feat(auth): 添加功能 closes #ihq5ym${RESET}\n"
+        printf "${DIM}    fix(api):   修复bug fix #ihq5ym${RESET}\n"
+        printf "${DIM}    docs:       更新文档 link #ihq5ym${RESET}\n\n"
+        printf "${CYAN}  也支持 GitHub 风格:${RESET}\n"
+        printf "${DIM}    feat(auth): 添加功能 Closes #IHQ5YM${RESET}\n"
+        printf "${DIM}    fix(api):   修复bug Fixes #IHQ5YM${RESET}\n"
+        printf "${DIM}    docs:       更新文档 Refs #IHQ5YM${RESET}\n\n"
+        printf "${CYAN}  纯编号格式:${RESET}\n"
+        printf "${DIM}    feat: 新功能 #ihq5ym${RESET}\n"
+        printf "${DIM}    fix:  修复问题 #ihq5ym${RESET}\n\n"
+        printf "${YELLOW}  💡 Gitee 提示:${RESET}\n"
+        printf "${DIM}    • 推荐使用小写前缀: closes, fix, link${RESET}\n"
+        printf "${DIM}    • 确保 Issue #ihq5ym 存在于当前仓库${RESET}\n"
+        printf "${DIM}    • 使用 \"closes\" 前缀可在合并后自动关闭 Issue${RESET}\n"
+        printf "${DIM}    • Issue ident 区分大小写${RESET}\n\n"
+    else
+        printf "${BOLD}  支持的关联格式:${RESET}\n\n"
+        printf "${CYAN}  带前缀（推荐，合并后可自动关闭）:${RESET}\n"
+        printf "${DIM}    feat(auth): 添加 OAuth 登录  Closes #42${RESET}\n"
+        printf "${DIM}    fix(api):   修复分页越界      Fixes  #IHQ475${RESET}\n"
+        printf "${DIM}    docs:       更新部署文档       Refs   I123${RESET}\n\n"
+        printf "${CYAN}  纯编号:${RESET}\n"
+        printf "${DIM}    feat: 新增搜索功能 #56${RESET}\n"
+        printf "${DIM}    fix:  修复异常退出  #IHQ475${RESET}\n"
+        printf "${DIM}    chore: 更新依赖     I78${RESET}\n\n"
+        printf "${CYAN}  Issue URL:${RESET}\n"
+        printf "${DIM}    feat: 新功能 https://github.com/user/repo/issues/99${RESET}\n"
+        printf "${DIM}    fix:  修复 https://gitee.com/user/repo/issues/IHQ475${RESET}\n\n"
+    fi
+    
+    printf "${YELLOW}  💡 使用 ${BOLD}pnpm commit${RESET}${YELLOW} 可通过交互式界面自动填写${RESET}\n\n"
+    exit 1
+fi
+
+# ── commitlint 格式校验 ─────────────────────────────────────
+pnpm exec commitlint --config .config/commitlint.config.js --edit "$1"
+exit $?

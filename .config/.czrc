@@ -1,0 +1,71 @@
+{
+  "path": "cz-git",
+
+  "messages": {
+    "type":                   "选择提交类型 :",
+    "scope":                  "选择影响范围（可选）:",
+    "customScope":            "自定义影响范围:",
+    "subject":                "填写简短描述（必填）:\n",
+    "body":                   "填写详细描述（可选，用 | 换行）:\n",
+    "breaking":               "列出 Breaking Changes（可选）:\n",
+    "footerPrefixesSelect":   "选择关联 Issue 前缀（可选）:",
+    "customFooterPrefix":     "自定义前缀:",
+    "footer":                 "关联 Issue（如 #31, #34, #ihq5ym）:",
+    "confirmCommit":          "确认提交？"
+  },
+
+  "types": [
+    { "value": "feat",     "name": "feat:      ✨  新增功能",              "emoji": "✨" },
+    { "value": "fix",      "name": "fix:       🐛  修复缺陷",              "emoji": "🐛" },
+    { "value": "docs",     "name": "docs:      📝  文档变更",              "emoji": "📝" },
+    { "value": "style",    "name": "style:     💄  代码格式（不影响逻辑）", "emoji": "💄" },
+    { "value": "refactor", "name": "refactor:  ♻️   代码重构",              "emoji": "♻️"  },
+    { "value": "perf",     "name": "perf:      ⚡️  性能优化",              "emoji": "⚡️" },
+    { "value": "test",     "name": "test:      ✅  添加 / 修改测试",       "emoji": "✅" },
+    { "value": "build",    "name": "build:     📦  构建相关",              "emoji": "📦" },
+    { "value": "ci",       "name": "ci:        🎡  CI/CD 配置",            "emoji": "🎡" },
+    { "value": "chore",    "name": "chore:     🔨  其他杂项（不改代码）",  "emoji": "🔨" },
+    { "value": "revert",   "name": "revert:    ⏪️  回退提交",              "emoji": "⏪️" }
+  ],
+
+  "useEmoji": true,
+  "emojiAlign": "center",
+  "themeColorCode": "38;5;105",
+
+  "scopes": [],
+  "allowCustomScopes":  true,
+  "allowEmptyScopes":   true,
+  "customScopesAlign":  "bottom",
+  "customScopesAlias":  "custom",
+  "emptyScopesAlias":   "empty",
+
+  "upperCaseSubject":       false,
+  "markBreakingChangeMode": true,
+  "allowBreakingChanges":   ["feat", "fix", "refactor", "perf"],
+  "breaklineNumber":        100,
+  "breaklineChar":          "|",
+
+  "skipQuestions": ["body", "breaking"],
+
+  "issuePrefixes": [
+    { "value": "Closes", "name": "Closes:  ✅  关闭 Issue（合并后自动关闭）" },
+    { "value": "Fixes",  "name": "Fixes:   🐛  修复 Issue（合并后自动关闭）" },
+    { "value": "Refs",   "name": "Refs:    🔗  引用 Issue（仅关联，不关闭）"  },
+    { "value": "closes", "name": "closes:  ✅  关闭 Issue（Gitee 风格）" },
+    { "value": "fix",    "name": "fix:     🐛  修复 Issue（Gitee 风格）" },
+    { "value": "link",   "name": "link:    🔗  关联 Issue（Gitee 风格）" }
+  ],
+  "customIssuePrefixAlign": "top",
+  "emptyIssuePrefixAlias":  "skip",
+  "customIssuePrefixAlias": "custom",
+  "allowCustomIssuePrefix": true,
+  "allowEmptyIssuePrefix":  true,
+
+  "confirmColorize":    true,
+  "minSubjectLength":   3,
+  "maxSubjectLength":   72,
+  "defaultBody":        "",
+  "defaultIssues":      "",
+  "defaultScope":       "",
+  "defaultSubject":     ""
+}
