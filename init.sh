@@ -179,6 +179,10 @@ conf_load() {
   CYBER_AUDIT="${CYBER_AUDIT:-}"
   CYBER_SAFE="${CYBER_SAFE:-}"
   LNMP_SERVICES="${LNMP_SERVICES:-nginx,php,mysql,redis,acme}"
+  NGINX_IMAGE="${NGINX_IMAGE:-nginx:stable-alpine}"
+  MYSQL_IMAGE="${MYSQL_IMAGE:-mysql:8.0}"
+  REDIS_IMAGE="${REDIS_IMAGE:-redis:alpine}"
+  ACME_IMAGE="${ACME_IMAGE:-neilpang/acme.sh:latest}"
   MYSQL_ROOT_PWD="${MYSQL_ROOT_PWD:-}"
   [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
   ACME_SSL_DNS_DEFAULT="${ACME_SSL_DNS_DEFAULT:-webroot}"
@@ -202,6 +206,10 @@ CYBER_ORDINARY=${CYBER_ORDINARY}
 CYBER_AUDIT=${CYBER_AUDIT}
 CYBER_SAFE=${CYBER_SAFE}
 LNMP_SERVICES=${LNMP_SERVICES}
+NGINX_IMAGE=${NGINX_IMAGE}
+MYSQL_IMAGE=${MYSQL_IMAGE}
+REDIS_IMAGE=${REDIS_IMAGE}
+ACME_IMAGE=${ACME_IMAGE}
 CONTAINER_WWW=${CONTAINER_WWW}
 EOF
   chmod 600 "$CONF_FILE"
@@ -1300,7 +1308,7 @@ lnmp_gen_compose() {
   if has_service "nginx"; then
     yaml+="
   nginx:
-    image: nginx:stable-alpine
+    image: ${NGINX_IMAGE}
     container_name: lnmp-nginx
     user: \"101:101\"
     security_opt: [\"no-new-privileges:true\"]
@@ -1358,7 +1366,7 @@ volumes:
   if has_service "mysql"; then
     yaml+="
   mysql:
-    image: mysql:8.0
+    image: ${MYSQL_IMAGE}
     container_name: lnmp-mysql
     security_opt: [\"no-new-privileges:true\"]
     volumes:
@@ -1374,7 +1382,7 @@ volumes:
   if has_service "redis"; then
     yaml+="
   redis:
-    image: redis:alpine
+    image: ${REDIS_IMAGE}
     container_name: lnmp-redis
     user: \"999:999\"
     security_opt: [\"no-new-privileges:true\"]
@@ -1394,7 +1402,7 @@ volumes:
   if has_service "acme"; then
     yaml+="
   acme:
-    image: neilpang/acme.sh:latest
+    image: ${ACME_IMAGE}
     container_name: lnmp-acme
     security_opt: [\"no-new-privileges:true\"]
     volumes:
@@ -1556,6 +1564,55 @@ install_lnmp() {
 
   conf_save
   ok "LNMP 部署完成"
+}
+
+_compose_lnmp_up_recreate() {
+  local svc="${1:-}"
+  if [[ -n "$svc" ]]; then
+    if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
+      MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "$svc"
+    else
+      compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "$svc"
+    fi
+  else
+    if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
+      MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate
+    else
+      compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate
+    fi
+  fi
+}
+
+update_lnmp() {
+  local one="${1:-}"
+  hr
+  if [[ -n "$one" ]]; then info "更新 LNMP 容器: ${one}"; else info "更新 LNMP 镜像并重拉容器"; fi
+  echo ""
+  is_docker_ok || die "需要先安装 Docker"
+  [[ -f "$COMPOSE_FILE" ]] || die "未找到 LNMP 编排，请先安装 LNMP"
+  lnmp_gen_compose
+  if [[ -n "$one" ]]; then
+    case "$one" in
+      nginx|php|mysql|redis|acme) ;;
+      *) die "未知 LNMP 组件: $one（nginx|php|mysql|redis|acme）" ;;
+    esac
+    has_service "$one" || die "当前编排未包含 lnmp-${one}"
+    compose_cmd -f "$COMPOSE_FILE" pull "$one"
+    _compose_lnmp_up_recreate "$one"
+    if [[ "$one" = "php" ]]; then
+      _wait_container "php" 45
+      _install_php_extensions
+    fi
+  else
+    compose_cmd -f "$COMPOSE_FILE" pull
+    _compose_lnmp_up_recreate ""
+    if has_service "php"; then
+      _wait_container "php" 45
+      _install_php_extensions
+    fi
+  fi
+  conf_save
+  ok "LNMP 已更新"
 }
 
 _wait_container() {
@@ -1733,6 +1790,10 @@ show_status() {
   done
 
   echo ""
+  has_service "nginx" && printf "  %-20s %s\n" "Nginx 镜像" "${NGINX_IMAGE:-}"
+  has_service "mysql" && printf "  %-20s %s\n" "MySQL 镜像" "${MYSQL_IMAGE:-}"
+  has_service "redis" && printf "  %-20s %s\n" "Redis 镜像" "${REDIS_IMAGE:-}"
+  has_service "acme" && printf "  %-20s %s\n" "ACME 镜像" "${ACME_IMAGE:-}"
   printf "  %-20s %s\n" "PHP 版本" "${PHP_VERSION:-未配置}"
   printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
   printf "  %-20s %s\n" "GitHub 代理" "${GH_PROXY:-无}"
@@ -1785,11 +1846,20 @@ collect_alpine_mirror() {
 
 collect_php_version() {
   local idx
-  idx=$(menu_select "PHP 版本" "8.2 (Laravel 12 最低要求)" "8.3 (推荐)" "8.4 (最新)")
+  idx=$(menu_select "PHP 版本（镜像 php:主版本-fpm-alpine）" \
+    "8.1" "8.2 (Laravel 12 最低)" "8.3 (推荐)" "8.4" "8.5" \
+    "自定义主版本（如 8.3）")
   case "$idx" in
-    0) PHP_VERSION="8.2" ;;
-    1) PHP_VERSION="8.3" ;;
-    2) PHP_VERSION="8.4" ;;
+    0) PHP_VERSION="8.1" ;;
+    1) PHP_VERSION="8.2" ;;
+    2) PHP_VERSION="8.3" ;;
+    3) PHP_VERSION="8.4" ;;
+    4) PHP_VERSION="8.5" ;;
+    5)
+      PHP_VERSION=$(prompt "主版本号" "${PHP_VERSION:-8.3}")
+      [[ -n "$PHP_VERSION" ]] || PHP_VERSION="8.3"
+      if ! [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then die "无效的 PHP 版本格式（需如 8.3）"; fi
+      ;;
   esac
 }
 
@@ -1850,6 +1920,99 @@ collect_lnmp_services() {
   if [[ ",$LNMP_SERVICES," = *",nginx,"* && ",$LNMP_SERVICES," != *",php,"* ]]; then
     LNMP_SERVICES+=",php"
   fi
+}
+
+collect_nginx_image() {
+  local idx
+  idx=$(menu_select "Nginx 镜像" \
+    "nginx:stable-alpine (推荐)" \
+    "nginx:alpine" \
+    "nginx:1.28-alpine" \
+    "nginx:1.26-alpine" \
+    "nginx:1.24-alpine" \
+    "自定义（完整 镜像:TAG）")
+  case "$idx" in
+    0) NGINX_IMAGE="nginx:stable-alpine" ;;
+    1) NGINX_IMAGE="nginx:alpine" ;;
+    2) NGINX_IMAGE="nginx:1.28-alpine" ;;
+    3) NGINX_IMAGE="nginx:1.26-alpine" ;;
+    4) NGINX_IMAGE="nginx:1.24-alpine" ;;
+    5)
+      NGINX_IMAGE=$(prompt "镜像:TAG" "${NGINX_IMAGE:-nginx:stable-alpine}")
+      [[ -n "$NGINX_IMAGE" ]] || NGINX_IMAGE="nginx:stable-alpine"
+      ;;
+  esac
+}
+
+collect_mysql_image() {
+  local idx
+  idx=$(menu_select "MySQL / MariaDB 镜像" \
+    "mysql:8.0 (推荐)" \
+    "mysql:8.4" \
+    "mysql:lts" \
+    "mysql:9" \
+    "mysql:9.0" \
+    "mariadb:11.4" \
+    "自定义（完整 镜像:TAG）")
+  case "$idx" in
+    0) MYSQL_IMAGE="mysql:8.0" ;;
+    1) MYSQL_IMAGE="mysql:8.4" ;;
+    2) MYSQL_IMAGE="mysql:lts" ;;
+    3) MYSQL_IMAGE="mysql:9" ;;
+    4) MYSQL_IMAGE="mysql:9.0" ;;
+    5) MYSQL_IMAGE="mariadb:11.4" ;;
+    6)
+      MYSQL_IMAGE=$(prompt "镜像:TAG" "${MYSQL_IMAGE:-mysql:8.0}")
+      [[ -n "$MYSQL_IMAGE" ]] || MYSQL_IMAGE="mysql:8.0"
+      ;;
+  esac
+}
+
+collect_redis_image() {
+  local idx
+  idx=$(menu_select "Redis 镜像" \
+    "redis:alpine (推荐)" \
+    "redis:7-alpine" \
+    "redis:7.4-alpine" \
+    "redis:8-alpine" \
+    "redis:8.2-alpine" \
+    "自定义（完整 镜像:TAG）")
+  case "$idx" in
+    0) REDIS_IMAGE="redis:alpine" ;;
+    1) REDIS_IMAGE="redis:7-alpine" ;;
+    2) REDIS_IMAGE="redis:7.4-alpine" ;;
+    3) REDIS_IMAGE="redis:8-alpine" ;;
+    4) REDIS_IMAGE="redis:8.2-alpine" ;;
+    5)
+      REDIS_IMAGE=$(prompt "镜像:TAG" "${REDIS_IMAGE:-redis:alpine}")
+      [[ -n "$REDIS_IMAGE" ]] || REDIS_IMAGE="redis:alpine"
+      ;;
+  esac
+}
+
+collect_acme_image() {
+  local idx
+  idx=$(menu_select "acme.sh 镜像" \
+    "neilpang/acme.sh:latest (推荐)" \
+    "neilpang/acme.sh:3.0.6" \
+    "neilpang/acme.sh:3.0.7" \
+    "自定义（完整 镜像:TAG）")
+  case "$idx" in
+    0) ACME_IMAGE="neilpang/acme.sh:latest" ;;
+    1) ACME_IMAGE="neilpang/acme.sh:3.0.6" ;;
+    2) ACME_IMAGE="neilpang/acme.sh:3.0.7" ;;
+    3)
+      ACME_IMAGE=$(prompt "镜像:TAG" "${ACME_IMAGE:-neilpang/acme.sh:latest}")
+      [[ -n "$ACME_IMAGE" ]] || ACME_IMAGE="neilpang/acme.sh:latest"
+      ;;
+  esac
+}
+
+collect_lnmp_stack_images() {
+  has_service "nginx" && collect_nginx_image
+  has_service "mysql" && collect_mysql_image
+  has_service "redis" && collect_redis_image
+  has_service "acme" && collect_acme_image
 }
 
 # ═══════════════════════════════════════════════
@@ -1916,6 +2079,7 @@ _interactive_full_install() {
   if [[ $sel_docker -eq 1 ]]; then collect_docker_mirrors; fi
   if [[ $sel_lnmp -eq 1 ]]; then
     collect_lnmp_services
+    collect_lnmp_stack_images
     if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_php_extensions; fi
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "acme"; then collect_acme_email; fi
@@ -1932,6 +2096,10 @@ _interactive_full_install() {
   if [[ $sel_docker -eq 1 ]]; then printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"; fi
   if [[ $sel_lnmp -eq 1 ]]; then
     printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
+    if has_service "nginx"; then printf "  %-20s %s\n" "Nginx 镜像" "$NGINX_IMAGE"; fi
+    if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
+    if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
+    if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"; fi
     if has_service "php"; then
       printf "  %-20s %s\n" "PHP 版本" "$PHP_VERSION"
       printf "  %-20s %s\n" "PHP 扩展" "$PHP_EXTENSIONS"
@@ -1985,17 +2153,18 @@ _interactive_install_one() {
     4)  collect_ssh_config; install_ssh ;;
     5)
       collect_lnmp_services
+      collect_lnmp_stack_images
       if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_php_extensions; fi
       if has_service "mysql"; then collect_mysql_password; fi
       if has_service "acme"; then collect_acme_email; fi
       install_lnmp
       ;;
-    6)  LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
+    6)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
     7)  collect_php_version; collect_php_extensions; collect_alpine_mirror
         LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
-    8)  collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
-    9)  LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
-    10) collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
+    8)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
+    9)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
+    10) collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
     11) WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
     12) setup_cyber_users ;;
     13) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
@@ -2032,7 +2201,7 @@ _interactive_config() {
   local idx
   idx=$(menu_select "选择要更新的配置" \
     "GitHub 代理" "Docker 镜像源" "Alpine 源" "PHP 版本" "PHP 扩展" \
-    "SSH 配置" "ACME 邮箱" "ACME SSL 默认 (deploy-site)" "Devops 用户")
+    "LNMP 组件镜像" "SSH 配置" "ACME 邮箱" "ACME SSL 默认 (deploy-site)" "Devops 用户")
 
   case "$idx" in
     0) collect_github_proxy ;;
@@ -2040,10 +2209,11 @@ _interactive_config() {
     2) collect_alpine_mirror ;;
     3) collect_php_version ;;
     4) collect_php_extensions; if has_service "php" && container_ok "php"; then _install_php_extensions; fi ;;
-    5) collect_ssh_config; install_ssh ;;
-    6) collect_acme_email ;;
-    7) collect_acme_ssl_dns_default ;;
-    8) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
+    5) collect_lnmp_stack_images; if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok; then update_lnmp; else ok "已写入配置，安装 LNMP 后生效"; fi ;;
+    6) collect_ssh_config; install_ssh ;;
+    7) collect_acme_email ;;
+    8) collect_acme_ssl_dns_default ;;
+    9) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
   esac
   conf_save
   ok "配置已更新"
@@ -2464,6 +2634,7 @@ usage() {
   status                查看当前状态
   install <组件>        安装指定组件
   uninstall <组件>      卸载指定组件
+  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: nginx|php|mysql|redis|acme
   account [子命令]      账户/组/AllowUsers（见 account help）
 
 组件:
@@ -2487,8 +2658,12 @@ usage() {
   --gh-proxy=URL          GitHub 代理
   --docker-mirrors=URL,.. Docker 镜像源（逗号分隔）
   --alpine-mirror=HOST    Alpine 源
-  --php-version=VER       PHP 版本 (8.2|8.3|8.4)
+  --php-version=VER       PHP 主版本，对应 php:VER-fpm-alpine（如 8.3）
   --php-ext=EXT,...       PHP 扩展（逗号分隔）
+  --nginx-image=IMG       Nginx 镜像 (如 nginx:stable-alpine)
+  --mysql-image=IMG       MySQL 镜像 (如 mysql:8.0)
+  --redis-image=IMG       Redis 镜像 (如 redis:alpine)
+  --acme-image=IMG        acme.sh 镜像 (如 neilpang/acme.sh:latest)
   --mysql-pwd=PWD         MySQL root 密码
   --acme-email=EMAIL      ACME 邮箱
   --ssh-port=PORT         SSH 端口
@@ -2501,6 +2676,8 @@ usage() {
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install lnmp --php-version=8.3 --mysql-pwd=secret --acme-email=a@b.com
+  $0 update lnmp
+  $0 update lnmp nginx
   $0 install ssh --ssh-port=2222 --root-login=no
   $0 uninstall redis
   $0 account list
@@ -2533,6 +2710,10 @@ main() {
       --alpine-mirror=*)  ALPINE_MIRROR="${arg#*=}" ;;
       --php-version=*)    PHP_VERSION="${arg#*=}" ;;
       --php-ext=*)        PHP_EXTENSIONS="${arg#*=}" ;;
+      --nginx-image=*)    NGINX_IMAGE="${arg#*=}" ;;
+      --mysql-image=*)    MYSQL_IMAGE="${arg#*=}" ;;
+      --redis-image=*)    REDIS_IMAGE="${arg#*=}" ;;
+      --acme-image=*)     ACME_IMAGE="${arg#*=}" ;;
       --mysql-pwd=*)      MYSQL_ROOT_PWD="${arg#*=}" ;;
       --acme-email=*)     ACME_EMAIL="${arg#*=}" ;;
       --ssh-port=*)       SSH_PORT="${arg#*=}" ;;
@@ -2573,6 +2754,23 @@ main() {
         *)        die "未知组件: $target" ;;
       esac
       conf_save
+      ;;
+    update)
+      local u_target="${1:-}"
+      [[ -z "$u_target" ]] && { usage; die "请指定 update 目标: lnmp"; }
+      shift 2>/dev/null || true
+      case "$u_target" in
+        lnmp)
+          local sub="${1:-}"
+          if [[ -n "$sub" && "${sub:0:1}" != "-" ]]; then
+            shift 2>/dev/null || true
+            update_lnmp "$sub"
+          else
+            update_lnmp
+          fi
+          ;;
+        *) die "未知 update 目标: $u_target（仅支持 lnmp）" ;;
+      esac
       ;;
     uninstall)
       local target="${1:-}"
