@@ -1300,10 +1300,32 @@ output_buffering = 4096
 PHPINI
 }
 
-lnmp_gen_compose() {
-  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,redis,www,ssl,php/conf.d}
+_write_php_fpm_slowlog_conf() {
+  mkdir -p "${DATA_DIR}/php/fpm.d"
+  cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
+; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
+[www]
+slowlog = /var/log/php-fpm/fpm-slow.log
+request_slowlog_timeout = 5s
+FPMCONF
+}
 
-  if has_service "php"; then _write_php_laravel_conf; fi
+_ensure_php_fpm_slowlog_host_layout() {
+  has_service "php" || return 0
+  mkdir -p "${DATA_DIR}/php/log"
+  : >>"${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
+  chown -R 82:82 "${DATA_DIR}/php/log" 2>/dev/null || true
+  chmod 755 "${DATA_DIR}/php/log" 2>/dev/null || true
+  chmod 664 "${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
+}
+
+lnmp_gen_compose() {
+  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,redis,www,ssl,php/conf.d,php/fpm.d,php/log}
+
+  if has_service "php"; then
+    _write_php_laravel_conf
+    _write_php_fpm_slowlog_conf
+  fi
 
   if [[ ! -f "${DATA_DIR}/nginx/nginx.conf" ]]; then _write_nginx_main_conf; fi
   if [[ ! -f "${DATA_DIR}/nginx/conf.d/default.conf" ]]; then _write_nginx_default_conf; fi
@@ -1351,6 +1373,8 @@ lnmp_gen_compose() {
     volumes:
       - ${DATA_DIR}/www:${CONTAINER_WWW}
       - ${DATA_DIR}/php/conf.d/99-laravel.ini:/usr/local/etc/php/conf.d/99-laravel.ini:ro
+      - ${DATA_DIR}/php/fpm.d/zz-slowlog.conf:/usr/local/etc/php-fpm.d/zz-slowlog.conf:ro
+      - ${DATA_DIR}/php/log:/var/log/php-fpm
       - php-extensions:/usr/local/lib/php/extensions"
 
     if [[ -n "$php_env" ]]; then yaml+="
@@ -1553,6 +1577,8 @@ install_lnmp() {
   chown root:"${_dg}" "${DATA_DIR}" 2>/dev/null || true
   chmod 771 "${DATA_DIR}"
 
+  _ensure_php_fpm_slowlog_host_layout
+
   if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
     MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" up -d
   else
@@ -1597,6 +1623,7 @@ update_lnmp() {
   is_docker_ok || die "需要先安装 Docker"
   [[ -f "$COMPOSE_FILE" ]] || die "未找到 LNMP 编排，请先安装 LNMP"
   lnmp_gen_compose
+  _ensure_php_fpm_slowlog_host_layout
   if [[ -n "$one" ]]; then
     case "$one" in
       nginx|php|mysql|redis|acme) ;;

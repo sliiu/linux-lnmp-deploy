@@ -75,6 +75,31 @@ env_set() {
 
 container_ok() { docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${1}$"; }
 
+ensure_php_fpm_slowlog_host_artifacts() {
+  [[ -d "${DATA_DIR}/php" ]] || return 0
+  mkdir -p "${DATA_DIR}/php/fpm.d" "${DATA_DIR}/php/log"
+  if [[ ! -f "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" ]]; then
+    cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
+; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
+[www]
+slowlog = /var/log/php-fpm/fpm-slow.log
+request_slowlog_timeout = 5s
+FPMCONF
+  fi
+  : >>"${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
+  chown -R 82:82 "${DATA_DIR}/php/log" 2>/dev/null || true
+  chmod 755 "${DATA_DIR}/php/log" 2>/dev/null || true
+  chmod 664 "${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
+}
+
+warn_php_fpm_slowlog_compose_missing() {
+  container_ok "lnmp-php" || return 0
+  [[ -f "${DATA_DIR}/docker-compose.yml" ]] || return 0
+  grep -q 'php/fpm.d/zz-slowlog.conf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
+  grep -q 'container_name: lnmp-php' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
+  warn "docker-compose 未挂载 php-fpm slowlog；请 init.sh 更新 LNMP 编排后执行: cd ${DATA_DIR} && docker compose up -d --force-recreate php"
+}
+
 supervisord_ready() {
   command -v supervisorctl &>/dev/null || return 1
   local s
@@ -1090,6 +1115,9 @@ cmd_add() {
   done
   container_ok "lnmp-acme" || warn "lnmp-acme 未运行，SSL 签发可能失败"
 
+  ensure_php_fpm_slowlog_host_artifacts
+  warn_php_fpm_slowlog_compose_missing
+
   collect_interactive
 
   if [[ "$SITE_TYPE" = "laravel" && "${NEED_DB:-y}" = "y" && -z "${DB_NAME:-}" ]]; then
@@ -1214,6 +1242,9 @@ cmd_update() {
 
   echo ""
   hr; info "更新站点: ${DOMAIN} (${site_type})"; echo ""
+
+  ensure_php_fpm_slowlog_host_artifacts
+  warn_php_fpm_slowlog_compose_missing
 
   if [[ -d "${site_dir}/.git" ]]; then
     if [[ -n "${GIT_BRANCH:-}" ]]; then
@@ -1364,14 +1395,19 @@ cmd_remove() {
 # ═══════════════════════════════════════════════
 #  子命令: status（运行状态与常见故障线索）
 # ═══════════════════════════════════════════════
+# Laravel 用 /up 探活（避免纯 API 根路径 / 无路由或 FPM 长时间无响应导致误判）；前端用 /
 _status_http_code() {
-  local host="$1" use_https="$2"
+  local host="$1" use_https="$2" site_type="${3:-frontend}"
+  local path="/"
+  [[ "$site_type" = "laravel" ]] && path="/up"
   if [[ "$use_https" = 1 ]]; then
-    curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 \
-      -H "Host: ${host}" "https://127.0.0.1/" 2>/dev/null || printf '000'
+    curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 15 \
+      --resolve "${host}:443:127.0.0.1" \
+      "https://${host}${path}" 2>/dev/null || printf '000'
   else
-    curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 \
-      -H "Host: ${host}" "http://127.0.0.1/" 2>/dev/null || printf '000'
+    curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 15 \
+      --resolve "${host}:80:127.0.0.1" \
+      "http://${host}${path}" 2>/dev/null || printf '000'
   fi
 }
 
@@ -1382,7 +1418,10 @@ _status_print_hints() {
   [[ "$site_type" = "laravel" ]] && ! container_ok "lnmp-php" && issues+=("lnmp-php 未运行，Laravel 将出现 502（FastCGI 不可达）")
   [[ ! -f "${NGINX_CONF}/${d}.conf" ]] && issues+=("无 Nginx 配置 ${NGINX_CONF}/${d}.conf，请求可能落到默认站点")
   [[ "$code_http" = "000" ]] && issues+=("HTTP 无响应：检查 docker 端口映射、本机防火墙、阿里云安全组是否放行 80")
-  [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
+  [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" = "laravel" ]] \
+    && issues+=("HTTPS 无响应或超时：Laravel 探测为 GET /up；查 Nginx upstream timed out、宿主机 ${DATA_DIR}/php/log/fpm-slow.log、storage/logs/laravel.log")
+  [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" != "laravel" ]] \
+    && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 php-fpm 异常，查看下方 Nginx error.log 中 upstream/fastcgi 报错")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "frontend" ]] && issues+=("404：确认构建产物在 ${WWW_ROOT}/${d}${fe_sub:+/}${fe_sub} 且含 index.html")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "laravel" ]] && issues+=("404：确认 ${WWW_ROOT}/${d}/public 存在且含 index.php")
@@ -1483,9 +1522,11 @@ cmd_status() {
       warn "未找到证书: ${cert}"
     fi
 
-    code_http=$(_status_http_code "$dom" 0)
-    code_https=$(_status_http_code "$dom" 1)
-    info "本机探测（Host: ${dom}） HTTP=${code_http}  HTTPS=${code_https}"
+    local _probe_path="/"
+    [[ "$site_type" = "laravel" ]] && _probe_path="/up"
+    code_http=$(_status_http_code "$dom" 0 "$site_type")
+    code_https=$(_status_http_code "$dom" 1 "$site_type")
+    info "本机探测（127.0.0.1 + --resolve，路径: ${_probe_path}） HTTP=${code_http}  HTTPS=${code_https}"
     [[ "$code_http" =~ ^(301|302|307|308|200)$ ]] || [[ "$code_http" = "000" ]] || warn "HTTP 状态非预期（常见为 301 跳转 HTTPS）"
     [[ "$code_https" =~ ^(200|301|302|304|403|404|500|502|503)$ ]] || warn "HTTPS 状态: ${code_https}"
 
@@ -1507,6 +1548,7 @@ cmd_status() {
       else
         warn "artisan 执行失败（依赖、.env、权限等，查看完整错误请手动: docker exec -u ... lnmp-php ... php artisan --version）"
       fi
+      [[ -d "${DATA_DIR}/php/log" ]] && info "php-fpm 慢日志（宿主机）: ${DATA_DIR}/php/log/fpm-slow.log"
     fi
 
     echo ""
