@@ -65,10 +65,16 @@ menu_select() {
       printf "    %d) %s\n" $((i + 1)) "${items[$i]}"
     done
     echo ""
+    info "回车或无效输入 = 第 1 项（推荐默认）"
+    echo ""
   } >/dev/tty
-  local choice
-  read -rp "  选择 [1-${#items[@]}]: " choice </dev/tty >/dev/tty
-  choice=$((choice - 1))
+  local choice raw
+  read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw </dev/tty >/dev/tty
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    choice=$((raw - 1))
+  else
+    choice=-1
+  fi
   [[ $choice -ge 0 && $choice -lt ${#items[@]} ]] || choice=0
   echo "$choice"
 }

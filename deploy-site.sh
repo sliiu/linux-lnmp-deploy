@@ -913,6 +913,7 @@ ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
 AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" TENCENT_SECRET_ID="" TENCENT_SECRET_KEY=""
 CUSTOM_ENV=()
 YES=0
+STATUS_ALL=0
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -1004,6 +1005,7 @@ parse_args() {
       --force-ssl)       FORCE_SSL="--force" ;;
       --ssl-staging)     SSL_STAGING=1 ;;
       --yes)             YES=1 ;;
+      --all)             STATUS_ALL=1 ;;
       *)                 ;; # ignore unknown in subcommand context
     esac
     shift
@@ -1355,6 +1357,170 @@ cmd_remove() {
 }
 
 # ═══════════════════════════════════════════════
+#  子命令: status（运行状态与常见故障线索）
+# ═══════════════════════════════════════════════
+_status_http_code() {
+  local host="$1" use_https="$2"
+  if [[ "$use_https" = 1 ]]; then
+    curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 \
+      -H "Host: ${host}" "https://127.0.0.1/" 2>/dev/null || printf '000'
+  else
+    curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 8 \
+      -H "Host: ${host}" "http://127.0.0.1/" 2>/dev/null || printf '000'
+  fi
+}
+
+_status_print_hints() {
+  local d="$1" code_http="$2" code_https="$3" site_type="$4" fe_sub="$5"
+  local issues=()
+  container_ok "lnmp-nginx" || issues+=("lnmp-nginx 未运行，本机 80/443 无服务")
+  [[ "$site_type" = "laravel" ]] && ! container_ok "lnmp-php" && issues+=("lnmp-php 未运行，Laravel 将出现 502（FastCGI 不可达）")
+  [[ ! -f "${NGINX_CONF}/${d}.conf" ]] && issues+=("无 Nginx 配置 ${NGINX_CONF}/${d}.conf，请求可能落到默认站点")
+  [[ "$code_http" = "000" ]] && issues+=("HTTP 无响应：检查 docker 端口映射、本机防火墙、阿里云安全组是否放行 80")
+  [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
+  [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 php-fpm 异常，查看下方 Nginx error.log 中 upstream/fastcgi 报错")
+  [[ "$code_https" = "404" ]] && [[ "$site_type" = "frontend" ]] && issues+=("404：确认构建产物在 ${WWW_ROOT}/${d}${fe_sub:+/}${fe_sub} 且含 index.html")
+  [[ "$code_https" = "404" ]] && [[ "$site_type" = "laravel" ]] && issues+=("404：确认 ${WWW_ROOT}/${d}/public 存在且含 index.php")
+  if [[ ${#issues[@]} -gt 0 ]]; then
+    echo ""
+    info "可能原因（按项排查）:"
+    local x
+    for x in "${issues[@]}"; do
+      echo "    - $x"
+    done
+  fi
+}
+
+cmd_status() {
+  if [[ "${STATUS_ALL:-0}" -ne 1 ]]; then
+    [[ -z "${DOMAIN:-}" ]] && DOMAIN=$(prompt "站点域名（留空=检查 conf.d 中全部站点）" "")
+    [[ -z "$DOMAIN" ]] && STATUS_ALL=1
+  fi
+
+  echo ""
+  hr; info "运行环境（Docker）"; echo ""
+  local c _st
+  for c in lnmp-nginx lnmp-php lnmp-redis lnmp-mysql; do
+    if container_ok "$c"; then
+      _st=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo "?")
+      ok "${c}: ${_st}"
+    else
+      warn "${c}: 未运行"
+    fi
+  done
+
+  if ! container_ok "lnmp-nginx"; then
+    echo ""
+    warn "lnmp-nginx 未运行，无法在本机 curl 检测站点；请先启动 LNMP 栈"
+    echo ""
+    return 0
+  fi
+
+  echo ""
+  info "Nginx 配置校验:"
+  docker exec lnmp-nginx nginx -t 2>&1 | sed 's/^/  /' || true
+
+  local _domains=()
+  if [[ "${STATUS_ALL:-0}" -eq 1 ]]; then
+    local conf
+    for conf in "${NGINX_CONF}"/*.conf; do
+      [[ -f "$conf" ]] || continue
+      local bn
+      bn=$(basename "$conf" .conf)
+      [[ "$bn" = "default" ]] && continue
+      _domains+=("$bn")
+    done
+    [[ ${#_domains[@]} -eq 0 ]] && die "未在 ${NGINX_CONF} 发现站点配置"
+  else
+    _domains=("$DOMAIN")
+  fi
+
+  local dom
+  for dom in "${_domains[@]}"; do
+    echo ""
+    hr; info "站点: ${dom}"; echo ""
+
+    local site_dir="${WWW_ROOT}/${dom}"
+    local site_type="laravel"
+    [[ -f "${site_dir}/artisan" ]] || site_type="frontend"
+    local fe_sub="" doc_host code_http code_https
+    if [[ "$site_type" = "frontend" ]]; then
+      fe_sub=$(effective_frontend_subdir "$dom")
+      doc_host="${site_dir}${fe_sub:+/}${fe_sub}"
+    else
+      doc_host="${site_dir}/public"
+    fi
+
+    if [[ -f "${NGINX_CONF}/${dom}.conf" ]]; then
+      ok "Nginx 配置: ${NGINX_CONF}/${dom}.conf"
+    else
+      warn "缺少 Nginx 配置: ${NGINX_CONF}/${dom}.conf"
+    fi
+
+    if [[ -d "$site_dir" ]]; then
+      ok "代码目录: ${site_dir}（类型: ${site_type}）"
+    else
+      warn "代码目录不存在: ${site_dir}"
+    fi
+
+    if [[ "$site_type" = "laravel" ]]; then
+      [[ -f "${site_dir}/public/index.php" ]] && ok "Laravel public/index.php 存在" || warn "缺少 public/index.php"
+    else
+      [[ -f "${doc_host}/index.html" ]] && ok "前端 index.html: ${doc_host}/index.html" || warn "缺少 index.html（文档根: ${doc_host}）"
+    fi
+
+    local cert="${SSL_DIR}/${dom}/fullchain.cer"
+    if [[ -f "$cert" ]] && command -v openssl &>/dev/null; then
+      info "证书 notAfter: $(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
+    elif [[ -f "$cert" ]]; then
+      ok "证书文件存在: ${cert}"
+    else
+      warn "未找到证书: ${cert}"
+    fi
+
+    code_http=$(_status_http_code "$dom" 0)
+    code_https=$(_status_http_code "$dom" 1)
+    info "本机探测（Host: ${dom}） HTTP=${code_http}  HTTPS=${code_https}"
+    [[ "$code_http" =~ ^(301|302|307|308|200)$ ]] || [[ "$code_http" = "000" ]] || warn "HTTP 状态非预期（常见为 301 跳转 HTTPS）"
+    [[ "$code_https" =~ ^(200|301|302|304|403|404|500|502|503)$ ]] || warn "HTTPS 状态: ${code_https}"
+
+    if container_ok "lnmp-nginx"; then
+      echo ""
+      info "容器内可读性（uid 101 = nginx）:"
+      if [[ "$site_type" = "laravel" ]]; then
+        docker exec lnmp-nginx sh -c "test -r '${CONTAINER_WWW}/${dom}/public/index.php'" 2>/dev/null && ok "可读 public/index.php" || warn "不可读 public/index.php（权限/属主，可执行: $0 update --domain=${dom}）"
+      else
+        docker exec lnmp-nginx sh -c "test -r '${CONTAINER_WWW}/${dom}${fe_sub:+/}${fe_sub}/index.html'" 2>/dev/null && ok "可读 index.html" || warn "不可读 index.html（文档根同上，可 update 修复权限）"
+      fi
+    fi
+
+    if [[ "$site_type" = "laravel" ]] && container_ok "lnmp-php"; then
+      echo ""
+      info "Laravel / PHP:"
+      if docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${dom}" lnmp-php php artisan --version &>/dev/null; then
+        docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${dom}" lnmp-php php artisan --version 2>&1 | sed 's/^/  /'
+      else
+        warn "artisan 执行失败（依赖、.env、权限等，查看完整错误请手动: docker exec -u ... lnmp-php ... php artisan --version）"
+      fi
+    fi
+
+    echo ""
+    info "lnmp-nginx 最近错误日志（全局，不仅本站）:"
+    docker exec lnmp-nginx sh -c 'tail -n 25 /var/log/nginx/error.log 2>/dev/null' 2>/dev/null | sed 's/^/  /' || warn "无法读取容器内 error.log"
+
+    if [[ "${STATUS_ALL:-0}" -ne 1 ]]; then
+      _status_print_hints "$dom" "$code_http" "$code_https" "$site_type" "$fe_sub"
+    fi
+  done
+
+  if [[ "${STATUS_ALL:-0}" -eq 1 ]]; then
+    echo ""
+    info "单站详细诊断与「可能原因」说明请执行: $0 status --domain=<域名>"
+  fi
+  echo ""
+}
+
+# ═══════════════════════════════════════════════
 #  子命令: list
 # ═══════════════════════════════════════════════
 cmd_list() {
@@ -1446,6 +1612,7 @@ usage() {
   update    更新已有站点（有 .git 则 pull；Laravel：composer、migrate、optimize、Horizon）
   remove    移除站点（Nginx、SSL、crontab、Horizon、代码）
   list      列出已部署站点
+  status    站点运行状态（本机 curl、容器、证书、日志；可加 --all）
   ssl       SSL 证书签发/续期
 
 选项:
@@ -1478,12 +1645,15 @@ usage() {
   --force-ssl           强制重新签发证书
   --ssl-staging         使用 LE 测试 CA（规避正式限流/调试，浏览器不信任）
   --yes                 跳过确认（remove 时）
+  --all                 status：检查 conf.d 中全部站点（简略；详单用 --domain）
 
 示例:
   $0 add --domain=api.example.com --git=git@gitee.com:user/repo.git --git-branch=develop --need-db=y --db-name=app --db-password=secret
   $0 update --domain=api.example.com
   $0 remove --domain=api.example.com
   $0 list
+  $0 status --domain=api.example.com
+  $0 status --all
   $0 ssl --domain=api.example.com --force-ssl
   $0 add --domain=test.example.com --git=... --ssl-staging   # 测试证书
   $0 add --domain=x.com --git=... --dns=dns_ali --ali-key=AK --ali-secret=SK
@@ -1503,6 +1673,7 @@ main() {
     update) shift; parse_args "$@"; cmd_update ;;
     remove) shift; parse_args "$@"; cmd_remove ;;
     list)   cmd_list ;;
+    status) shift; parse_args "$@"; cmd_status ;;
     ssl)    shift; parse_args "$@"; cmd_ssl ;;
     "")
       clear 2>/dev/null || true
@@ -1516,10 +1687,11 @@ main() {
         echo "    3) 移除站点"
         echo "    4) 查看站点列表"
         echo "    5) SSL 证书管理"
+        echo "    6) 站点运行状态"
         echo "    0) 退出"
         echo ""
         local action=""
-        read -rp "  请选择 [0-5]: " action </dev/tty 2>/dev/tty || action=""
+        read -rp "  请选择 [0-6]: " action </dev/tty 2>/dev/tty || action=""
         echo ""
         case "$action" in
           1) cmd_add ;;
@@ -1527,8 +1699,9 @@ main() {
           3) cmd_remove ;;
           4) cmd_list ;;
           5) cmd_ssl ;;
+          6) STATUS_ALL=0; DOMAIN=""; cmd_status ;;
           0) ok "再见"; exit 0 ;;
-          *) warn "无效选择，请输入 0-5" ;;
+          *) warn "无效选择，请输入 0-6" ;;
         esac
         echo ""
         if ! confirm "返回主菜单？" "y"; then

@@ -3,17 +3,45 @@
 面向阿里云 ECS（及同类 CentOS/Debian/Alibaba Cloud Linux）的 **主机初始化** 与
 **Docker LNMP 多站点部署** 工具。
 
-## 下载方式
+## 快速使用
+
+### 方式 1：直接使用
 
 ```bash
-# init.sh 环境部署
-curl -fsSL -o init.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/init.sh
+# init.sh
+/bin/bash -c "$(curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/init.sh)"
 
-# deploy-site 站点部署
-curl -fsSL -o deploy-site.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh
+# deploy-site.sh
+/bin/bash -c "$(curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh)"
 ```
 
-`deploy.sh` 与仓库中的 **`deploy-site.sh`** 为同一文件；下载后请 `chmod +x init.sh deploy.sh`，部署到系统路径时建议仍命名为 **`/usr/local/bin/deploy-site.sh`**（与 `init.sh` 里 sudoers 一致）。
+### 方式 2：下载后执行
+
+#### init.sh 环境部署
+
+```bash
+# 下载
+curl -fsSL -o init.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/init.sh
+
+# 执行权限
+chmod +x init.sh
+
+# 交互执行
+sudo ./init.sh
+```
+
+#### deploy-site 站点部署
+
+```bash
+# 下载
+curl -fsSL -o deploy-site.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh
+
+# 执行权限
+chmod +x deploy-site.sh
+
+# 交互执行
+sudo ./deploy-site.sh
+```
 
 ## 脚本一览
 
@@ -49,8 +77,9 @@ curl -fsSL -o deploy-site.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployme
 ### 功能概要（init.sh）
 
 - 生成/更新 **`/etc/lnmp-env.conf`**（权限 600），保存 Devops 用户、GitHub 代理、Docker 镜像、
-  PHP 版本与扩展、ACME 邮箱、**`ACME_SSL_DNS_DEFAULT`**（`deploy-site` 交互默认 SSL 模式）、
-  SSH 端口与 root 策略、LNMP 组件列表等。
+  **LNMP 各容器镜像**（`NGINX_IMAGE`、`MYSQL_IMAGE`、`REDIS_IMAGE`、`ACME_IMAGE`）、**`PHP_VERSION`**
+  与扩展、ACME 邮箱、**`ACME_SSL_DNS_DEFAULT`**（`deploy-site` 交互默认 SSL 模式）、SSH 端口与 root
+  策略、LNMP 组件列表等。
 - 可选模块：**SSH 加固**、**等保三权用户**、**BBR**、**Oh-My-Zsh**、**Firewalld**、
   **Docker**、**LNMP（docker-compose）**、**wheel 管理员**、**devops 用户**（将 `DEVOPS_USER`
   加入组 **`devops`**，sudoers 为 `%devops NOPASSWD: /usr/local/bin/deploy-site.sh`）、
@@ -83,6 +112,26 @@ curl -fsSL -o deploy-site.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployme
    sudo ./init.sh install ssh --ssh-port=22 --root-login=key
    sudo ./init.sh install saferm   # 可选：安装安全删除到 /usr/local/bin/saferm
    ```
+
+5. **更新 LNMP 容器镜像**（按 `/etc/lnmp-env.conf` 中的镜像名拉取并重建；`update` 会重写
+   `docker-compose.yml` 后执行 `pull` + `up --force-recreate`）：
+
+   ```bash
+   sudo ./init.sh update lnmp                    # 全部服务
+   sudo ./init.sh update lnmp nginx            # 仅单个：nginx | php | mysql | redis | acme
+   sudo ./init.sh update lnmp --nginx-image=nginx:1.26-alpine   # 可先改镜像再更新（与 install 共用同一套长选项）
+   ```
+
+### LNMP 版本与镜像（init.sh）
+
+- **交互向导 / 「安装单个组件」中的 LNMP**：会为已勾选组件提供 **预设镜像/版本**（PHP 主版本、Nginx、
+  MySQL/MariaDB、Redis、acme.sh 等），每项末档一般为 **自定义**（完整 `镜像:TAG` 或 PHP 主版本号）。
+- **非交互**：除原有 **`--php-version=`**、**`--php-ext=`** 外，还可指定
+  **`--nginx-image=`**、**`--mysql-image=`**、**`--redis-image=`**、**`--acme-image=`**（值须为
+  Docker Hub 等可拉取的镜像引用，与 `docker-compose` 中 `image:` 一致）。
+- **`sudo ./init.sh status`**：在 LNMP 区域会按已启用服务打印当前配置的镜像与 PHP 版本。
+- **菜单「4) 更新配置」**：含 **LNMP 组件镜像**；若本机已有 `docker-compose.yml`，改完后会执行与
+  **`update lnmp`** 相同的拉取与重建流程（未安装 LNMP 时仅写入配置，待后续 `install lnmp` 生效）。
 
 ### saferm（安全删除）
 
@@ -152,8 +201,8 @@ saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
 - **1 全新安装**：多选模块（含可选 **saferm**）后一次性执行。
 - **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器 / **saferm** 等。
 - **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录；可卸载 **saferm**。
-- **4 更新配置**：代理、镜像、Alpine 源、PHP 版本/扩展、SSH、ACME 邮箱、**ACME SSL 默认方式**、
-  devops 用户等。
+- **4 更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**LNMP 各组件镜像**（可触发单栈更新）、
+  SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等。
 - **5 查看状态**：BBR、Docker、容器、SSH、等保标记等。
 - **6 账户管理**：用户/组、密码、authorized_keys、AllowUsers 与 `resync-allow`。
 
@@ -313,5 +362,7 @@ sudo /usr/local/bin/deploy-site.sh add \
 ## 配置文件与版本
 
 - **全局配置**：`/etc/lnmp-env.conf`（由 `init.sh` 维护；`deploy-site.sh` 会 source 以统一数据目录等
-  变量）。
+  变量）。与 LNMP 相关的常见键包括：`LNMP_SERVICES`、`PHP_VERSION`、`PHP_EXTENSIONS`、
+  `NGINX_IMAGE`、`MYSQL_IMAGE`、`REDIS_IMAGE`、`ACME_IMAGE`、`ACME_EMAIL`、`ACME_SSL_DNS_DEFAULT`、
+  `CONTAINER_WWW` 等（完整列表以生成文件或 `sudo ./init.sh --help` 为准）。
 - 脚本内版本号均为 **2.0.0**（以脚本内 `VERSION=` 为准）。
