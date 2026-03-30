@@ -10,6 +10,8 @@ CONTAINER_WWW="${CONTAINER_WWW:-${DATA_DIR}/www}"
 WWW_ROOT="${DATA_DIR}/www"
 NGINX_CONF="${DATA_DIR}/nginx/conf.d"
 SSL_DIR="${DATA_DIR}/ssl"
+# 无 per-site 文件时的全局默认 SSE 前缀（空格分隔）；每站点可写 ${NGINX_CONF}/<域名>.sse-prefixes 覆盖
+LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/deploy-site.log"
@@ -98,6 +100,41 @@ warn_php_fpm_slowlog_compose_missing() {
   grep -q 'php/fpm.d/zz-slowlog.conf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
   grep -q 'container_name: lnmp-php' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
   warn "docker-compose 未挂载 php-fpm slowlog；请 init.sh 更新 LNMP 编排后执行: cd ${DATA_DIR} && docker compose up -d --force-recreate php"
+}
+
+ensure_php_fpm_wave_pool_host_artifacts() {
+  [[ -d "${DATA_DIR}/php" ]] || return 0
+  mkdir -p "${DATA_DIR}/php/fpm.d"
+  if [[ ! -f "${DATA_DIR}/php/fpm.d/wave-pool.conf" ]]; then
+    cat > "${DATA_DIR}/php/fpm.d/wave-pool.conf" <<'FPMCONF'
+; SSE 专用池 listen 9001；与 deploy-site 中 LARAVEL_SSE_PREFIXES 对应路径走 php:9001
+; 可按内存调整 pm.max_children（每个长连接占 1 worker）
+[wave]
+user = www-data
+group = www-data
+listen = 9001
+listen.owner = www-data
+listen.group = www-data
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 8
+request_terminate_timeout = 0
+clear_env = no
+catch_workers_output = yes
+slowlog = /var/log/php-fpm/fpm-slow.log
+request_slowlog_timeout = 5s
+FPMCONF
+  fi
+}
+
+warn_php_fpm_wave_pool_compose_missing() {
+  container_ok "lnmp-php" || return 0
+  [[ -f "${DATA_DIR}/docker-compose.yml" ]] || return 0
+  grep -q 'php/fpm.d/wave-pool.conf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
+  grep -q 'container_name: lnmp-php' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
+  warn "docker-compose 未挂载 Wave FPM 池（wave-pool.conf）；请重新运行 init.sh 生成编排，或手动加入挂载后: cd ${DATA_DIR} && docker compose up -d --force-recreate php"
 }
 
 supervisord_ready() {
@@ -367,6 +404,136 @@ id "${DEVOPS_USER}" &>/dev/null || die "用户 ${DEVOPS_USER} 不存在，请先
 # ═══════════════════════════════════════════════
 #  Nginx 配置生成
 # ═══════════════════════════════════════════════
+_laravel_sse_prefixes_resolve() {
+  local domain="$1"
+  local f="${NGINX_CONF}/${domain}.sse-prefixes"
+  local line acc=""
+  if [[ -f "$f" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [[ -z "$line" ]] && continue
+      acc+="${line}"$'\n'
+    done < "$f"
+    [[ -n "$acc" ]] && printf '%s' "$acc" && return
+  fi
+  printf '%s' "${LARAVEL_SSE_PREFIXES:-wave}"
+}
+
+# 将 Laravel 风格路径 /a/{b}/c 转为 nginx 正则 ^/a/[^/]+/c$（每一段 {name} → [^/]+）
+_laravel_sse_escape_static_for_nginx_re() {
+  local s="$1" out="" i c
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      .|\^|\$|\*|\+|\?|\(|\)|\{|\}|\||\[|\]|\\) out+="\\${c}" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
+_laravel_sse_brace_path_to_nginx_regex() {
+  local s="$1" out="" post inner
+  [[ "$s" == /* ]] || s="/$s"
+  s="${s#/}"
+  while [[ "$s" == *'{'* ]]; do
+    [[ "$s" == *'{'*'}"'* ]] || return 1
+    post="${s#*\{}"
+    inner="${post%%\}*}"
+    [[ -n "$inner" ]] || return 1
+    [[ "$inner" == *'{'* ]] && return 1
+    post="${post#"$inner"\}}"
+    out+="$(_laravel_sse_escape_static_for_nginx_re "${s%%\{*}")"
+    out+='[^/]+'
+    s="$post"
+  done
+  out+="$(_laravel_sse_escape_static_for_nginx_re "$s")"
+  printf '^/%s$' "$out"
+}
+
+apply_site_sse_prefixes_cli() {
+  local domain="$1"
+  [[ "${SITE_SSE_PREFIXES_CLI:-0}" -ne 1 ]] && return 0
+  mkdir -p "${NGINX_CONF}"
+  local f="${NGINX_CONF}/${domain}.sse-prefixes"
+  if [[ -n "${SITE_SSE_PREFIXES}" ]]; then
+    local norm
+    norm=$(printf '%s' "$SITE_SSE_PREFIXES" | tr ',' ' ' | tr -s '[:space:]' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    printf '%s\n' "$norm" > "$f"
+    fix_nginx_conf_d_file "$f"
+  else
+    rm -f "$f"
+  fi
+}
+
+_nginx_laravel_sse_location_blocks() {
+  local out="" _p raw _seen=" "
+
+  _laravel_sse_append_upstream_block() {
+    local _hdr="$1"
+    out+="${_hdr}"$'\n'
+    out+='        gzip                 off;
+        include              fastcgi_params;
+        fastcgi_pass         php:9001;
+        fastcgi_index        index.php;
+        fastcgi_param        SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param        DOCUMENT_ROOT $document_root;
+        fastcgi_read_timeout 86400;
+        fastcgi_buffering    off;
+        fastcgi_buffer_size  32k;
+        fastcgi_buffers      8 16k;
+    }
+
+'$'\n'
+  }
+
+  _laravel_sse_handle_one_pattern() {
+    local _tok="$1"
+    _tok="${_tok#"${_tok%%[![:space:]]*}"}"
+    _tok="${_tok%"${_tok##*[![:space:]]}"}"
+    [[ -z "$_tok" ]] && return 0
+    case "${_seen}" in *"|${_tok}|"*) return 0 ;; esac
+    _seen+="|${_tok}| "
+
+    if [[ "$_tok" =~ ^~\*(.+)$ ]]; then
+      _laravel_sse_append_upstream_block "    location ~* ${BASH_REMATCH[1]} {"
+    elif [[ "$_tok" =~ ^~(.+)$ ]]; then
+      _laravel_sse_append_upstream_block "    location ~ ${BASH_REMATCH[1]} {"
+    elif [[ "$_tok" == *'{'*'}"'* ]]; then
+      local _rx _hdr
+      _tok="${_tok#/}"
+      [[ "$_tok" == /* ]] || _tok="/$_tok"
+      if _rx=$(_laravel_sse_brace_path_to_nginx_regex "$_tok") 2>/dev/null; then
+        printf -v _hdr '    location ~ %s {' "$_rx"
+        _laravel_sse_append_upstream_block "$_hdr"
+      fi
+    else
+      _tok="${_tok#/}"
+      _tok="${_tok%/}"
+      [[ -z "$_tok" || "$_tok" == '~' ]] && return 0
+      _laravel_sse_append_upstream_block "    location ^~ /${_tok} {"
+    fi
+  }
+
+  raw="${1:-}"
+  [[ -z "$raw" ]] && raw="${LARAVEL_SSE_PREFIXES:-wave}"
+
+  if [[ "$raw" == *$'\n'* ]]; then
+    while IFS= read -r _p || [[ -n "$_p" ]]; do
+      _laravel_sse_handle_one_pattern "$_p"
+    done <<< "$raw"
+  else
+    read -ra parts <<< "$(printf '%s' "$raw" | tr ',' ' ')"
+    for _p in "${parts[@]}"; do
+      _laravel_sse_handle_one_pattern "$_p"
+    done
+  fi
+
+  printf '%s' "$out"
+}
+
 gen_nginx_laravel() {
   local domain="$1"
   cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
@@ -413,6 +580,7 @@ server {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
+$(_nginx_laravel_sse_location_blocks "$(_laravel_sse_prefixes_resolve "$domain")")
     location ~ \.php\$ {
         fastcgi_pass         php:9000;
         fastcgi_index        index.php;
@@ -936,6 +1104,7 @@ HORIZON
 #  子命令: add
 # ═══════════════════════════════════════════════
 DOMAIN="" GIT_REPO="" GIT_BRANCH="" SITE_TYPE=""
+SITE_SSE_PREFIXES="" SITE_SSE_PREFIXES_CLI=0
 APP_NAME="" REDIS_HOST="" REDIS_PORT="" REDIS_PASSWORD=""
 REDIS_PASSWORD_FROM_CLI=0
 NEED_DB="" DB_HOST="" DB_NAME="" DB_PWD=""
@@ -954,6 +1123,16 @@ parse_args() {
     case "$1" in
       --domain=*)        DOMAIN="${1#*=}" ;;
       --domain)          shift; DOMAIN="$1" ;;
+      --sse-prefixes=*)  SITE_SSE_PREFIXES="${1#*=}"; SITE_SSE_PREFIXES_CLI=1 ;;
+      --sse-prefixes)
+        SITE_SSE_PREFIXES_CLI=1
+        shift
+        if [[ $# -ge 1 && "$1" != --* ]]; then
+          SITE_SSE_PREFIXES="$1"
+        else
+          SITE_SSE_PREFIXES=""
+        fi
+        ;;
       --git=*)           GIT_REPO="${1#*=}" ;;
       --git)             shift; GIT_REPO="$1" ;;
       --git-branch=*)    GIT_BRANCH="${1#*=}" ;;
@@ -1121,6 +1300,8 @@ cmd_add() {
 
   ensure_php_fpm_slowlog_host_artifacts
   warn_php_fpm_slowlog_compose_missing
+  ensure_php_fpm_wave_pool_host_artifacts
+  warn_php_fpm_wave_pool_compose_missing
 
   collect_interactive
 
@@ -1137,6 +1318,7 @@ cmd_add() {
   echo ""
   hr; info "[1/6] Nginx 配置"; echo ""
   if [[ "$SITE_TYPE" = "laravel" ]]; then
+    apply_site_sse_prefixes_cli "$DOMAIN"
     gen_nginx_laravel "$DOMAIN"
     wait_container_running "lnmp-nginx" 45
     docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
@@ -1249,6 +1431,8 @@ cmd_update() {
 
   ensure_php_fpm_slowlog_host_artifacts
   warn_php_fpm_slowlog_compose_missing
+  ensure_php_fpm_wave_pool_host_artifacts
+  warn_php_fpm_wave_pool_compose_missing
 
   if [[ -d "${site_dir}/.git" ]]; then
     if [[ -n "${GIT_BRANCH:-}" ]]; then
@@ -1307,6 +1491,7 @@ cmd_update() {
       warn "supervisord 未运行，跳过 Horizon 重启；启动后执行: supervisorctl restart laravel-horizon-${DOMAIN}"
     fi
 
+    apply_site_sse_prefixes_cli "$DOMAIN"
     gen_nginx_laravel "$DOMAIN"
     if container_ok "lnmp-nginx"; then
       if docker exec lnmp-nginx nginx -t 2>&1; then
@@ -1352,6 +1537,7 @@ cmd_remove() {
 
   [[ "${YES:-0}" -eq 0 ]] && ! confirm "确认删除 ${DOMAIN}？所有配置和数据将被移除" "n" && { info "已取消"; return; }
 
+  rm -f "${NGINX_CONF}/${DOMAIN}.sse-prefixes" 2>/dev/null || true
   if [[ -f "${NGINX_CONF}/${DOMAIN}.conf" ]]; then
     rm -f "${NGINX_CONF}/${DOMAIN}.conf"
     normalize_nginx_conf_d
@@ -1703,6 +1889,8 @@ usage() {
 
 选项:
   --domain=域名         站点域名
+  --sse-prefixes=列表   Laravel SSE：写入 ${NGINX_CONF}/<域名>.sse-prefixes。可写 Laravel 路径如 /api/v1/merchants/{merchant}/reports/dashboard-stream（自动生成 location ~ 正则）；或普通前缀 wave；或手写 ~^/…\$ 、~*… 。多行=每行一条。留空=删文件用全局默认
+  环境变量 LARAVEL_SSE_PREFIXES  无 per-site 文件时的默认（空格/逗号分隔，规则同上）[默认: wave]
   --git=地址            Git 仓库地址（留空或省略=跳过 clone/pull）
   --git-branch=名称     clone/pull 使用的分支或标签（留空=默认分支；无 --git 时忽略）
   --type=laravel|frontend  站点类型 [默认: laravel]

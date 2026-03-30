@@ -1310,6 +1310,30 @@ request_slowlog_timeout = 5s
 FPMCONF
 }
 
+_write_php_fpm_wave_pool_conf() {
+  mkdir -p "${DATA_DIR}/php/fpm.d"
+  cat > "${DATA_DIR}/php/fpm.d/wave-pool.conf" <<'FPMCONF'
+; SSE 专用池 listen 9001；Nginx 中 LARAVEL_SSE_PREFIXES 所列前缀走 php:9001（默认含 wave）
+; 可按内存调整 pm.max_children（每个长连接占 1 worker）
+[wave]
+user = www-data
+group = www-data
+listen = 9001
+listen.owner = www-data
+listen.group = www-data
+pm = dynamic
+pm.max_children = 50
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 8
+request_terminate_timeout = 0
+clear_env = no
+catch_workers_output = yes
+slowlog = /var/log/php-fpm/fpm-slow.log
+request_slowlog_timeout = 5s
+FPMCONF
+}
+
 _ensure_php_fpm_slowlog_host_layout() {
   has_service "php" || return 0
   mkdir -p "${DATA_DIR}/php/log"
@@ -1325,6 +1349,7 @@ lnmp_gen_compose() {
   if has_service "php"; then
     _write_php_laravel_conf
     _write_php_fpm_slowlog_conf
+    _write_php_fpm_wave_pool_conf
   fi
 
   if [[ ! -f "${DATA_DIR}/nginx/nginx.conf" ]]; then _write_nginx_main_conf; fi
@@ -1374,6 +1399,7 @@ lnmp_gen_compose() {
       - ${DATA_DIR}/www:${CONTAINER_WWW}
       - ${DATA_DIR}/php/conf.d/99-laravel.ini:/usr/local/etc/php/conf.d/99-laravel.ini:ro
       - ${DATA_DIR}/php/fpm.d/zz-slowlog.conf:/usr/local/etc/php-fpm.d/zz-slowlog.conf:ro
+      - ${DATA_DIR}/php/fpm.d/wave-pool.conf:/usr/local/etc/php-fpm.d/wave-pool.conf:ro
       - ${DATA_DIR}/php/log:/var/log/php-fpm
       - php-extensions:/usr/local/lib/php/extensions"
 
