@@ -264,7 +264,8 @@ normalize_nginx_cache_dir() {
 fix_laravel_readable_for_web() {
   local base="$1"
   local envf="${base}/.env"
-  [[ -d "$base" ]] || return 0
+  [[ -d "$base" ]] || { info "  [跳过] fix_laravel_readable_for_web：目录不存在 ${base}"; return 0; }
+  info "  执行 fix_laravel_readable_for_web（PHP 82 / Nginx 101 可读、storage 可写、.env）…"
   if [[ -d "${base}/public" ]]; then
     chmod a+rx "${base}/public" 2>/dev/null || true
     chmod -R a+rX "${base}/public" 2>/dev/null || true
@@ -288,18 +289,21 @@ fix_laravel_readable_for_web() {
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${base}/storage" "${base}/bootstrap/cache" 2>/dev/null || true
     chmod -R 777 "${base}/storage" "${base}/bootstrap/cache" 2>/dev/null || true
   fi
+  ok "  fix_laravel_readable_for_web 已执行"
 }
 
 # 容器内 nginx 为 101:101；前端见上；Laravel 整站需同时满足 php-fpm(82) 可读代码
 fix_site_readable_for_nginx() {
   local domain="$1" site_type="$2" fe_sub="${3:-}"
+  info "执行 fix_site_readable_for_nginx：${domain}（类型: ${site_type}）…"
   chmod a+rx "${WWW_ROOT}" 2>/dev/null || true
   local base="${WWW_ROOT}/${domain}"
-  [[ -d "$base" ]] || return 0
+  [[ -d "$base" ]] || { info "  [跳过] 站点目录不存在: ${base}"; return 0; }
   chmod a+rx "$base" 2>/dev/null || true
 
   if [[ "$site_type" = "laravel" ]]; then
     fix_laravel_readable_for_web "$base"
+    ok "fix_site_readable_for_nginx 已执行（Laravel: ${domain}）"
     return 0
   fi
 
@@ -307,7 +311,7 @@ fix_site_readable_for_nginx() {
   if [[ -n "$fe_sub" ]]; then
     docroot="${base}/${fe_sub}"
   fi
-  [[ -d "$docroot" ]] || return 0
+  [[ -d "$docroot" ]] || { info "  [跳过] 前端文档根不存在: ${docroot}"; return 0; }
   chmod a+rx "$docroot" 2>/dev/null || true
 
   if [[ "$site_type" = "frontend" && -z "$fe_sub" && -d "${base}/.git" ]]; then
@@ -316,6 +320,7 @@ fix_site_readable_for_nginx() {
   else
     chmod -R a+rX "$docroot" 2>/dev/null || true
   fi
+  ok "fix_site_readable_for_nginx 已执行（前端: ${domain}，文档根: ${docroot}）"
 }
 
 fix_nginx_main_pid_path() {
