@@ -1395,20 +1395,41 @@ cmd_remove() {
 # ═══════════════════════════════════════════════
 #  子命令: status（运行状态与常见故障线索）
 # ═══════════════════════════════════════════════
+# 仅保留 3 位状态码（避免终端/旧 curl 异常拼接）
+_status_http_code_normalize() {
+  local c="${1:-}"
+  c="${c//[^0-9]/}"
+  [[ ${#c} -ge 3 ]] && printf '%s' "${c:0:3}" || printf '000'
+}
+
 # Laravel 用 /up 探活（避免纯 API 根路径 / 无路由或 FPM 长时间无响应导致误判）；前端用 /
 _status_http_code() {
   local host="$1" use_https="$2" site_type="${3:-frontend}"
-  local path="/"
+  local path="/" raw=""
   [[ "$site_type" = "laravel" ]] && path="/up"
   if [[ "$use_https" = 1 ]]; then
-    curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 15 \
+    raw=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 25 \
       --resolve "${host}:443:127.0.0.1" \
-      "https://${host}${path}" 2>/dev/null || printf '000'
+      "https://${host}${path}" 2>/dev/null) || raw=""
+    _status_http_code_normalize "${raw:-000}"
   else
-    curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 15 \
+    raw=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 25 \
       --resolve "${host}:80:127.0.0.1" \
-      "http://${host}${path}" 2>/dev/null || printf '000'
+      "http://${host}${path}" 2>/dev/null) || raw=""
+    _status_http_code_normalize "${raw:-000}"
   fi
+}
+
+# Laravel 且 HTTPS 异常时：本站 Nginx error + 宿主机 fpm-slow.log 尾部
+_status_laravel_fpm_tail_hints() {
+  local dom="$1"
+  echo ""
+  info "本站相关 Nginx error.log（含 server_name / Host）:"
+  docker exec lnmp-nginx sh -c "grep -F '${dom}' /var/log/nginx/error.log 2>/dev/null | tail -n 20" 2>/dev/null | sed 's/^/  /' || true
+  [[ ! -s "${DATA_DIR}/php/log/fpm-slow.log" ]] && return 0
+  echo ""
+  info "php-fpm 慢日志尾部（${DATA_DIR}/php/log/fpm-slow.log）:"
+  tail -n 30 "${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null | sed 's/^/  /' || true
 }
 
 _status_print_hints() {
@@ -1419,7 +1440,7 @@ _status_print_hints() {
   [[ ! -f "${NGINX_CONF}/${d}.conf" ]] && issues+=("无 Nginx 配置 ${NGINX_CONF}/${d}.conf，请求可能落到默认站点")
   [[ "$code_http" = "000" ]] && issues+=("HTTP 无响应：检查 docker 端口映射、本机防火墙、阿里云安全组是否放行 80")
   [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" = "laravel" ]] \
-    && issues+=("HTTPS 无响应或超时：Laravel 探测为 GET /up；查 Nginx upstream timed out、宿主机 ${DATA_DIR}/php/log/fpm-slow.log、storage/logs/laravel.log")
+    && issues+=("HTTPS 无响应或超时：Laravel 探测为 GET /up（已放宽至 25s）；多为 php-fpm 卡住或池占满，见上方本站 error 与 fpm-slow.log；另查 storage/logs/laravel.log、MySQL/Redis")
   [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" != "laravel" ]] \
     && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 php-fpm 异常，查看下方 Nginx error.log 中 upstream/fastcgi 报错")
@@ -1529,6 +1550,11 @@ cmd_status() {
     info "本机探测（127.0.0.1 + --resolve，路径: ${_probe_path}） HTTP=${code_http}  HTTPS=${code_https}"
     [[ "$code_http" =~ ^(301|302|307|308|200)$ ]] || [[ "$code_http" = "000" ]] || warn "HTTP 状态非预期（常见为 301 跳转 HTTPS）"
     [[ "$code_https" =~ ^(200|301|302|304|403|404|500|502|503)$ ]] || warn "HTTPS 状态: ${code_https}"
+
+    if [[ "${STATUS_ALL:-0}" -ne 1 ]] && [[ "$site_type" = "laravel" ]] \
+      && { [[ "$code_https" = "000" ]] || [[ "$code_https" = "502" ]] || [[ "$code_https" = "504" ]]; }; then
+      _status_laravel_fpm_tail_hints "$dom"
+    fi
 
     if container_ok "lnmp-nginx"; then
       echo ""
