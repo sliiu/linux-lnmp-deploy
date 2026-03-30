@@ -373,6 +373,7 @@ gen_nginx_laravel() {
 server {
     listen 80;
     server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
     root ${CONTAINER_WWW}/${domain}/public;
 
     location ^~ /.well-known/acme-challenge/ {
@@ -389,6 +390,7 @@ server {
     listen 443 ssl;
     http2 on;
     server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
     root ${CONTAINER_WWW}/${domain}/public;
     index index.php;
 
@@ -441,6 +443,7 @@ gen_nginx_frontend() {
 server {
     listen 80;
     server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
     root ${root_path};
 
     location ^~ /.well-known/acme-challenge/ {
@@ -457,6 +460,7 @@ server {
     listen 443 ssl;
     http2 on;
     server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
     root ${root_path};
     index index.html;
 
@@ -1301,6 +1305,15 @@ cmd_update() {
       supervisorctl restart "laravel-horizon-${DOMAIN}" &>/dev/null || true
     elif [[ -n "$sup_conf" ]] && command -v supervisorctl &>/dev/null; then
       warn "supervisord 未运行，跳过 Horizon 重启；启动后执行: supervisorctl restart laravel-horizon-${DOMAIN}"
+    fi
+
+    gen_nginx_laravel "$DOMAIN"
+    if container_ok "lnmp-nginx"; then
+      if docker exec lnmp-nginx nginx -t 2>&1; then
+        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload（与模板同步）" || warn "Nginx reload 失败"
+      else
+        warn "Nginx 配置校验失败，未 reload"
+      fi
     fi
   else
     # 前端站点：检查构建产物并 reload nginx
