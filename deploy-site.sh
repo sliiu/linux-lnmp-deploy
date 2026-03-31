@@ -87,7 +87,12 @@ ensure_php_fpm_slowlog_host_artifacts() {
   if [[ ! -f "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" ]]; then
     cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
 ; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
+; 小内存 VPS 默认上限，可按机器内存调高
 [www]
+pm.max_children = 12
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 4
 slowlog = /var/log/php-fpm/fpm-slow.log
 request_slowlog_timeout = 5s
 FPMCONF
@@ -111,7 +116,7 @@ ensure_php_fpm_wave_pool_host_artifacts() {
   mkdir -p "${DATA_DIR}/php/fpm.d"
   local _wpf="${DATA_DIR}/php/fpm.d/wave-pool.conf"
   [[ -d "$_wpf" ]] && rm -rf "$_wpf"
-  if [[ ! -f "$_wpf" ]]; then
+  if [[ ! -f "$_wpf" ]] || grep -qE '^pm\.max_children = 50$' "$_wpf" 2>/dev/null; then
     cat > "$_wpf" <<'FPMCONF'
 ; SSE 专用池；Nginx fastcgi_pass php:9001；须监听 0.0.0.0 以便跨容器访问
 ; 可按内存调整 pm.max_children（每个长连接占 1 worker）
@@ -120,10 +125,10 @@ user = www-data
 group = www-data
 listen = 0.0.0.0:9001
 pm = dynamic
-pm.max_children = 50
-pm.start_servers = 2
+pm.max_children = 8
+pm.start_servers = 1
 pm.min_spare_servers = 1
-pm.max_spare_servers = 8
+pm.max_spare_servers = 3
 request_terminate_timeout = 0
 clear_env = no
 catch_workers_output = yes
@@ -139,6 +144,27 @@ warn_php_fpm_wave_pool_compose_missing() {
   grep -q 'php/fpm.d/wave-pool.conf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
   grep -q 'container_name: lnmp-php' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
   warn "docker-compose 未挂载 Wave FPM 池（wave-pool.conf）；请重新运行 init.sh 生成编排，或手动加入挂载后: cd ${DATA_DIR} && docker compose up -d --force-recreate php"
+}
+
+ensure_mysql_low_memory_host_artifacts() {
+  [[ -d "${DATA_DIR}" ]] || return 0
+  mkdir -p "${DATA_DIR}/mysql-docker/conf.d"
+  local _mf="${DATA_DIR}/mysql-docker/conf.d/99-lnmp-low-memory.cnf"
+  [[ -f "$_mf" ]] && return 0
+  cat > "$_mf" <<'MYCNF'
+[mysqld]
+innodb_buffer_pool_size = 256M
+performance_schema = OFF
+max_connections = 100
+MYCNF
+}
+
+warn_mysql_low_memory_compose_missing() {
+  container_ok "lnmp-mysql" || return 0
+  [[ -f "${DATA_DIR}/docker-compose.yml" ]] || return 0
+  grep -q '99-lnmp-low-memory.cnf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
+  grep -q 'container_name: lnmp-mysql' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
+  warn "docker-compose 未挂载 MySQL 低内存配置；请 init.sh 重新生成 LNMP 编排后: cd ${DATA_DIR} && docker compose up -d --force-recreate mysql"
 }
 
 supervisord_ready() {
@@ -212,19 +238,19 @@ _php_ext_apk_retry_exec() {
 
 ensure_lnmp_php_laravel_extensions() {
   container_ok "lnmp-php" || die "lnmp-php 容器未运行"
-  if docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
+  if docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
     return 0
   fi
   info "尝试启用已编译的 PHP 扩展 (docker-php-ext-enable)..."
   docker exec -u root lnmp-php sh -c \
-    'for e in bcmath pcntl zip gd pdo_mysql mysqli opcache dom mbstring curl xml intl fileinfo exif sockets; do docker-php-ext-enable "$e" 2>/dev/null || true; done'
-  if docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
+    'for e in bcmath pcntl zip gd pdo_mysql mysqli opcache dom mbstring curl xml intl fileinfo exif sockets redis; do docker-php-ext-enable "$e" 2>/dev/null || true; done'
+  if docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
     ok "PHP 扩展已可用"
     docker restart lnmp-php
     wait_container_running "lnmp-php" 45
     return 0
   fi
-  info "在 lnmp-php 内编译安装扩展（与 init.sh 默认一致，无 redis PECL）..."
+  info "在 lnmp-php 内编译安装扩展（与 init.sh 默认一致，含 pdo_mysql + pecl redis）..."
   [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
   local alpine_sed=""
   [[ -n "${ALPINE_MIRROR:-}" ]] && alpine_sed="sed -i 's|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g' /etc/apk/repositories && apk update && "
@@ -233,14 +259,18 @@ ensure_lnmp_php_laravel_extensions() {
   cmd+=" && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp"
   cmd+=" && docker-php-ext-configure intl"
   cmd+=" && docker-php-ext-install -j\$(nproc) pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif intl fileinfo"
+  cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install redis || true; fi"
+  cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
   cmd="sleep 2; ${cmd}"
   _php_ext_apk_retry_exec "$cmd" \
     || die "PHP 扩展安装失败，请在主机执行 init.sh「更新配置 → PHP 扩展」或 docker restart lnmp-php 后重试"
   docker restart lnmp-php
   wait_container_running "lnmp-php" 45
-  docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
-    || die "bcmath/pcntl/gd/zip 仍未加载，请检查 lnmp-php 或重新部署 PHP 容器"
+  docker exec lnmp-php php -m | grep -q pdo_mysql || die "pdo_mysql 仍未加载，请检查 lnmp-php"
+  docker exec lnmp-php php -m | grep -q '^redis$' || die "redis 扩展仍未加载，请检查 lnmp-php 或 pecl"
+  docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
+    || die "Laravel 所需扩展仍未齐全，请检查 lnmp-php 或重新部署 PHP 容器"
   ok "PHP 扩展就绪"
 }
 
@@ -1348,6 +1378,8 @@ cmd_add() {
   warn_php_fpm_slowlog_compose_missing
   ensure_php_fpm_wave_pool_host_artifacts
   warn_php_fpm_wave_pool_compose_missing
+  ensure_mysql_low_memory_host_artifacts
+  warn_mysql_low_memory_compose_missing
 
   collect_interactive
 
@@ -1479,6 +1511,8 @@ cmd_update() {
   warn_php_fpm_slowlog_compose_missing
   ensure_php_fpm_wave_pool_host_artifacts
   warn_php_fpm_wave_pool_compose_missing
+  ensure_mysql_low_memory_host_artifacts
+  warn_mysql_low_memory_compose_missing
 
   if [[ -d "${site_dir}/.git" ]]; then
     if [[ -n "${GIT_BRANCH:-}" ]]; then

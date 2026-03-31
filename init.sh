@@ -1304,7 +1304,12 @@ _write_php_fpm_slowlog_conf() {
   mkdir -p "${DATA_DIR}/php/fpm.d"
   cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
 ; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
+; 小内存 VPS 默认上限，可按机器内存调高
 [www]
+pm.max_children = 12
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 4
 slowlog = /var/log/php-fpm/fpm-slow.log
 request_slowlog_timeout = 5s
 FPMCONF
@@ -1323,16 +1328,27 @@ user = www-data
 group = www-data
 listen = 0.0.0.0:9001
 pm = dynamic
-pm.max_children = 50
-pm.start_servers = 2
+pm.max_children = 8
+pm.start_servers = 1
 pm.min_spare_servers = 1
-pm.max_spare_servers = 8
+pm.max_spare_servers = 3
 request_terminate_timeout = 0
 clear_env = no
 catch_workers_output = yes
 slowlog = /var/log/php-fpm/fpm-slow.log
 request_slowlog_timeout = 5s
 FPMCONF
+}
+
+_write_mysql_low_memory_conf() {
+  has_service "mysql" || return 0
+  mkdir -p "${DATA_DIR}/mysql-docker/conf.d"
+  cat > "${DATA_DIR}/mysql-docker/conf.d/99-lnmp-low-memory.cnf" <<'MYCNF'
+[mysqld]
+innodb_buffer_pool_size = 256M
+performance_schema = OFF
+max_connections = 100
+MYCNF
 }
 
 _ensure_php_fpm_slowlog_host_layout() {
@@ -1345,13 +1361,14 @@ _ensure_php_fpm_slowlog_host_layout() {
 }
 
 lnmp_gen_compose() {
-  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,redis,www,ssl,php/conf.d,php/fpm.d,php/log}
+  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,mysql-docker/conf.d,redis,www,ssl,php/conf.d,php/fpm.d,php/log}
 
   if has_service "php"; then
     _write_php_laravel_conf
     _write_php_fpm_slowlog_conf
     _write_php_fpm_wave_pool_conf
   fi
+  _write_mysql_low_memory_conf
 
   if [[ ! -f "${DATA_DIR}/nginx/nginx.conf" ]]; then _write_nginx_main_conf; fi
   if [[ ! -f "${DATA_DIR}/nginx/conf.d/default.conf" ]]; then _write_nginx_default_conf; fi
@@ -1428,6 +1445,7 @@ volumes:
     security_opt: [\"no-new-privileges:true\"]
     volumes:
       - ${DATA_DIR}/mysql:/var/lib/mysql
+      - ${DATA_DIR}/mysql-docker/conf.d/99-lnmp-low-memory.cnf:/etc/mysql/conf.d/99-lnmp-low-memory.cnf:ro
     restart: always
     networks: [lnmp-net]
     environment:
