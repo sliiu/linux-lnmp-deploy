@@ -565,17 +565,17 @@ _nginx_laravel_sse_location_blocks() {
 
   raw="${1:-}"
   [[ -z "$raw" ]] && raw="${LARAVEL_SSE_PREFIXES:-wave}"
-
-  if [[ "$raw" == *$'\n'* ]]; then
-    while IFS= read -r _p || [[ -n "$_p" ]]; do
-      _laravel_sse_handle_one_pattern "$_p"
-    done <<< "$raw"
-  else
-    read -ra parts <<< "$(printf '%s' "$raw" | tr ',' ' ')"
+  # 每行可多条（空格/逗号）；禁止用「是否含换行」分支：单行文件末尾也有 \n，会把整行当一条 token 导致 {param} 路径未拆开
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%%#*}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" ]] && continue
+    read -ra parts <<< "$(printf '%s' "$line" | tr ',' ' ')"
     for _p in "${parts[@]}"; do
       _laravel_sse_handle_one_pattern "$_p"
     done
-  fi
+  done < <(printf '%s\n' "$raw")
 
   printf '%s' "$out"
 }
