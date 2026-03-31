@@ -18,7 +18,11 @@ LOG_FILE="${DATA_DIR}/logs/deploy-site.log"
 # 用命名管道替代进程替换，避免 set -euo pipefail 下 tee 子进程退出触发意外 exit
 _LOG_PIPE="${DATA_DIR}/logs/.deploy-site-$$.pipe"
 mkfifo "$_LOG_PIPE" 2>/dev/null || true
-tee -a "$LOG_FILE" < "$_LOG_PIPE" &
+if command -v stdbuf &>/dev/null; then
+  stdbuf -oL -eL tee -a "$LOG_FILE" < "$_LOG_PIPE" &
+else
+  tee -a "$LOG_FILE" < "$_LOG_PIPE" &
+fi
 _TEE_PID=$!
 exec > "$_LOG_PIPE" 2>&1
 # 脚本退出时清理管道和 tee 进程
@@ -105,16 +109,16 @@ warn_php_fpm_slowlog_compose_missing() {
 ensure_php_fpm_wave_pool_host_artifacts() {
   [[ -d "${DATA_DIR}/php" ]] || return 0
   mkdir -p "${DATA_DIR}/php/fpm.d"
-  if [[ ! -f "${DATA_DIR}/php/fpm.d/wave-pool.conf" ]]; then
-    cat > "${DATA_DIR}/php/fpm.d/wave-pool.conf" <<'FPMCONF'
-; SSE 专用池 listen 9001；与 deploy-site 中 LARAVEL_SSE_PREFIXES 对应路径走 php:9001
+  local _wpf="${DATA_DIR}/php/fpm.d/wave-pool.conf"
+  [[ -d "$_wpf" ]] && rm -rf "$_wpf"
+  if [[ ! -f "$_wpf" ]]; then
+    cat > "$_wpf" <<'FPMCONF'
+; SSE 专用池；Nginx fastcgi_pass php:9001；须监听 0.0.0.0 以便跨容器访问
 ; 可按内存调整 pm.max_children（每个长连接占 1 worker）
 [wave]
 user = www-data
 group = www-data
-listen = 9001
-listen.owner = www-data
-listen.group = www-data
+listen = 0.0.0.0:9001
 pm = dynamic
 pm.max_children = 50
 pm.start_servers = 2
@@ -468,6 +472,48 @@ apply_site_sse_prefixes_cli() {
   fi
 }
 
+# update：展示当前 SSE 规则并可选修改（未传 --sse-prefixes 且 stdin 为 TTY 时）
+interactive_sse_prefixes_maybe_for_update() {
+  local domain="$1"
+  [[ -t 0 ]] || return 0
+  [[ "${SITE_SSE_PREFIXES_CLI:-0}" -eq 1 ]] && return 0
+
+  local f="${NGINX_CONF}/${domain}.sse-prefixes"
+  echo ""
+  info "SSE（Wave 等长连接）走 php:9001；规则来自 ${f} 或全局 LARAVEL_SSE_PREFIXES"
+  if [[ -f "$f" ]]; then
+    info "当前：站点专属文件（${f}）"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%%#*}"
+      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+      echo "      ${line}"
+    done < "$f"
+  else
+    info "当前：无站点专属文件 → 全局 LARAVEL_SSE_PREFIXES=${LARAVEL_SSE_PREFIXES:-wave}"
+  fi
+  local cur_resolved cur_one
+  cur_resolved=$(_laravel_sse_prefixes_resolve "$domain")
+  cur_one=$(printf '%s' "$cur_resolved" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  info "合并解析后（单行）: ${cur_one}"
+
+  if ! confirm "是否修改 SSE 路径规则？" "n"; then
+    return 0
+  fi
+
+  local newv
+  newv=$(prompt "新规则（空格/逗号分隔；仅输入 - 表示删站点文件、改用全局）" "$cur_one")
+  if [[ "$newv" == "-" ]]; then
+    SITE_SSE_PREFIXES=""
+    SITE_SSE_PREFIXES_CLI=1
+    info "将删除站点专属 .sse-prefixes，改用全局默认"
+  elif [[ "$newv" == "$cur_one" ]]; then
+    info "与当前相同，跳过写入"
+  else
+    SITE_SSE_PREFIXES="$newv"
+    SITE_SSE_PREFIXES_CLI=1
+  fi
+}
+
 _nginx_laravel_sse_location_blocks() {
   local out="" _p raw _seen=" "
 
@@ -478,8 +524,8 @@ _nginx_laravel_sse_location_blocks() {
         include              fastcgi_params;
         fastcgi_pass         php:9001;
         fastcgi_index        index.php;
-        fastcgi_param        SCRIPT_FILENAME $document_root/index.php;
-        fastcgi_param        DOCUMENT_ROOT $document_root;
+        fastcgi_param        SCRIPT_FILENAME \$document_root/index.php;
+        fastcgi_param        DOCUMENT_ROOT \$document_root;
         fastcgi_read_timeout 86400;
         fastcgi_buffering    off;
         fastcgi_buffer_size  32k;
@@ -1474,7 +1520,14 @@ cmd_update() {
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     fix_site_readable_for_nginx "$DOMAIN" "laravel" ""
 
-    if confirm "执行 migrate？" "y"; then
+    if [[ -n "${RUN_MIGRATE:-}" ]]; then
+      if [[ "$RUN_MIGRATE" = "y" ]]; then
+        info "artisan migrate..."
+        docker_php_artisan "$DOMAIN" migrate --force
+      else
+        info "跳过 migrate（--run-migrate=n）"
+      fi
+    elif confirm "执行 migrate？" "y"; then
       info "artisan migrate..."
       docker_php_artisan "$DOMAIN" migrate --force
     fi
@@ -1491,6 +1544,7 @@ cmd_update() {
       warn "supervisord 未运行，跳过 Horizon 重启；启动后执行: supervisorctl restart laravel-horizon-${DOMAIN}"
     fi
 
+    interactive_sse_prefixes_maybe_for_update "$DOMAIN"
     apply_site_sse_prefixes_cli "$DOMAIN"
     gen_nginx_laravel "$DOMAIN"
     if container_ok "lnmp-nginx"; then
@@ -1889,7 +1943,7 @@ usage() {
 
 选项:
   --domain=域名         站点域名
-  --sse-prefixes=列表   Laravel SSE：写入 ${NGINX_CONF}/<域名>.sse-prefixes。可写 Laravel 路径如 /api/v1/merchants/{merchant}/reports/dashboard-stream（自动生成 location ~ 正则）；或普通前缀 wave；或手写 ~^/…\$ 、~*… 。多行=每行一条。留空=删文件用全局默认
+  --sse-prefixes=列表   Laravel SSE：写入 ${NGINX_CONF}/<域名>.sse-prefixes（与 update 同用时跳过交互提示）。路径可含 {id} 自动生成正则；或 wave、~^/… 等。留空=删站点文件用全局
   环境变量 LARAVEL_SSE_PREFIXES  无 per-site 文件时的默认（空格/逗号分隔，规则同上）[默认: wave]
   --git=地址            Git 仓库地址（留空或省略=跳过 clone/pull）
   --git-branch=名称     clone/pull 使用的分支或标签（留空=默认分支；无 --git 时忽略）
@@ -1903,7 +1957,7 @@ usage() {
   --db-name=            DB_DATABASE
   --db-password=        DB_PASSWORD
   --create-db=y|n       自动建库 [y]
-  --run-migrate=y|n     执行 migrate [y]
+  --run-migrate=y|n     执行 migrate [y]；update 时指定则可不交互（建议自动化加 --run-migrate=y 或 n）
   --run-seed=y|n        执行 db:seed [y]
   --add-crontab=y|n     添加定时任务 [y]
   --need-horizon=y|n    使用 Horizon [y]
@@ -1924,6 +1978,7 @@ usage() {
 示例:
   $0 add --domain=api.example.com --git=git@gitee.com:user/repo.git --git-branch=develop --need-db=y --db-name=app --db-password=secret
   $0 update --domain=api.example.com
+  $0 update --domain=api.example.com --run-migrate=n   # 不询问、不执行 migrate
   $0 remove --domain=api.example.com
   $0 list
   $0 status --domain=api.example.com

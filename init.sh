@@ -1312,15 +1312,16 @@ FPMCONF
 
 _write_php_fpm_wave_pool_conf() {
   mkdir -p "${DATA_DIR}/php/fpm.d"
-  cat > "${DATA_DIR}/php/fpm.d/wave-pool.conf" <<'FPMCONF'
-; SSE 专用池 listen 9001；Nginx 中 LARAVEL_SSE_PREFIXES 所列前缀走 php:9001（默认含 wave）
+  local _wpf="${DATA_DIR}/php/fpm.d/wave-pool.conf"
+  # Docker 在宿主机缺少该文件时 up 可能误建「目录」wave-pool.conf，导致 php-fpm 读配置失败、容器反复退出
+  [[ -d "$_wpf" ]] && rm -rf "$_wpf"
+  cat > "$_wpf" <<'FPMCONF'
+; SSE 专用池；Nginx fastcgi_pass php:9001；须监听 0.0.0.0 以便跨容器访问
 ; 可按内存调整 pm.max_children（每个长连接占 1 worker）
 [wave]
 user = www-data
 group = www-data
-listen = 9001
-listen.owner = www-data
-listen.group = www-data
+listen = 0.0.0.0:9001
 pm = dynamic
 pm.max_children = 50
 pm.start_servers = 2
@@ -1680,6 +1681,10 @@ _wait_container() {
     container_ok "$name" && docker exec "lnmp-${name}" true &>/dev/null && return 0
     sleep 2
   done
+  if [[ "$name" = "php" ]]; then
+    warn "lnmp-php 诊断提示: docker logs lnmp-php 2>&1 | tail -n 40"
+    warn "若曾缺少 wave-pool.conf 即执行过 compose up，宿主机 ${DATA_DIR}/php/fpm.d/wave-pool.conf 可能被建成目录；应 rm -rf 后重新 init 写入配置并 force-recreate php"
+  fi
   die "容器 lnmp-${name} 启动超时"
 }
 
