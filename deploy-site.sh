@@ -443,7 +443,7 @@ _laravel_sse_brace_path_to_nginx_regex() {
   [[ "$s" == /* ]] || s="/$s"
   s="${s#/}"
   while [[ "$s" == *'{'* ]]; do
-    [[ "$s" == *'{'*'}"'* ]] || return 1
+    [[ "$s" == *'{'*'}'* ]] || return 1
     post="${s#*\{}"
     inner="${post%%\}*}"
     [[ -n "$inner" ]] || return 1
@@ -547,7 +547,7 @@ _nginx_laravel_sse_location_blocks() {
       _laravel_sse_append_upstream_block "    location ~* ${BASH_REMATCH[1]} {"
     elif [[ "$_tok" =~ ^~(.+)$ ]]; then
       _laravel_sse_append_upstream_block "    location ~ ${BASH_REMATCH[1]} {"
-    elif [[ "$_tok" == *'{'*'}"'* ]]; then
+    elif [[ "$_tok" == *'{'*'}'* ]]; then
       local _rx _hdr
       _tok="${_tok#/}"
       [[ "$_tok" == /* ]] || _tok="/$_tok"
