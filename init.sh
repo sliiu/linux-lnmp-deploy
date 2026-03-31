@@ -1863,8 +1863,13 @@ show_status() {
   info "LNMP 容器"
   echo ""
   for c in nginx php mysql redis acme; do
-    if has_service "$c"; then
-      _s=$(container_ok "$c" && echo "运行中" || echo "已停止")
+    if container_ok "$c"; then
+      _s="运行中"
+      if ! has_service "$c"; then
+        _s+="（LNMP_SERVICES 未含 ${c}；请编辑 /etc/lnmp-env.conf 或通过 init「更新配置 → LNMP 组件」保存）"
+      fi
+    elif has_service "$c"; then
+      _s="已停止"
     else
       _s="未部署"
     fi
