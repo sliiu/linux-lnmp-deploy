@@ -550,14 +550,18 @@ _nginx_laravel_sse_location_blocks() {
   _laravel_sse_append_upstream_block() {
     local _hdr="$1"
     out+="${_hdr}"$'\n'
+    # 须用单引号且勿写 \$document_root：否则会把反斜杠写入 conf，SCRIPT_FILENAME 错误
     out+='        gzip                 off;
         include              fastcgi_params;
         fastcgi_pass         php:9001;
         fastcgi_index        index.php;
-        fastcgi_param        SCRIPT_FILENAME \$document_root/index.php;
-        fastcgi_param        DOCUMENT_ROOT \$document_root;
-        fastcgi_read_timeout 86400;
+        fastcgi_param        SCRIPT_FILENAME $document_root/index.php;
+        fastcgi_param        DOCUMENT_ROOT $document_root;
+        fastcgi_param        REQUEST_URI $request_uri;
+        fastcgi_param        QUERY_STRING $query_string;
         fastcgi_buffering    off;
+        fastcgi_read_timeout 86400s;
+        fastcgi_send_timeout 86400s;
         fastcgi_buffer_size  32k;
         fastcgi_buffers      8 16k;
     }
@@ -658,10 +662,12 @@ server {
 
 $(_nginx_laravel_sse_location_blocks "$(_laravel_sse_prefixes_resolve "$domain")")
     location ~ \.php\$ {
+        include              fastcgi_params;
         fastcgi_pass         php:9000;
         fastcgi_index        index.php;
         fastcgi_param        SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        include              fastcgi_params;
+        fastcgi_param        REQUEST_URI \$request_uri;
+        fastcgi_param        QUERY_STRING \$query_string;
         fastcgi_read_timeout 300;
         fastcgi_buffer_size  32k;
         fastcgi_buffers      8 16k;
