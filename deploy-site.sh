@@ -689,6 +689,7 @@ gen_nginx_frontend() {
   local domain="$1" sub="$2"
   local root_path="${CONTAINER_WWW}/${domain}"
   [[ -n "$sub" ]] && root_path="${CONTAINER_WWW}/${domain}/${sub}"
+
   cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
 server {
     listen 80;
@@ -729,12 +730,19 @@ server {
         try_files \$uri =404;
     }
 
+    # HEAD / 或同源检查更新：依赖静态文件的 Last-Modified / ETag；CDN 勿对 HTML 长缓存以免边缘 ETag 长期不变
+    etag on;
+
     location / {
         try_files \$uri \$uri/ /index.html;
     }
 
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
-        expires 30d;
+    location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+
+    location ~* \.(js|css|woff2?|png|jpg|jpeg|gif|ico|svg|woff|ttf|eot)\$ {
+        expires 1y;
         add_header Cache-Control "public, immutable";
         access_log off;
     }
