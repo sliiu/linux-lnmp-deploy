@@ -311,18 +311,18 @@ install_zsh() {
 
   local gh_url="${GH_PROXY:+${GH_PROXY}/}https://github.com"
   /bin/rm -rf /usr/local/share/ohmyzsh
-
-  _git_clone_retry "${gh_url}/ohmyzsh/ohmyzsh.git" /usr/local/share/ohmyzsh \
-    || die "clone ohmyzsh 失败（可重试或在向导中选择 GitHub 代理）"
-  _git_clone_retry "${gh_url}/zsh-users/zsh-autosuggestions" \
-    /usr/local/share/ohmyzsh/plugins/zsh-autosuggestions \
-    || die "clone zsh-autosuggestions 失败"
-  _git_clone_retry "${gh_url}/zsh-users/zsh-syntax-highlighting" \
-    /usr/local/share/ohmyzsh/plugins/zsh-syntax-highlighting \
-    || die "clone zsh-syntax-highlighting 失败"
-  _git_clone_retry "${gh_url}/romkatv/powerlevel10k.git" \
-    /usr/local/share/ohmyzsh/themes/powerlevel10k \
-    || die "clone powerlevel10k 失败"
+  local -a _omz_repos=(
+    "ohmyzsh/ohmyzsh|/usr/local/share/ohmyzsh"
+    "zsh-users/zsh-autosuggestions|/usr/local/share/ohmyzsh/plugins/zsh-autosuggestions"
+    "zsh-users/zsh-syntax-highlighting|/usr/local/share/ohmyzsh/plugins/zsh-syntax-highlighting"
+    "romkatv/powerlevel10k|/usr/local/share/ohmyzsh/themes/powerlevel10k"
+  )
+  local _entry _repo _dir
+  for _entry in "${_omz_repos[@]}"; do
+    _repo="${_entry%%|*}"; _dir="${_entry#*|}"
+    _git_clone_retry "${gh_url}/${_repo}.git" "$_dir" \
+      || die "clone ${_repo##*/} 失败（可重试或在向导中选择 GitHub 代理）"
+  done
 
   mv /etc/zshrc /etc/zshrc.bak 2>/dev/null || true
 
@@ -346,6 +346,8 @@ ZEOF
 
   _write_p10k_config
 
+  chmod 755 /usr/local /usr/local/share 2>/dev/null || true
+  chown -R root:root /usr/local/share/ohmyzsh
   chmod -R 755 /usr/local/share/ohmyzsh
   chmod 644 /etc/zshrc /etc/zshenv /etc/p10k.zsh
 
@@ -1624,11 +1626,7 @@ install_lnmp() {
 
   _ensure_php_fpm_slowlog_host_layout
 
-  if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
-    MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" up -d
-  else
-    compose_cmd -f "$COMPOSE_FILE" up -d
-  fi
+  _compose_up up -d
 
   if has_service "php"; then
     _wait_container "php" 30
@@ -1643,20 +1641,20 @@ install_lnmp() {
   ok "LNMP 部署完成"
 }
 
+_compose_up() {
+  if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
+    MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" "$@"
+  else
+    compose_cmd -f "$COMPOSE_FILE" "$@"
+  fi
+}
+
 _compose_lnmp_up_recreate() {
   local svc="${1:-}"
   if [[ -n "$svc" ]]; then
-    if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
-      MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "$svc"
-    else
-      compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate --no-deps "$svc"
-    fi
+    _compose_up up -d --force-recreate --no-deps "$svc"
   else
-    if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
-      MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate
-    else
-      compose_cmd -f "$COMPOSE_FILE" up -d --force-recreate
-    fi
+    _compose_up up -d --force-recreate
   fi
 }
 
@@ -2009,90 +2007,42 @@ collect_lnmp_services() {
   fi
 }
 
+_collect_image() {
+  local _varname="$1" _title="$2" _default="$3"; shift 3
+  local -a _options=("$@")
+  _options+=("自定义（完整 镜像:TAG）")
+  local _idx _val
+  _idx=$(menu_select "$_title" "${_options[@]}")
+  if [[ "$_idx" -lt $(( ${#_options[@]} - 1 )) ]]; then
+    _val="${_options[$_idx]}"
+    _val="${_val%% (*}"
+    _val="${_val%% }"
+    printf -v "$_varname" '%s' "$_val"
+  else
+    _val=$(prompt "镜像:TAG" "$_default")
+    [[ -n "$_val" ]] || _val="$_default"
+    printf -v "$_varname" '%s' "$_val"
+  fi
+}
+
 collect_nginx_image() {
-  local idx
-  idx=$(menu_select "Nginx 镜像" \
-    "nginx:stable-alpine (推荐)" \
-    "nginx:alpine" \
-    "nginx:1.28-alpine" \
-    "nginx:1.26-alpine" \
-    "nginx:1.24-alpine" \
-    "自定义（完整 镜像:TAG）")
-  case "$idx" in
-    0) NGINX_IMAGE="nginx:stable-alpine" ;;
-    1) NGINX_IMAGE="nginx:alpine" ;;
-    2) NGINX_IMAGE="nginx:1.28-alpine" ;;
-    3) NGINX_IMAGE="nginx:1.26-alpine" ;;
-    4) NGINX_IMAGE="nginx:1.24-alpine" ;;
-    5)
-      NGINX_IMAGE=$(prompt "镜像:TAG" "${NGINX_IMAGE:-nginx:stable-alpine}")
-      [[ -n "$NGINX_IMAGE" ]] || NGINX_IMAGE="nginx:stable-alpine"
-      ;;
-  esac
+  _collect_image NGINX_IMAGE "Nginx 镜像" "${NGINX_IMAGE:-nginx:stable-alpine}" \
+    "nginx:stable-alpine (推荐)" "nginx:alpine" "nginx:1.28-alpine" "nginx:1.26-alpine" "nginx:1.24-alpine"
 }
 
 collect_mysql_image() {
-  local idx
-  idx=$(menu_select "MySQL / MariaDB 镜像" \
-    "mysql:8.0 (推荐)" \
-    "mysql:8.4" \
-    "mysql:lts" \
-    "mysql:9" \
-    "mysql:9.0" \
-    "mariadb:11.4" \
-    "自定义（完整 镜像:TAG）")
-  case "$idx" in
-    0) MYSQL_IMAGE="mysql:8.0" ;;
-    1) MYSQL_IMAGE="mysql:8.4" ;;
-    2) MYSQL_IMAGE="mysql:lts" ;;
-    3) MYSQL_IMAGE="mysql:9" ;;
-    4) MYSQL_IMAGE="mysql:9.0" ;;
-    5) MYSQL_IMAGE="mariadb:11.4" ;;
-    6)
-      MYSQL_IMAGE=$(prompt "镜像:TAG" "${MYSQL_IMAGE:-mysql:8.0}")
-      [[ -n "$MYSQL_IMAGE" ]] || MYSQL_IMAGE="mysql:8.0"
-      ;;
-  esac
+  _collect_image MYSQL_IMAGE "MySQL / MariaDB 镜像" "${MYSQL_IMAGE:-mysql:8.0}" \
+    "mysql:8.0 (推荐)" "mysql:8.4" "mysql:lts" "mysql:9" "mysql:9.0" "mariadb:11.4"
 }
 
 collect_redis_image() {
-  local idx
-  idx=$(menu_select "Redis 镜像" \
-    "redis:alpine (推荐)" \
-    "redis:7-alpine" \
-    "redis:7.4-alpine" \
-    "redis:8-alpine" \
-    "redis:8.2-alpine" \
-    "自定义（完整 镜像:TAG）")
-  case "$idx" in
-    0) REDIS_IMAGE="redis:alpine" ;;
-    1) REDIS_IMAGE="redis:7-alpine" ;;
-    2) REDIS_IMAGE="redis:7.4-alpine" ;;
-    3) REDIS_IMAGE="redis:8-alpine" ;;
-    4) REDIS_IMAGE="redis:8.2-alpine" ;;
-    5)
-      REDIS_IMAGE=$(prompt "镜像:TAG" "${REDIS_IMAGE:-redis:alpine}")
-      [[ -n "$REDIS_IMAGE" ]] || REDIS_IMAGE="redis:alpine"
-      ;;
-  esac
+  _collect_image REDIS_IMAGE "Redis 镜像" "${REDIS_IMAGE:-redis:alpine}" \
+    "redis:alpine (推荐)" "redis:7-alpine" "redis:7.4-alpine" "redis:8-alpine" "redis:8.2-alpine"
 }
 
 collect_acme_image() {
-  local idx
-  idx=$(menu_select "acme.sh 镜像" \
-    "neilpang/acme.sh:latest (推荐)" \
-    "neilpang/acme.sh:3.0.6" \
-    "neilpang/acme.sh:3.0.7" \
-    "自定义（完整 镜像:TAG）")
-  case "$idx" in
-    0) ACME_IMAGE="neilpang/acme.sh:latest" ;;
-    1) ACME_IMAGE="neilpang/acme.sh:3.0.6" ;;
-    2) ACME_IMAGE="neilpang/acme.sh:3.0.7" ;;
-    3)
-      ACME_IMAGE=$(prompt "镜像:TAG" "${ACME_IMAGE:-neilpang/acme.sh:latest}")
-      [[ -n "$ACME_IMAGE" ]] || ACME_IMAGE="neilpang/acme.sh:latest"
-      ;;
-  esac
+  _collect_image ACME_IMAGE "acme.sh 镜像" "${ACME_IMAGE:-neilpang/acme.sh:latest}" \
+    "neilpang/acme.sh:latest (推荐)" "neilpang/acme.sh:3.0.6" "neilpang/acme.sh:3.0.7"
 }
 
 collect_lnmp_stack_images() {

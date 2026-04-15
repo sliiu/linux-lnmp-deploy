@@ -72,8 +72,11 @@ env_set() {
   local key="$1" val="$2" envfile="$3"
   local escaped_val
   escaped_val=$(printf '%s' "$val" | sed 's/[\\&|]/\\&/g')
-  if grep -q "^${key}=" "$envfile" 2>/dev/null; then
-    sed -i "s|^${key}=.*|${key}=${escaped_val}|" "$envfile"
+  # 支持 KEY=value、KEY = value、# KEY=value；漏改会导致旧行仍被 dotenv 读入（如 DB_DATABASE = mysql）
+  if grep -qE "^[[:space:]]*${key}[[:space:]]*=" "$envfile" 2>/dev/null; then
+    sed -i -E "s|^[[:space:]]*${key}[[:space:]]*=.*|${key}=${escaped_val}|" "$envfile"
+  elif grep -qE "^[[:space:]]*#+[[:space:]]*${key}[[:space:]]*=" "$envfile" 2>/dev/null; then
+    sed -i -E "s|^[[:space:]]*#+[[:space:]]*${key}[[:space:]]*=.*|${key}=${escaped_val}|" "$envfile"
   else
     echo "${key}=${val}" >> "$envfile"
   fi
@@ -795,6 +798,10 @@ ensure_placeholder_cert() {
   fix_nginx_ssl_domain "$domain"
 }
 
+_is_dns_mode() {
+  case "$1" in dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) return 0 ;; *) return 1 ;; esac
+}
+
 _acme_ssl_validate_dns_creds() {
   local m="$1"
   case "$m" in
@@ -870,52 +877,22 @@ issue_ssl() {
   fi
 
   local acme_exit=0
-  if [[ "$ssl_dns" = dns_cf || "$ssl_dns" = dns_ali || "$ssl_dns" = dns_dp || "$ssl_dns" = dns_gd || "$ssl_dns" = dns_aws || "$ssl_dns" = dns_tencent ]]; then
+  if _is_dns_mode "$ssl_dns"; then
     _acme_ssl_validate_dns_creds "$ssl_dns"
+    local dns_env_args=()
     case "$ssl_dns" in
-      dns_cf)
-        docker exec -e CF_Token="${CF_TOKEN}" lnmp-acme \
-          acme.sh --issue -d "${domain}" \
-          --config-home /acme.sh \
-          --dns dns_cf --keylength ec-256 --server "${acme_ca}" \
-          ${force} || acme_exit=$?
-        ;;
-      dns_ali)
-        docker exec -e Ali_Key="${ALI_KEY}" -e Ali_Secret="${ALI_SECRET}" lnmp-acme \
-          acme.sh --issue -d "${domain}" \
-          --config-home /acme.sh \
-          --dns dns_ali --keylength ec-256 --server "${acme_ca}" \
-          ${force} || acme_exit=$?
-        ;;
-      dns_dp)
-        docker exec -e DP_Id="${DP_ID}" -e DP_Key="${DP_KEY}" lnmp-acme \
-          acme.sh --issue -d "${domain}" \
-          --config-home /acme.sh \
-          --dns dns_dp --keylength ec-256 --server "${acme_ca}" \
-          ${force} || acme_exit=$?
-        ;;
-      dns_gd)
-        docker exec -e GD_Key="${GD_KEY}" -e GD_Secret="${GD_SECRET}" lnmp-acme \
-          acme.sh --issue -d "${domain}" \
-          --config-home /acme.sh \
-          --dns dns_gd --keylength ec-256 --server "${acme_ca}" \
-          ${force} || acme_exit=$?
-        ;;
-      dns_aws)
-        docker exec -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" lnmp-acme \
-          acme.sh --issue -d "${domain}" \
-          --config-home /acme.sh \
-          --dns dns_aws --keylength ec-256 --server "${acme_ca}" \
-          ${force} || acme_exit=$?
-        ;;
-      dns_tencent)
-        docker exec -e Tencent_SecretId="${TENCENT_SECRET_ID}" -e Tencent_SecretKey="${TENCENT_SECRET_KEY}" lnmp-acme \
-          acme.sh --issue -d "${domain}" \
-          --config-home /acme.sh \
-          --dns dns_tencent --keylength ec-256 --server "${acme_ca}" \
-          ${force} || acme_exit=$?
-        ;;
+      dns_cf)      dns_env_args=(-e "CF_Token=${CF_TOKEN}") ;;
+      dns_ali)     dns_env_args=(-e "Ali_Key=${ALI_KEY}" -e "Ali_Secret=${ALI_SECRET}") ;;
+      dns_dp)      dns_env_args=(-e "DP_Id=${DP_ID}" -e "DP_Key=${DP_KEY}") ;;
+      dns_gd)      dns_env_args=(-e "GD_Key=${GD_KEY}" -e "GD_Secret=${GD_SECRET}") ;;
+      dns_aws)     dns_env_args=(-e "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" -e "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}") ;;
+      dns_tencent) dns_env_args=(-e "Tencent_SecretId=${TENCENT_SECRET_ID}" -e "Tencent_SecretKey=${TENCENT_SECRET_KEY}") ;;
     esac
+    docker exec "${dns_env_args[@]}" lnmp-acme \
+      acme.sh --issue -d "${domain}" \
+      --config-home /acme.sh \
+      --dns "$ssl_dns" --keylength ec-256 --server "${acme_ca}" \
+      ${force} || acme_exit=$?
   else
     local wk_inner
     if [[ "$site_type" = "laravel" ]]; then
@@ -965,6 +942,46 @@ issue_ssl() {
 # ═══════════════════════════════════════════════
 #  Git 操作
 # ═══════════════════════════════════════════════
+_build_git_ssh_cmd() {
+  local ssh_key="/home/${DEVOPS_USER}/.ssh/id_ed25519"
+  [[ ! -f "$ssh_key" ]] && ssh_key="/home/${DEVOPS_USER}/.ssh/id_rsa"
+  local cmd="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+  [[ -f "$ssh_key" ]] && cmd="ssh -i ${ssh_key} -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+  printf '%s' "$cmd"
+}
+
+_git_pull_or_clone() {
+  local site_dir="$1" git_repo="${2:-}" git_branch="${3:-}"
+  local git_ssh
+  git_ssh=$(_build_git_ssh_cmd)
+  git config --global --add safe.directory "${site_dir}" 2>/dev/null || true
+  export GIT_SSH_COMMAND="$git_ssh"
+
+  if [[ -d "${site_dir}/.git" ]]; then
+    if [[ -n "$git_branch" ]]; then
+      info "已有仓库，切换到分支 ${git_branch} 并拉取"
+      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git fetch origin && git checkout '${git_branch}' && git pull" \
+        || die "git fetch/checkout/pull 失败，请检查分支名与 SSH Key"
+    else
+      info "已有仓库，执行 git pull"
+      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git pull" \
+        || die "git pull 失败，请检查 SSH Key"
+    fi
+  elif [[ -n "$git_repo" ]]; then
+    if [[ -n "$git_branch" ]]; then
+      info "首次 clone（分支: ${git_branch}）..."
+      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; git clone -b '${git_branch}' --single-branch '${git_repo}' '${site_dir}'" \
+        || die "git clone 失败，请检查分支名与 SSH Key"
+    else
+      info "首次 clone..."
+      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; git clone '${git_repo}' '${site_dir}'" \
+        || die "git clone 失败，请检查 SSH Key"
+    fi
+  else
+    return 1
+  fi
+}
+
 deploy_code() {
   local domain="$1" git_repo="$2" git_branch="${3:-}"
   local site_dir="${WWW_ROOT}/${domain}"
@@ -980,44 +997,11 @@ deploy_code() {
 
   if [[ -z "$git_repo" ]]; then
     mkdir -p "${site_dir}"
-    chown "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}"
     info "Git 地址为空，已跳过 clone/pull；请确保代码已在 ${site_dir}"
-    local _dc_st="laravel" _dc_fe=""
-    [[ -f "${site_dir}/artisan" ]] || _dc_st="frontend"
-    [[ "$_dc_st" = "frontend" ]] && _dc_fe=$(effective_frontend_subdir "$domain")
-    fix_site_readable_for_nginx "$domain" "$_dc_st" "$_dc_fe"
-    return 0
-  fi
-
-  local ssh_key="/home/${DEVOPS_USER}/.ssh/id_ed25519"
-  [[ ! -f "$ssh_key" ]] && ssh_key="/home/${DEVOPS_USER}/.ssh/id_rsa"
-  local git_ssh="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
-  [[ -f "$ssh_key" ]] && git_ssh="ssh -i ${ssh_key} -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
-
-  git config --global --add safe.directory "${site_dir}" 2>/dev/null || true
-  export GIT_SSH_COMMAND="$git_ssh"
-
-  if [[ -d "${site_dir}/.git" ]]; then
-    if [[ -n "$git_branch" ]]; then
-      info "已有仓库，切换到分支 ${git_branch} 并拉取"
-      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git fetch origin && git checkout '${git_branch}' && git pull" \
-        || die "git fetch/checkout/pull 失败，请检查分支名与 SSH Key"
-    else
-      info "已有仓库，执行 git pull"
-      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git pull" \
-        || die "git pull 失败，请检查 SSH Key"
-    fi
   else
-    if [[ -n "$git_branch" ]]; then
-      info "首次 clone（分支: ${git_branch}）..."
-      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; git clone -b '${git_branch}' --single-branch '${git_repo}' '${site_dir}'" \
-        || die "git clone 失败，请检查分支名与 SSH Key"
-    else
-      info "首次 clone..."
-      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; git clone '${git_repo}' '${site_dir}'" \
-        || die "git clone 失败，请检查 SSH Key"
-    fi
+    _git_pull_or_clone "${site_dir}" "${git_repo}" "${git_branch}"
   fi
+
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}"
   local _dc_st="laravel" _dc_fe=""
   [[ -f "${site_dir}/artisan" ]] || _dc_st="frontend"
@@ -1341,8 +1325,8 @@ collect_interactive() {
 
     [[ -z "$NEED_DB" ]] && { confirm "配置数据库？" "y" && NEED_DB="y" || NEED_DB="n"; }
     if [[ "$NEED_DB" = "y" ]]; then
-      DB_HOST=${DB_HOST:-$(prompt "DB_HOST" "mysql")}
-      [[ -z "$DB_NAME" ]] && DB_NAME=$(prompt "DB_DATABASE")
+      DB_HOST=${DB_HOST:-$(prompt "DB_HOST（MySQL 主机/容器名）" "mysql")}
+      [[ -z "$DB_NAME" ]] && DB_NAME=$(prompt "DB_DATABASE（业务库名，勿填 mysql 主机名）")
       [[ -z "$DB_NAME" ]] && die "DB_DATABASE 不能为空"
       [[ "$DB_PWD_FROM_CLI" != "1" && -z "$DB_PWD" ]] && prompt_secret_into "DB_PASSWORD" DB_PWD
       [[ -z "$DB_PWD" ]]  && die "DB_PASSWORD 不能为空"
@@ -1377,7 +1361,7 @@ collect_interactive() {
     *) die "无效 SSL 模式: ${SSL_DNS}（webroot / dns_cf / dns_ali / dns_dp / dns_gd / dns_aws / dns_tencent）" ;;
   esac
   _collect_ssl_dns_creds_interactive
-  if [[ "$SSL_DNS" = dns_cf || "$SSL_DNS" = dns_ali || "$SSL_DNS" = dns_dp || "$SSL_DNS" = dns_gd || "$SSL_DNS" = dns_aws || "$SSL_DNS" = dns_tencent ]]; then
+  if _is_dns_mode "$SSL_DNS"; then
     _acme_ssl_validate_dns_creds "$SSL_DNS"
   fi
 }
@@ -1397,8 +1381,10 @@ cmd_add() {
 
   collect_interactive
 
-  if [[ "$SITE_TYPE" = "laravel" && "${NEED_DB:-y}" = "y" && -z "${DB_NAME:-}" ]]; then
-    die "Laravel 默认启用数据库，请指定 --db-name 或在交互中填写 DB_DATABASE"
+  if [[ "$SITE_TYPE" = "laravel" && "${NEED_DB:-y}" = "y" ]]; then
+    [[ -z "${DB_NAME:-}" ]] && die "Laravel 默认启用数据库，请指定 --db-name 或在交互中填写 DB_DATABASE"
+    [[ "$DB_NAME" = "mysql" && "${DB_HOST:-mysql}" = "mysql" ]] \
+      && die "DB_DATABASE 不能为 mysql（与 DB_HOST=mysql 同时出现时多为填反）。库名请用业务名如 payment"
   fi
 
   ensure_placeholder_cert "$DOMAIN"
@@ -1529,24 +1515,7 @@ cmd_update() {
   warn_mysql_low_memory_compose_missing
 
   if [[ -d "${site_dir}/.git" ]]; then
-    if [[ -n "${GIT_BRANCH:-}" ]]; then
-      info "git 拉取（分支: ${GIT_BRANCH}）..."
-    else
-      info "git pull..."
-    fi
-    local ssh_key="/home/${DEVOPS_USER}/.ssh/id_ed25519"
-    [[ ! -f "$ssh_key" ]] && ssh_key="/home/${DEVOPS_USER}/.ssh/id_rsa"
-    local git_ssh="ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
-    [[ -f "$ssh_key" ]] && git_ssh="ssh -i ${ssh_key} -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
-    export GIT_SSH_COMMAND="$git_ssh"
-
-    if [[ -n "${GIT_BRANCH:-}" ]]; then
-      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git fetch origin && git checkout '${GIT_BRANCH}' && git pull" \
-        || die "git 更新失败（分支: ${GIT_BRANCH}）"
-    else
-      su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git pull" \
-        || die "git pull 失败"
-    fi
+    _git_pull_or_clone "${site_dir}" "" "${GIT_BRANCH:-}"
     ok "代码已更新"
   else
     warn "未检测到 .git，跳过 git pull（请事先将新版本同步到 ${site_dir}）"
@@ -1963,7 +1932,7 @@ cmd_ssl() {
     *) die "无效 SSL 模式: ${SSL_DNS}" ;;
   esac
   _collect_ssl_dns_creds_interactive
-  if [[ "$SSL_DNS" = dns_cf || "$SSL_DNS" = dns_ali || "$SSL_DNS" = dns_dp || "$SSL_DNS" = dns_gd || "$SSL_DNS" = dns_aws || "$SSL_DNS" = dns_tencent ]]; then
+  if _is_dns_mode "$SSL_DNS"; then
     _acme_ssl_validate_dns_creds "$SSL_DNS"
   fi
 
