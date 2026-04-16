@@ -954,7 +954,7 @@ _git_pull_or_clone() {
   local site_dir="$1" git_repo="${2:-}" git_branch="${3:-}"
   local git_ssh
   git_ssh=$(_build_git_ssh_cmd)
-  git config --global --add safe.directory "${site_dir}" 2>/dev/null || true
+  git config --global --replace-all safe.directory "${site_dir}" 2>/dev/null || true
   export GIT_SSH_COMMAND="$git_ssh"
 
   if [[ -d "${site_dir}/.git" ]]; then
@@ -1067,7 +1067,7 @@ setup_laravel() {
 
   ensure_lnmp_php_laravel_extensions
   ensure_composer_in_lnmp_php
-  docker exec -u "${uid}:${gid}" lnmp-php \
+  docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache lnmp-php \
     composer install \
     --working-dir="${CONTAINER_WWW}/${domain}" \
     --no-dev --no-interaction --optimize-autoloader --no-progress --prefer-dist
@@ -1157,7 +1157,7 @@ redirect_stderr=true
 stdout_logfile=${WWW_ROOT}/${domain}/storage/logs/horizon.log
 stdout_logfile_maxbytes=10MB
 stdout_logfile_backups=3
-stopwaitsecs=3600
+stopwaitsecs=60
 stopsignal=TERM
 HORIZON
 
@@ -1528,14 +1528,17 @@ cmd_update() {
     gid=$(id -g "${DEVOPS_USER}")
     ensure_lnmp_php_laravel_extensions
     ensure_composer_in_lnmp_php
-    docker exec -u "${uid}:${gid}" lnmp-php \
+    docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache lnmp-php \
       composer install \
       --working-dir="${CONTAINER_WWW}/${DOMAIN}" \
       --no-dev --no-interaction --optimize-autoloader --no-progress --prefer-dist
 
     chmod -R 775 "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
-    fix_site_readable_for_nginx "$DOMAIN" "laravel" ""
+    if command -v setfacl &>/dev/null; then
+      setfacl -R  -m u:82:rwX "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
+      setfacl -dR -m u:82:rwX "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
+    fi
 
     if [[ -n "${RUN_MIGRATE:-}" ]]; then
       if [[ "$RUN_MIGRATE" = "y" ]]; then
@@ -1550,7 +1553,13 @@ cmd_update() {
     fi
 
     info "artisan optimize..."
+    docker_php_artisan "$DOMAIN" optimize:clear 2>/dev/null || true
     docker_php_artisan "$DOMAIN" optimize
+
+    info "php-fpm graceful reload（清空 OPCache）..."
+    docker exec lnmp-php sh -c 'kill -USR2 1' 2>/dev/null \
+      && ok "PHP-FPM 已 graceful reload（OPCache 已清空）" \
+      || warn "PHP-FPM reload 失败，OPCache 未清空；如内存持续偏高请手动: docker restart lnmp-php"
 
     local sup_conf=""
     sup_conf=$(horizon_supervisor_conf_path "$DOMAIN") || true
@@ -1591,6 +1600,9 @@ cmd_update() {
       fi
     fi
   fi
+
+  info "清理 Docker 悬空镜像..."
+  docker image prune -f >/dev/null 2>&1 && ok "Docker 悬空镜像已清理" || true
 
   echo ""
   ok "站点 ${DOMAIN} 更新完成"

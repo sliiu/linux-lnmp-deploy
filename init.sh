@@ -1363,7 +1363,8 @@ _ensure_php_fpm_slowlog_host_layout() {
 }
 
 lnmp_gen_compose() {
-  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,mysql-docker/conf.d,redis,www,ssl,php/conf.d,php/fpm.d,php/log}
+  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,mysql-docker/conf.d,redis,www,ssl,php/conf.d,php/fpm.d,php/log,php/composer-cache}
+  chmod 1777 "${DATA_DIR}/php/composer-cache" 2>/dev/null || true
 
   if has_service "php"; then
     _write_php_laravel_conf
@@ -1421,6 +1422,7 @@ lnmp_gen_compose() {
       - ${DATA_DIR}/php/fpm.d/zz-slowlog.conf:/usr/local/etc/php-fpm.d/zz-slowlog.conf:ro
       - ${DATA_DIR}/php/fpm.d/wave-pool.conf:/usr/local/etc/php-fpm.d/wave-pool.conf:ro
       - ${DATA_DIR}/php/log:/var/log/php-fpm
+      - ${DATA_DIR}/php/composer-cache:/tmp/composer-cache
       - php-extensions:/usr/local/lib/php/extensions"
 
     if [[ -n "$php_env" ]]; then yaml+="
@@ -1637,8 +1639,31 @@ install_lnmp() {
     _setup_acme_cron
   fi
 
+  _setup_logrotate
+
   conf_save
   ok "LNMP 部署完成"
+}
+
+_setup_logrotate() {
+  command -v logrotate &>/dev/null || { info "logrotate 未安装，跳过日志轮转配置"; return 0; }
+  cat > /etc/logrotate.d/lnmp <<LOGROTATE
+${DATA_DIR}/logs/*.log
+/var/log/acme-renew.log
+${DATA_DIR}/nginx/logs/*.log
+${DATA_DIR}/php/log/*.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    dateext
+    dateformat -%Y%m%d
+}
+LOGROTATE
+  ok "logrotate 已配置（/etc/logrotate.d/lnmp，每日轮转保留 14 天）"
 }
 
 _compose_up() {
