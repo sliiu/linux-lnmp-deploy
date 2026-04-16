@@ -87,7 +87,8 @@ container_ok() { docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${1}$";
 ensure_php_fpm_slowlog_host_artifacts() {
   [[ -d "${DATA_DIR}/php" ]] || return 0
   mkdir -p "${DATA_DIR}/php/fpm.d" "${DATA_DIR}/php/log"
-  if [[ ! -f "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" ]]; then
+  if [[ ! -f "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" ]] || \
+     ! grep -q 'pm.max_requests' "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" 2>/dev/null; then
     cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
 ; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
 ; 小内存 VPS 默认上限，可按机器内存调高
@@ -96,6 +97,7 @@ pm.max_children = 12
 pm.start_servers = 2
 pm.min_spare_servers = 1
 pm.max_spare_servers = 4
+pm.max_requests = 500
 slowlog = /var/log/php-fpm/fpm-slow.log
 request_slowlog_timeout = 5s
 FPMCONF
@@ -119,7 +121,9 @@ ensure_php_fpm_wave_pool_host_artifacts() {
   mkdir -p "${DATA_DIR}/php/fpm.d"
   local _wpf="${DATA_DIR}/php/fpm.d/wave-pool.conf"
   [[ -d "$_wpf" ]] && rm -rf "$_wpf"
-  if [[ ! -f "$_wpf" ]] || grep -qE '^pm\.max_children = 50$' "$_wpf" 2>/dev/null; then
+  if [[ ! -f "$_wpf" ]] || \
+     grep -qE '^pm\.max_children = 50$' "$_wpf" 2>/dev/null || \
+     grep -qE '^request_terminate_timeout = 0$' "$_wpf" 2>/dev/null; then
     cat > "$_wpf" <<'FPMCONF'
 ; SSE 专用池；Nginx fastcgi_pass php:9001；须监听 0.0.0.0 以便跨容器访问
 ; 可按内存调整 pm.max_children（每个长连接占 1 worker）
@@ -132,7 +136,7 @@ pm.max_children = 8
 pm.start_servers = 1
 pm.min_spare_servers = 1
 pm.max_spare_servers = 3
-request_terminate_timeout = 0
+request_terminate_timeout = 14400
 clear_env = no
 catch_workers_output = yes
 slowlog = /var/log/php-fpm/fpm-slow.log

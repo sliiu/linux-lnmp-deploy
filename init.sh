@@ -1299,6 +1299,14 @@ _write_php_laravel_conf() {
   mkdir -p "${DATA_DIR}/php/conf.d"
   cat > "${DATA_DIR}/php/conf.d/99-laravel.ini" <<'PHPINI'
 output_buffering = 4096
+
+opcache.enable = 1
+opcache.memory_consumption = 96
+opcache.interned_strings_buffer = 8
+opcache.max_accelerated_files = 10000
+; 生产环境关闭时间戳校验（每次请求不检查文件变化），依赖 deploy 时 kill -USR2 1 刷新缓存
+opcache.validate_timestamps = 0
+opcache.fast_shutdown = 1
 PHPINI
 }
 
@@ -1312,6 +1320,8 @@ pm.max_children = 12
 pm.start_servers = 2
 pm.min_spare_servers = 1
 pm.max_spare_servers = 4
+; 每个 worker 处理 500 次请求后自动重启，防止 PHP 内存泄漏长期积累
+pm.max_requests = 500
 slowlog = /var/log/php-fpm/fpm-slow.log
 request_slowlog_timeout = 5s
 FPMCONF
@@ -1334,7 +1344,9 @@ pm.max_children = 8
 pm.start_servers = 1
 pm.min_spare_servers = 1
 pm.max_spare_servers = 3
-request_terminate_timeout = 0
+; SSE 连接最长存活 4 小时（防止 graceful reload 后旧 worker 永不退出导致内存泄漏）
+; 客户端会自动重连，业务无感知
+request_terminate_timeout = 14400
 clear_env = no
 catch_workers_output = yes
 slowlog = /var/log/php-fpm/fpm-slow.log
