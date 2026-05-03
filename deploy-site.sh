@@ -68,6 +68,32 @@ prompt_secret_into() {
   printf -v "$_var" '%s' "$val"
 }
 
+# 菜单（与 init.sh 同样语义）：所有 UI 输出走 /dev/tty，避免被 tee 落盘
+menu_select() {
+  local title="$1"; shift
+  local -a items=("$@")
+  {
+    echo ""
+    info "$title"
+    echo ""
+    for i in "${!items[@]}"; do
+      printf "    %d) %s\n" $((i + 1)) "${items[$i]}"
+    done
+    echo ""
+    info "回车或无效输入 = 第 1 项（推荐默认）"
+    echo ""
+  } >/dev/tty
+  local choice raw
+  read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw </dev/tty >/dev/tty || raw=""
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    choice=$((raw - 1))
+  else
+    choice=-1
+  fi
+  [[ $choice -ge 0 && $choice -lt ${#items[@]} ]] || choice=0
+  echo "$choice"
+}
+
 env_set() {
   local key="$1" val="$2" envfile="$3"
   local escaped_val
@@ -83,6 +109,137 @@ env_set() {
 }
 
 container_ok() { docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${1}$"; }
+
+# ─── 站点 PHP 版本：未指定时走默认 lnmp-php / service php ───
+_php_ver_no_dot() { printf '%s' "${1//./}"; }
+
+site_php_version_file() { printf '%s/%s.php-version' "$NGINX_CONF" "$1"; }
+
+_php_ver_for_site() {
+  local f; f="$(site_php_version_file "$1")"
+  [[ -f "$f" ]] || { printf ''; return 0; }
+  local v; v="$(head -n1 "$f" 2>/dev/null | tr -d '[:space:]')"
+  [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] && printf '%s' "$v" || printf ''
+}
+
+# 计算默认 PHP_VERSION（来自 /etc/lnmp-env.conf），缓存到内存避免重复 source
+_default_php_ver() {
+  if [[ -z "${_DEFAULT_PHP_VER_CACHE:-}" ]]; then
+    if [[ -f "$CONF_FILE" ]]; then
+      _DEFAULT_PHP_VER_CACHE="$(grep -E '^PHP_VERSION=' "$CONF_FILE" 2>/dev/null | tail -n1 | cut -d= -f2- | tr -d '[:space:]' || true)"
+    fi
+    : "${_DEFAULT_PHP_VER_CACHE:=}"
+  fi
+  printf '%s' "$_DEFAULT_PHP_VER_CACHE"
+}
+
+_php_service_for_site() {
+  local v; v="$(_php_ver_for_site "$1")"
+  local d; d="$(_default_php_ver)"
+  [[ -z "$v" || ( -n "$d" && "$v" = "$d" ) ]] && { printf 'php'; return 0; }
+  printf 'php%s' "$(_php_ver_no_dot "$v")"
+}
+
+_php_container_for_site() {
+  local v; v="$(_php_ver_for_site "$1")"
+  local d; d="$(_default_php_ver)"
+  [[ -z "$v" || ( -n "$d" && "$v" = "$d" ) ]] && { printf 'lnmp-php'; return 0; }
+  printf 'lnmp-php-%s' "$(_php_ver_no_dot "$v")"
+}
+
+_iter_php_containers() {
+  # 默认 lnmp-php 在最前；其余 lnmp-php-XX 按数值升序（避免字符串排序导致 100 < 74）
+  docker ps --format '{{.Names}}' 2>/dev/null \
+    | awk '
+      $0 == "lnmp-php" { has_def = 1; next }
+      $0 ~ /^lnmp-php-[0-9]+$/ {
+        n = $0; sub(/^lnmp-php-/, "", n); list[++idx] = n + 0; orig[n + 0] = $0
+      }
+      END {
+        if (has_def) print "lnmp-php"
+        # 简单插入排序
+        for (i = 2; i <= idx; i++) {
+          k = list[i]; j = i - 1
+          while (j > 0 && list[j] > k) { list[j+1] = list[j]; j-- }
+          list[j+1] = k
+        }
+        for (i = 1; i <= idx; i++) print orig[list[i]]
+      }
+    ' | awk '!seen[$0]++'
+}
+
+# ─── 版本比较：_lv_ge "5.7" "5.6" → 0；只看主.次 ───
+_lv_ge() {
+  local a="$1" b="$2" a1 a2 b1 b2
+  a1="${a%%.*}"; a2="${a#*.}"; [[ "$a2" = "$a" ]] && a2=0
+  b1="${b%%.*}"; b2="${b#*.}"; [[ "$b2" = "$b" ]] && b2=0
+  a1="${a1//[^0-9]/}"; a2="${a2%%.*}"; a2="${a2//[^0-9]/}"
+  b1="${b1//[^0-9]/}"; b2="${b2%%.*}"; b2="${b2//[^0-9]/}"
+  : "${a1:=0}"; : "${a2:=0}"; : "${b1:=0}"; : "${b2:=0}"
+  if [[ $a1 -ne $b1 ]]; then [[ $a1 -gt $b1 ]]; return $?; fi
+  [[ $a2 -ge $b2 ]]
+}
+
+# ─── Laravel 版本（从站点 composer.json 提取 laravel/framework 约束的最低 X.Y）───
+# 使用 awk 一次性完成解析，规避 set -euo pipefail 下 grep|head 的 SIGPIPE 风险
+_site_composer_json() { printf '%s/%s/composer.json' "$WWW_ROOT" "$1"; }
+_laravel_min_for_site() {
+  local f; f="$(_site_composer_json "$1")"
+  [[ -f "$f" ]] || { printf ''; return 0; }
+  awk '
+    match($0, /"laravel\/framework"[[:space:]]*:[[:space:]]*"[^"]+"/) {
+      seg = substr($0, RSTART, RLENGTH)
+      sub(/.*:[[:space:]]*"/, "", seg); sub(/".*/, "", seg)
+      if (match(seg, /[0-9]+(\.[0-9]+)?/)) {
+        printf "%s", substr(seg, RSTART, RLENGTH); exit
+      }
+    }
+  ' "$f" 2>/dev/null || true
+}
+
+# 站点解析后的 PHP 版本（默认走 /etc/lnmp-env.conf 的 PHP_VERSION）
+_php_ver_resolved_for_site() {
+  local v; v="$(_php_ver_for_site "$1")"
+  if [[ -z "$v" ]]; then
+    [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
+    v="${PHP_VERSION:-8.3}"
+  fi
+  printf '%s' "$v"
+}
+
+# 容器内运行时 PHP 主.次（取自镜像，不依赖 conf）
+_php_runtime_ver_in_container() {
+  local v
+  v="$(docker exec "$1" php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || true)"
+  [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || v=""
+  printf '%s' "$v"
+}
+
+# 按 Laravel 版本决定健康探测路径（11+ 默认有 /up，否则用 /）
+_status_probe_path_for_site() {
+  local d="$1" t="$2" lv
+  [[ "$t" != "laravel" ]] && { printf '/'; return; }
+  lv="$(_laravel_min_for_site "$d")"
+  if [[ -n "$lv" ]] && _lv_ge "$lv" "11"; then printf '/up'; else printf '/'; fi
+}
+
+# Laravel 版本支持 artisan optimize（5.7+）
+_lv_supports_optimize() {
+  local lv="$1"
+  [[ -z "$lv" ]] && return 0
+  _lv_ge "$lv" "5.7"
+}
+# Horizon 要求 Laravel ≥ 5.7.7 + PHP ≥ 7.2 + Redis（5.7 简化等价）
+# 任一参数为空或非法格式时返回 1（保守拒绝），避免误启不兼容环境
+_lv_supports_horizon() {
+  local lv="${1:-}" php_ver="${2:-}"
+  [[ "$php_ver" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+  _lv_ge "$php_ver" "7.2" || return 1
+  [[ -z "$lv" ]] && return 0
+  [[ "$lv" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 1
+  _lv_ge "$lv" "5.7" || return 1
+  return 0
+}
 
 ensure_php_fpm_slowlog_host_artifacts() {
   [[ -d "${DATA_DIR}/php" ]] || return 0
@@ -210,28 +367,44 @@ horizon_supervisor_conf_write_path() {
 docker_php_artisan() {
   local domain="$1"
   shift
-  docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${domain}" lnmp-php \
+  local cname; cname="$(_php_container_for_site "$domain")"
+  docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${domain}" "$cname" \
     php artisan "$@"
 }
 
 ensure_composer_in_lnmp_php() {
-  container_ok "lnmp-php" || die "lnmp-php 容器未运行"
-  if docker exec lnmp-php sh -c 'command -v composer >/dev/null 2>&1'; then
-    return 0
+  local cname="${1:-lnmp-php}"
+  container_ok "$cname" || die "${cname} 容器未运行"
+  local php_ver want_major cur_major
+  php_ver="$(_php_runtime_ver_in_container "$cname")"; : "${php_ver:=8.3}"
+  want_major=2
+  _lv_ge "$php_ver" "7.2" || want_major=1
+  if docker exec "$cname" sh -c 'command -v composer >/dev/null 2>&1'; then
+    # 用 awk 取首次出现的版本主号，避免 grep|grep|head SIGPIPE 与解析失败
+    cur_major="$(docker exec "$cname" composer --version 2>/dev/null \
+      | awk 'match($0, /version[[:space:]]+[0-9]+/) {s=substr($0,RSTART,RLENGTH); sub(/.*[[:space:]]/,"",s); print s; exit}' \
+      || true)"
+    [[ -z "$cur_major" || "$cur_major" = "$want_major" ]] && return 0
+    info "${cname} 现有 Composer ${cur_major}.x 与 PHP ${php_ver} 期望 ${want_major}.x 不符，重装..."
+  else
+    info "在 ${cname} 内安装 Composer ${want_major}.x（PHP ${php_ver}）..."
   fi
-  info "在 lnmp-php 内安装 Composer..."
-  docker exec -u root lnmp-php sh -c \
-    '(curl -fsSL https://getcomposer.org/installer 2>/dev/null || wget -qO- https://getcomposer.org/installer) | php -- --install-dir=/usr/local/bin --filename=composer' \
-    || die "lnmp-php 内安装 Composer 失败"
-  docker exec -u root lnmp-php chmod 755 /usr/local/bin/composer 2>/dev/null || true
+  # 容器内可能既无 curl 也无 wget；优先 wget（alpine 自带 busybox wget），失败则装 curl
+  docker exec -u root "$cname" sh -c \
+    "( command -v wget >/dev/null 2>&1 && wget -qO- https://getcomposer.org/installer ) \
+     || ( command -v curl >/dev/null 2>&1 && curl -fsSL https://getcomposer.org/installer ) \
+     || ( apk add --no-cache curl >/dev/null 2>&1 && curl -fsSL https://getcomposer.org/installer ) \
+     | php -- --install-dir=/usr/local/bin --filename=composer --${want_major}" \
+    || die "${cname} 内安装 Composer 失败"
+  docker exec -u root "$cname" chmod 755 /usr/local/bin/composer 2>/dev/null || true
 }
 
 _php_ext_apk_retry_exec() {
-  local inner="$1"
+  local cname="$1" inner="$2"
   local attempt=1 max=12 pause=5
   sleep 2
   while ((attempt <= max)); do
-    if docker exec -u root -e TERM=dumb lnmp-php sh -c "$inner"; then
+    if docker exec -u root -e TERM=dumb "$cname" sh -c "$inner"; then
       return 0
     fi
     if ((attempt < max)); then
@@ -244,41 +417,55 @@ _php_ext_apk_retry_exec() {
 }
 
 ensure_lnmp_php_laravel_extensions() {
-  container_ok "lnmp-php" || die "lnmp-php 容器未运行"
-  if docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
+  local cname="${1:-lnmp-php}"
+  container_ok "$cname" || die "${cname} 容器未运行"
+  if docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
     return 0
   fi
-  info "尝试启用已编译的 PHP 扩展 (docker-php-ext-enable)..."
-  docker exec -u root lnmp-php sh -c \
+  info "尝试启用已编译的 PHP 扩展 (${cname} → docker-php-ext-enable)..."
+  docker exec -u root "$cname" sh -c \
     'for e in bcmath pcntl zip gd pdo_mysql mysqli opcache dom mbstring curl xml intl fileinfo exif sockets redis; do docker-php-ext-enable "$e" 2>/dev/null || true; done'
-  if docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
-    ok "PHP 扩展已可用"
-    docker restart lnmp-php
-    wait_container_running "lnmp-php" 45
+  if docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
+    ok "PHP 扩展已可用（${cname}）"
+    docker restart "$cname"
+    wait_container_running "$cname" 45
     return 0
   fi
-  info "在 lnmp-php 内编译安装扩展（与 init.sh 默认一致，含 pdo_mysql + pecl redis）..."
+  info "在 ${cname} 内编译安装扩展（与 init.sh 默认一致，含 pdo_mysql + pecl redis）..."
   [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
   local alpine_sed=""
   [[ -n "${ALPINE_MIRROR:-}" ]] && alpine_sed="sed -i 's|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g' /etc/apk/repositories && apk update && "
+  local php_ver gd_args redis_pkg
+  php_ver="$(_php_runtime_ver_in_container "$cname")"; : "${php_ver:=8.3}"
+  gd_args="--with-freetype --with-jpeg --with-webp"
+  _lv_ge "$php_ver" "7.4" || gd_args="--with-freetype-dir=/usr --with-jpeg-dir=/usr --with-png-dir=/usr --with-webp-dir=/usr"
+  if   ! _lv_ge "$php_ver" "7.2"; then redis_pkg="redis-4.3.0"
+  elif ! _lv_ge "$php_ver" "7.4"; then redis_pkg="redis-5.3.7"
+  else redis_pkg=""; fi
   local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
+  local install_list="pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif fileinfo"
   local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
-  cmd+=" && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp"
-  cmd+=" && docker-php-ext-configure intl"
-  cmd+=" && docker-php-ext-install -j\$(nproc) pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif intl fileinfo"
-  cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install redis || true; fi"
+  cmd+=" && docker-php-ext-configure gd ${gd_args}"
+  if _lv_ge "$php_ver" "7.2"; then
+    install_list+=" intl"
+    cmd+=" && docker-php-ext-configure intl"
+  else
+    warn "PHP ${php_ver} 镜像下 intl 编译可能因 icu 版本不兼容而失败，自动跳过 intl"
+  fi
+  cmd+=" && docker-php-ext-install -j\$(nproc) ${install_list}"
+  cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install ${redis_pkg:-redis} || true; fi"
   cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
   cmd="sleep 2; ${cmd}"
-  _php_ext_apk_retry_exec "$cmd" \
-    || die "PHP 扩展安装失败，请在主机执行 init.sh「更新配置 → PHP 扩展」或 docker restart lnmp-php 后重试"
-  docker restart lnmp-php
-  wait_container_running "lnmp-php" 45
-  docker exec lnmp-php php -m | grep -q pdo_mysql || die "pdo_mysql 仍未加载，请检查 lnmp-php"
-  docker exec lnmp-php php -m | grep -q '^redis$' || die "redis 扩展仍未加载，请检查 lnmp-php 或 pecl"
-  docker exec lnmp-php php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
-    || die "Laravel 所需扩展仍未齐全，请检查 lnmp-php 或重新部署 PHP 容器"
-  ok "PHP 扩展就绪"
+  _php_ext_apk_retry_exec "$cname" "$cmd" \
+    || die "PHP 扩展安装失败，请在主机执行 init.sh「更新配置 → PHP 扩展」或 docker restart ${cname} 后重试"
+  docker restart "$cname"
+  wait_container_running "$cname" 45
+  docker exec "$cname" php -m | grep -q pdo_mysql || die "pdo_mysql 仍未加载，请检查 ${cname}"
+  docker exec "$cname" php -m | grep -q '^redis$' || die "redis 扩展仍未加载，请检查 ${cname} 或 pecl"
+  docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
+    || die "Laravel 所需扩展仍未齐全，请检查 ${cname} 或重新部署 PHP 容器"
+  ok "PHP 扩展就绪（${cname}）"
 }
 
 wait_container_running() {
@@ -494,6 +681,52 @@ _laravel_sse_brace_path_to_nginx_regex() {
   printf '^/%s$' "$out"
 }
 
+apply_site_php_version_cli() {
+  local domain="$1"
+  [[ "${SITE_PHP_VERSION_CLI:-0}" -ne 1 ]] && return 0
+  mkdir -p "${NGINX_CONF}"
+  local f; f="$(site_php_version_file "$domain")"
+  local v="${SITE_PHP_VERSION// /}"
+  if [[ -z "$v" || "$v" = "-" ]]; then
+    rm -f "$f" 2>/dev/null || true
+    info "站点 ${domain} PHP 版本：清除 → 走默认 lnmp-php"
+    return 0
+  fi
+  [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || die "无效 --php-version: $v（应为 8.2 / 7.4）"
+  # 与 /etc/lnmp-env.conf 中 PHP_VERSION（默认 lnmp-php 容器）相同时短路：避免去找 lnmp-php-XX
+  local _default_ver; _default_ver="$(_default_php_ver)"
+  if [[ -n "$_default_ver" && "$v" = "$_default_ver" ]]; then
+    rm -f "$f" 2>/dev/null || true
+    container_ok "lnmp-php" || die "默认 lnmp-php 未运行"
+    info "站点 ${domain} PHP 版本：${v}（=默认）→ 使用 lnmp-php"
+    return 0
+  fi
+  local cname="lnmp-php-$(_php_ver_no_dot "$v")"
+  container_ok "$cname" || die "未发现容器 ${cname}；请先在 init.sh「更新配置 → PHP 版本（额外，多版本共存）」加入 ${v} 并重建"
+  printf '%s\n' "$v" > "$f"
+  chmod 644 "$f" 2>/dev/null || true
+  info "站点 ${domain} PHP 版本：${v} → ${cname}"
+}
+
+ensure_site_php_container() {
+  local domain="$1" v cname
+  v="$(_php_ver_for_site "$domain")"
+  cname="$(_php_container_for_site "$domain")"
+  if container_ok "$cname"; then return 0; fi
+  if [[ -z "$v" ]]; then
+    die "${cname} 未运行；请先执行 init.sh 部署 LNMP"
+  fi
+  # 站点声明的版本若与默认版本一致（历史遗留 .php-version 文件），自动清理回退默认
+  local _default_ver; _default_ver="$(_default_php_ver)"
+  if [[ -n "$_default_ver" && "$v" = "$_default_ver" ]]; then
+    warn "站点 ${domain} 声明 PHP ${v} = 当前默认；清理 .php-version 改用 lnmp-php"
+    rm -f "$(site_php_version_file "$domain")" 2>/dev/null || true
+    container_ok "lnmp-php" || die "lnmp-php 未运行"
+    return 0
+  fi
+  die "站点 ${domain} 声明 PHP ${v} 但容器 ${cname} 未运行；请检查 init.sh EXTRA_PHP_VERSIONS 与 docker compose"
+}
+
 apply_site_sse_prefixes_cli() {
   local domain="$1"
   [[ "${SITE_SSE_PREFIXES_CLI:-0}" -ne 1 ]] && return 0
@@ -509,36 +742,31 @@ apply_site_sse_prefixes_cli() {
   fi
 }
 
-# update：展示当前 SSE 规则并可选修改（未传 --sse-prefixes 且 stdin 为 TTY 时）
+# update：展示当前 SSE 规则并可选修改（未传 --sse-prefixes 且 stdin 为 TTY 且未 --yes 时）
 interactive_sse_prefixes_maybe_for_update() {
   local domain="$1"
   [[ -t 0 ]] || return 0
+  [[ "${YES:-0}" -eq 1 ]] && return 0
   [[ "${SITE_SSE_PREFIXES_CLI:-0}" -eq 1 ]] && return 0
 
   local f="${NGINX_CONF}/${domain}.sse-prefixes"
-  echo ""
-  info "SSE（Wave 等长连接）走 php:9001；规则来自 ${f} 或全局 LARAVEL_SSE_PREFIXES"
+  local cur_resolved cur_one src
   if [[ -f "$f" ]]; then
-    info "当前：站点专属文件（${f}）"
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      line="${line%%#*}"
-      [[ "$line" =~ ^[[:space:]]*$ ]] && continue
-      echo "      ${line}"
-    done < "$f"
+    src="站点文件"
   else
-    info "当前：无站点专属文件 → 全局 LARAVEL_SSE_PREFIXES=${LARAVEL_SSE_PREFIXES:-wave}"
+    src="全局 LARAVEL_SSE_PREFIXES"
   fi
-  local cur_resolved cur_one
   cur_resolved=$(_laravel_sse_prefixes_resolve "$domain")
   cur_one=$(printf '%s' "$cur_resolved" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  info "合并解析后（单行）: ${cur_one}"
+  echo ""
+  info "SSE（fastcgi → php:9001） 来源:${src}  当前规则: ${cur_one:-<空>}"
 
-  if ! confirm "是否修改 SSE 路径规则？" "n"; then
+  if ! confirm "修改 SSE 路径规则？" "n"; then
     return 0
   fi
 
   local newv
-  newv=$(prompt "新规则（空格/逗号分隔；仅输入 - 表示删站点文件、改用全局）" "$cur_one")
+  newv=$(prompt "新规则（空格/逗号分隔；- 表示删站点文件、改用全局）" "$cur_one")
   if [[ "$newv" == "-" ]]; then
     SITE_SSE_PREFIXES=""
     SITE_SSE_PREFIXES_CLI=1
@@ -553,6 +781,7 @@ interactive_sse_prefixes_maybe_for_update() {
 
 _nginx_laravel_sse_location_blocks() {
   local out="" _p raw _seen=" "
+  local _svc="${2:-php}"
 
   _laravel_sse_append_upstream_block() {
     local _hdr="$1"
@@ -560,7 +789,7 @@ _nginx_laravel_sse_location_blocks() {
     # 须用单引号且勿写 \$document_root：否则会把反斜杠写入 conf，SCRIPT_FILENAME 错误
     out+='        gzip                 off;
         include              fastcgi_params;
-        fastcgi_pass         php:9001;
+        fastcgi_pass         '"${_svc}"':9001;
         fastcgi_index        index.php;
         fastcgi_param        SCRIPT_FILENAME $document_root/index.php;
         fastcgi_param        DOCUMENT_ROOT $document_root;
@@ -623,6 +852,7 @@ _nginx_laravel_sse_location_blocks() {
 
 gen_nginx_laravel() {
   local domain="$1"
+  local svc; svc="$(_php_service_for_site "$domain")"
   cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
 server {
     listen 80;
@@ -667,10 +897,10 @@ server {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-$(_nginx_laravel_sse_location_blocks "$(_laravel_sse_prefixes_resolve "$domain")")
+$(_nginx_laravel_sse_location_blocks "$(_laravel_sse_prefixes_resolve "$domain")" "$svc")
     location ~ \.php\$ {
         include              fastcgi_params;
-        fastcgi_pass         php:9000;
+        fastcgi_pass         ${svc}:9000;
         fastcgi_index        index.php;
         fastcgi_param        SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         fastcgi_param        REQUEST_URI \$request_uri;
@@ -1032,6 +1262,8 @@ setup_laravel() {
     warn "lnmp-redis 未运行，队列使用 sync"
   fi
 
+  local lv; lv="$(_laravel_min_for_site "$domain")"
+
   env_set "APP_NAME"         "${APP_NAME}"     "$envfile"
   env_set "APP_ENV"          "production"       "$envfile"
   env_set "APP_DEBUG"        "false"            "$envfile"
@@ -1041,7 +1273,16 @@ setup_laravel() {
   env_set "REDIS_PASSWORD"   "${REDIS_PASSWORD}" "$envfile"
   env_set "QUEUE_CONNECTION" "${queue_conn}"    "$envfile"
   env_set "SESSION_DRIVER"   "redis"            "$envfile"
-  env_set "CACHE_STORE"      "redis"            "$envfile"
+  if [[ -n "$lv" ]] && _lv_ge "$lv" "10"; then
+    env_set "CACHE_STORE"    "redis"            "$envfile"
+  else
+    env_set "CACHE_DRIVER"   "redis"            "$envfile"
+  fi
+  if [[ -n "$lv" ]] && ! _lv_ge "$lv" "6"; then
+    env_set "REDIS_CLIENT"   "predis"           "$envfile"
+  else
+    env_set "REDIS_CLIENT"   "phpredis"         "$envfile"
+  fi
   env_set "LOG_CHANNEL"      "daily"            "$envfile"
   env_set "LOG_LEVEL"        "warning"          "$envfile"
 
@@ -1064,14 +1305,23 @@ setup_laravel() {
 
   [[ -f "${site_dir}/artisan" ]] || die "未找到 ${site_dir}/artisan，请确认仓库为 Laravel 且 Git 已拉取成功"
 
+  # Laravel 5.x 部分仓库未提交 storage 子目录的 .gitkeep，提前补齐避免 view/session/cache 写入失败
+  local _s
+  for _s in sessions views cache testing; do
+    mkdir -p "${site_dir}/storage/framework/${_s}"
+  done
+  mkdir -p "${site_dir}/storage/logs" "${site_dir}/storage/app/public" "${site_dir}/bootstrap/cache"
+  chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}/storage" "${site_dir}/bootstrap/cache"
+
   info "composer install..."
   local uid gid
   uid=$(id -u "${DEVOPS_USER}")
   gid=$(id -g "${DEVOPS_USER}")
 
-  ensure_lnmp_php_laravel_extensions
-  ensure_composer_in_lnmp_php
-  docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache lnmp-php \
+  local cname; cname="$(_php_container_for_site "$domain")"
+  ensure_lnmp_php_laravel_extensions "$cname"
+  ensure_composer_in_lnmp_php "$cname"
+  docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache "$cname" \
     composer install \
     --working-dir="${CONTAINER_WWW}/${domain}" \
     --no-dev --no-interaction --optimize-autoloader --no-progress --prefer-dist
@@ -1092,8 +1342,14 @@ setup_laravel() {
   docker_php_artisan "$domain" storage:link --force 2>/dev/null \
     || docker_php_artisan "$domain" storage:link 2>/dev/null || true
 
-  info "artisan optimize..."
-  docker_php_artisan "$domain" optimize
+  if _lv_supports_optimize "$lv"; then
+    info "artisan optimize..."
+    docker_php_artisan "$domain" optimize || warn "artisan optimize 失败（已忽略，请检查 .env / 数据库）"
+  else
+    info "跳过 artisan optimize（Laravel ${lv:-未知} < 5.7 不支持，仅做 config:cache + route:cache 兼容尝试）"
+    docker_php_artisan "$domain" config:cache 2>/dev/null || true
+    docker_php_artisan "$domain" route:cache 2>/dev/null || true
+  fi
 
   # 通过全局变量返回，避免调用方用 $() 捕获时吞掉所有 info/ok/warn 输出
   _QUEUE_CONN="$queue_conn"
@@ -1125,33 +1381,44 @@ run_seed() {
 
 setup_crontab() {
   local domain="$1"
-  local uid gid cron_log
+  local uid gid cron_log cname
   uid=$(id -u "${DEVOPS_USER}")
   gid=$(id -g "${DEVOPS_USER}")
+  cname="$(_php_container_for_site "$domain")"
   cron_log="${WWW_ROOT}/${domain}/storage/logs/cron.log"
-  local cron_cmd="* * * * * docker exec -u ${uid}:${gid} -w \"${CONTAINER_WWW}/${domain}\" lnmp-php php artisan schedule:run >> ${cron_log} 2>&1"
-  local existing filtered
+  local cron_cmd="* * * * * docker exec -u ${uid}:${gid} -w \"${CONTAINER_WWW}/${domain}\" ${cname} php artisan schedule:run >> ${cron_log} 2>&1"
+  local existing filtered dom_esc
+  dom_esc="${domain//./\\.}"
   existing=$(crontab -u "${DEVOPS_USER}" -l 2>/dev/null || true)
   filtered=$(printf '%s\n' "$existing" | grep -vF "${cron_log}" || true)
-  filtered=$(printf '%s\n' "$filtered" | grep -vE "docker exec lnmp-php php [^[:space:]]*/${domain}/artisan schedule:run" || true)
+  filtered=$(printf '%s\n' "$filtered" | grep -vE "docker exec (-u [^ ]+ )?(-w \"[^\"]+\" )?lnmp-php(-[0-9]+)? php artisan schedule:run.*${dom_esc}(\b|$)" || true)
+  filtered=$(printf '%s\n' "$filtered" | grep -vE "docker exec lnmp-php(-[0-9]+)? php [^[:space:]]*/${dom_esc}/artisan schedule:run" || true)
   { printf '%s\n' "$filtered" | grep -v '^$' || true; echo "$cron_cmd"; } | crontab -u "${DEVOPS_USER}" -
-  ok "schedule:run crontab 已更新"
+  ok "schedule:run crontab 已更新（${cname}）"
 }
 
 setup_horizon() {
   local domain="$1"
+  local _hlv _hphp
+  _hlv="$(_laravel_min_for_site "$domain")"
+  _hphp="$(_php_ver_resolved_for_site "$domain")"
+  if ! _lv_supports_horizon "$_hlv" "$_hphp"; then
+    warn "Horizon 跳过：要求 Laravel ≥ 5.7.7（当前 ${_hlv:-未知}）+ PHP ≥ 7.2（当前 ${_hphp}）；老站请改用 supervisor + queue:work"
+    return 0
+  fi
   local sup_path
   if ! sup_path=$(horizon_supervisor_conf_path "$domain"); then
     sup_path=$(horizon_supervisor_conf_write_path "$domain")
   fi
   mkdir -p "$(dirname "$sup_path")"
 
-  local _hu _hg
+  local _hu _hg _hc
   _hu=$(id -u "${DEVOPS_USER}")
   _hg=$(id -g "${DEVOPS_USER}")
+  _hc="$(_php_container_for_site "$domain")"
   cat > "$sup_path" <<HORIZON
 [program:laravel-horizon-${domain}]
-command=docker exec -u ${_hu}:${_hg} -w "${CONTAINER_WWW}/${domain}" lnmp-php php artisan horizon
+command=docker exec -u ${_hu}:${_hg} -w "${CONTAINER_WWW}/${domain}" ${_hc} php artisan horizon
 process_name=%(program_name)s
 autostart=true
 autorestart=true
@@ -1182,6 +1449,7 @@ HORIZON
 #  子命令: add
 # ═══════════════════════════════════════════════
 DOMAIN="" GIT_REPO="" GIT_BRANCH="" SITE_TYPE=""
+SITE_PHP_VERSION="" SITE_PHP_VERSION_CLI=0
 SITE_SSE_PREFIXES="" SITE_SSE_PREFIXES_CLI=0
 APP_NAME="" REDIS_HOST="" REDIS_PORT="" REDIS_PASSWORD=""
 REDIS_PASSWORD_FROM_CLI=0
@@ -1217,6 +1485,15 @@ parse_args() {
       --git-branch)      shift; GIT_BRANCH="$1" ;;
       --type=*)          SITE_TYPE="${1#*=}" ;;
       --type)            shift; SITE_TYPE="$1" ;;
+      --php-version=*)   SITE_PHP_VERSION="${1#*=}"; SITE_PHP_VERSION_CLI=1 ;;
+      --php-version)
+        SITE_PHP_VERSION_CLI=1
+        if [[ $# -ge 2 && -n "$2" && "$2" != --* ]]; then
+          shift; SITE_PHP_VERSION="$1"
+        else
+          SITE_PHP_VERSION=""
+        fi
+        ;;
       --app-name=*)      APP_NAME="${1#*=}" ;;
       --app-name)        shift; APP_NAME="$1" ;;
       --redis-host=*)    REDIS_HOST="${1#*=}" ;;
@@ -1303,30 +1580,193 @@ parse_args() {
   done
 }
 
+# 列出 ${NGINX_CONF}/*.conf 已部署站点（去掉 default）
+_list_deployed_domains() {
+  local conf name
+  for conf in "${NGINX_CONF}"/*.conf; do
+    [[ -f "$conf" ]] || continue
+    name=$(basename "$conf" .conf)
+    [[ "$name" = "default" ]] && continue
+    printf '%s\n' "$name"
+  done
+}
+
+# DOMAIN 为空 + TTY 时弹菜单选择已部署站点；prefer_action=update/remove/ssl/status 仅用于标题
+prompt_pick_domain() {
+  [[ -n "$DOMAIN" ]] && return 0
+  [[ -t 0 ]] || die "缺少 --domain"
+  local -a doms=()
+  while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
+  if [[ ${#doms[@]} -eq 0 ]]; then
+    DOMAIN=$(prompt "站点域名（当前无已部署站点）")
+    return 0
+  fi
+  local _items=("${doms[@]}" "手动输入...")
+  local _i; _i=$(menu_select "${1:-选择站点}" "${_items[@]}")
+  if [[ "$_i" -lt ${#doms[@]} ]]; then
+    DOMAIN="${doms[$_i]}"
+  else
+    DOMAIN=$(prompt "站点域名")
+  fi
+}
+
+# PHP 版本菜单：基于在线 lnmp-php / lnmp-php-XX 容器
+_collect_site_php_version_interactive() {
+  [[ "${SITE_PHP_VERSION_CLI:-0}" -eq 1 ]] && return 0
+  [[ -t 0 ]] || return 0
+  local -a vers=("默认（lnmp-php = ${PHP_VERSION:-未知}）")
+  local cur n v dv; dv="$(_default_php_ver)"
+  while IFS= read -r n; do
+    [[ "$n" = "lnmp-php" ]] && continue
+    v="${n#lnmp-php-}"
+    [[ "$v" =~ ^[0-9]+$ ]] || continue
+    cur="${v:0:1}.${v:1}"
+    vers+=("$cur（$n）")
+  done < <(_iter_php_containers)
+  # 仅 1 项即只有默认容器，无需打扰
+  if [[ ${#vers[@]} -le 1 ]]; then return 0; fi
+  vers+=("自定义...")
+  local _i; _i=$(menu_select "选择 PHP 版本" "${vers[@]}")
+  if [[ "$_i" -eq 0 ]]; then
+    SITE_PHP_VERSION=""; SITE_PHP_VERSION_CLI=1
+  elif [[ "$_i" -eq $((${#vers[@]} - 1)) ]]; then
+    SITE_PHP_VERSION="$(prompt "PHP 主版本 (X.Y)" "$dv")"
+    SITE_PHP_VERSION_CLI=1
+  else
+    local pick="${vers[$_i]}"
+    SITE_PHP_VERSION="${pick%%（*}"
+    SITE_PHP_VERSION_CLI=1
+  fi
+}
+
+# SSL 校验方式菜单
+_collect_ssl_dns_interactive() {
+  [[ -n "$SSL_DNS" ]] && return 0
+  [[ -t 0 ]] || { SSL_DNS="${ACME_SSL_DNS_DEFAULT:-webroot}"; return 0; }
+  local _i; _i=$(menu_select "SSL 证书校验方式（默认 webroot；DNS 模式可签泛域名）" \
+    "webroot   (HTTP-01；最常见，需域名解析到本机)" \
+    "dns_cf    (Cloudflare API Token)" \
+    "dns_ali   (阿里云 DNS Ali_Key/Secret)" \
+    "dns_dp    (DNSPod DP_Id/DP_Key)" \
+    "dns_gd    (GoDaddy)" \
+    "dns_aws   (Route53)" \
+    "dns_tencent (腾讯云 DNSPod API)")
+  case "$_i" in
+    0) SSL_DNS="webroot" ;;
+    1) SSL_DNS="dns_cf" ;;
+    2) SSL_DNS="dns_ali" ;;
+    3) SSL_DNS="dns_dp" ;;
+    4) SSL_DNS="dns_gd" ;;
+    5) SSL_DNS="dns_aws" ;;
+    6) SSL_DNS="dns_tencent" ;;
+  esac
+}
+
+# 站点目录已存在且非空（且没有 .git）→ 提示是否仍 clone（默认否，避免误覆盖）
+_offer_skip_git_if_code_present() {
+  [[ -z "$GIT_REPO" ]] && return 0
+  [[ -t 0 ]] || return 0
+  local d="${WWW_ROOT}/${DOMAIN}"
+  [[ -d "$d/.git" ]] && return 0
+  [[ -d "$d" ]] || return 0
+  [[ -n "$(ls -A "$d" 2>/dev/null)" ]] || return 0
+  warn "已检测到 ${d} 含代码（无 .git）；继续 clone 会失败"
+  if confirm "跳过 Git，使用现有代码？" "y"; then
+    GIT_REPO=""; GIT_BRANCH=""
+  fi
+}
+
+# DB 三件事（建库/迁移/seed）合并为一次决策
+_collect_db_actions_interactive() {
+  [[ "$NEED_DB" != "y" ]] && return 0
+  [[ -t 0 ]] || return 0
+  # CLI 任一已显式给值 → 用 CLI 决策，跳过菜单
+  if [[ -n "${CREATE_DB}${RUN_MIGRATE}${RUN_SEED}" ]]; then
+    CREATE_DB="${CREATE_DB:-y}"
+    RUN_MIGRATE="${RUN_MIGRATE:-y}"
+    RUN_SEED="${RUN_SEED:-y}"
+    return 0
+  fi
+  local _i; _i=$(menu_select "数据库自动化（建库 / migrate / seed）" \
+    "建库 + migrate + seed（全自动，推荐）" \
+    "建库 + migrate（不跑 seed）" \
+    "仅建库（不 migrate、不 seed）" \
+    "什么都不做（仅写 .env，留待手动）" \
+    "自定义（逐项询问）")
+  case "$_i" in
+    0) CREATE_DB=y; RUN_MIGRATE=y; RUN_SEED=y ;;
+    1) CREATE_DB=y; RUN_MIGRATE=y; RUN_SEED=n ;;
+    2) CREATE_DB=y; RUN_MIGRATE=n; RUN_SEED=n ;;
+    3) CREATE_DB=n; RUN_MIGRATE=n; RUN_SEED=n ;;
+    4)
+      confirm "自动创建数据库？" "y" && CREATE_DB=y || CREATE_DB=n
+      confirm "执行 migrate？"   "y" && RUN_MIGRATE=y || RUN_MIGRATE=n
+      if [[ "$RUN_MIGRATE" = "y" ]]; then
+        confirm "执行 db:seed？" "y" && RUN_SEED=y || RUN_SEED=n
+      else
+        RUN_SEED=n
+      fi
+      ;;
+  esac
+}
+
+# 队列后台（cron / Horizon）合并为一次决策；据 PHP 版本作可行性提示
+_collect_queue_supervisor_interactive() {
+  [[ -t 0 ]] || return 0
+  if [[ -n "${ADD_CRONTAB}${NEED_HORIZON}" ]]; then
+    ADD_CRONTAB="${ADD_CRONTAB:-y}"
+    NEED_HORIZON="${NEED_HORIZON:-y}"
+    return 0
+  fi
+  local _phpv _hint=""
+  _phpv="${SITE_PHP_VERSION:-$(_default_php_ver)}"
+  if [[ -n "$_phpv" ]] && ! _lv_ge "$_phpv" "7.2"; then
+    _hint="（注：当前 PHP ${_phpv} < 7.2，Horizon 不可用，将自动禁用）"
+  fi
+  local _i; _i=$(menu_select "队列后台 / 定时任务${_hint}" \
+    "cron + Horizon（推荐：调度 + Redis 队列守护）" \
+    "仅 cron（无队列守护，sync/database 队列）" \
+    "仅 Horizon（无 schedule:run）" \
+    "都不要")
+  case "$_i" in
+    0) ADD_CRONTAB=y; NEED_HORIZON=y ;;
+    1) ADD_CRONTAB=y; NEED_HORIZON=n ;;
+    2) ADD_CRONTAB=n; NEED_HORIZON=y ;;
+    3) ADD_CRONTAB=n; NEED_HORIZON=n ;;
+  esac
+}
+
 collect_interactive() {
-  [[ -z "$DOMAIN" ]]   && DOMAIN=$(prompt "站点域名 (如 app.com)")
-  [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 Git）" "")
+  # 1) 域名（决策性，最早问）
+  [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
+  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+
+  # 2) 站点类型（决定后续走 laravel/frontend 分叉）
+  if [[ -z "$SITE_TYPE" ]]; then
+    if [[ -t 0 ]]; then
+      local _i; _i=$(menu_select "站点类型" "laravel (PHP 后端)" "frontend (静态/SPA)")
+      [[ "$_i" -eq 1 ]] && SITE_TYPE="frontend" || SITE_TYPE="laravel"
+    else
+      SITE_TYPE="laravel"
+    fi
+  fi
+  SITE_TYPE=${SITE_TYPE:-laravel}
+  [[ "$SITE_TYPE" != "laravel" && "$SITE_TYPE" != "frontend" ]] && SITE_TYPE="laravel"
+
+  # 3) Git（已存在代码时智能提示跳过）
+  [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" "")
+  _offer_skip_git_if_code_present
   if [[ -n "$GIT_REPO" ]]; then
     [[ -z "$GIT_BRANCH" ]] && GIT_BRANCH=$(prompt "Git 分支（留空=仓库默认）" "")
   else
     GIT_BRANCH=""
   fi
-  if [[ -z "$SITE_TYPE" ]]; then
-    SITE_TYPE=$(prompt "站点类型 (laravel/frontend)" "laravel")
-  fi
-  SITE_TYPE=${SITE_TYPE:-laravel}
-  [[ "$SITE_TYPE" != "laravel" && "$SITE_TYPE" != "frontend" ]] && SITE_TYPE="laravel"
-
-  [[ -z "$DOMAIN" ]]   && die "域名不能为空"
 
   if [[ "$SITE_TYPE" = "laravel" ]]; then
-    APP_NAME=${APP_NAME:-$(prompt "APP_NAME" "Laravel")}
-    REDIS_HOST=${REDIS_HOST:-$(prompt "REDIS_HOST" "redis")}
-    REDIS_PORT=${REDIS_PORT:-$(prompt "REDIS_PORT" "6379")}
-    if [[ "$REDIS_PASSWORD_FROM_CLI" != "1" && -z "${REDIS_PASSWORD:-}" ]]; then
-      prompt_secret_into "REDIS_PASSWORD (留空=无)" REDIS_PASSWORD
-    fi
+    # 4) PHP 版本（影响后续 Horizon 可行性）
+    _collect_site_php_version_interactive
 
+    # 5) 数据库块：先决定是否需要 DB，再凭证，再动作预设
     [[ -z "$NEED_DB" ]] && { confirm "配置数据库？" "y" && NEED_DB="y" || NEED_DB="n"; }
     if [[ "$NEED_DB" = "y" ]]; then
       DB_HOST=${DB_HOST:-$(prompt "DB_HOST（MySQL 主机/容器名）" "mysql")}
@@ -1334,32 +1774,46 @@ collect_interactive() {
       [[ -z "$DB_NAME" ]] && die "DB_DATABASE 不能为空"
       [[ "$DB_PWD_FROM_CLI" != "1" && -z "$DB_PWD" ]] && prompt_secret_into "DB_PASSWORD" DB_PWD
       [[ -z "$DB_PWD" ]]  && die "DB_PASSWORD 不能为空"
-      [[ -z "$CREATE_DB" ]]   && { confirm "自动创建数据库？" "y" && CREATE_DB="y" || CREATE_DB="n"; }
-      [[ -z "$RUN_MIGRATE" ]] && { confirm "执行 migrate？" "y" && RUN_MIGRATE="y" || RUN_MIGRATE="n"; }
-      [[ "$RUN_MIGRATE" = "y" && -z "$RUN_SEED" ]] && { confirm "执行 db:seed？" "y" && RUN_SEED="y" || RUN_SEED="n"; }
-      RUN_SEED=${RUN_SEED:-y}
+      _collect_db_actions_interactive
     fi
 
-    if [[ ${#CUSTOM_ENV[@]} -eq 0 ]]; then
+    # 6) Redis（基础依赖）
+    REDIS_HOST=${REDIS_HOST:-$(prompt "REDIS_HOST" "redis")}
+    REDIS_PORT=${REDIS_PORT:-$(prompt "REDIS_PORT" "6379")}
+    if [[ "$REDIS_PASSWORD_FROM_CLI" != "1" && -z "${REDIS_PASSWORD:-}" ]]; then
+      prompt_secret_into "REDIS_PASSWORD (留空=无)" REDIS_PASSWORD
+    fi
+
+    # 7) 队列后台 / 定时任务
+    _collect_queue_supervisor_interactive
+
+    # 8) 应用名 + 自定义 ENV（最低优先级，放最后；轻打扰）
+    APP_NAME=${APP_NAME:-$(prompt "APP_NAME" "Laravel")}
+
+    if [[ ${#CUSTOM_ENV[@]} -eq 0 && -t 0 ]]; then
       echo ""
-      info "自定义 ENV（KEY 留空结束）"
-      while true; do
-        local key val
-        key=$(prompt "KEY")
-        [[ -z "$key" ]] && break
-        val=$(prompt "VALUE")
-        CUSTOM_ENV+=("${key}=${val}")
-      done
+      info "自定义 ENV（一行 CSV：KEY=V[,KEY2=V2]，留空跳过；含逗号/空格的值改用 --env 多次传入）"
+      local _envline
+      _envline=$(prompt "ENV" "")
+      if [[ -n "$_envline" ]]; then
+        local IFS=','
+        local _kv
+        for _kv in $_envline; do
+          _kv="${_kv#"${_kv%%[![:space:]]*}"}"; _kv="${_kv%"${_kv##*[![:space:]]}"}"
+          [[ -z "$_kv" ]] && continue
+          [[ "$_kv" == *=* ]] || { warn "忽略无效项: $_kv（应为 KEY=VALUE）"; continue; }
+          CUSTOM_ENV+=("$_kv")
+        done
+      fi
     fi
-
-    [[ -z "$ADD_CRONTAB" ]]  && { confirm "添加定时任务？" "y" && ADD_CRONTAB="y" || ADD_CRONTAB="n"; }
-    [[ -z "$NEED_HORIZON" ]] && { confirm "使用 Horizon？" "y" && NEED_HORIZON="y" || NEED_HORIZON="n"; }
   else
-    FRONTEND_ROOT=$(prompt "前端子目录（相对站点目录，留空则：有 dist 目录→dist，否则→站点根）" "${FRONTEND_ROOT:-}")
+    # frontend 分支：仅子目录
+    [[ -z "$FRONTEND_ROOT" ]] && FRONTEND_ROOT=$(prompt "前端子目录（相对站点目录，留空则：有 dist 目录→dist，否则→站点根）" "")
   fi
 
-  [[ -z "$SSL_DNS" ]] && SSL_DNS=$(prompt "SSL 校验方式 (webroot/dns_cf/dns_ali/dns_dp/dns_gd/dns_aws/dns_tencent)" "${ACME_SSL_DNS_DEFAULT:-webroot}")
-  SSL_DNS="${SSL_DNS:-webroot}"
+  # 9) SSL（最末尾，凭证一并校验）
+  _collect_ssl_dns_interactive
+  SSL_DNS="${SSL_DNS:-${ACME_SSL_DNS_DEFAULT:-webroot}}"
   case "$SSL_DNS" in
     webroot|dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) ;;
     *) die "无效 SSL 模式: ${SSL_DNS}（webroot / dns_cf / dns_ali / dns_dp / dns_gd / dns_aws / dns_tencent）" ;;
@@ -1391,6 +1845,37 @@ cmd_add() {
       && die "DB_DATABASE 不能为 mysql（与 DB_HOST=mysql 同时出现时多为填反）。库名请用业务名如 payment"
   fi
 
+  # 执行前的「配置确认」（仅 TTY 且未 --yes 时弹出，顺序与提问顺序一致）
+  if [[ "${YES:-0}" -ne 1 && -t 0 ]]; then
+    echo ""
+    hr; info "配置确认"; hr
+    printf "  %-18s %s\n" "域名"   "$DOMAIN"
+    printf "  %-18s %s\n" "类型"   "$SITE_TYPE"
+    if [[ -n "$GIT_REPO" ]]; then
+      printf "  %-18s %s\n" "Git" "${GIT_REPO}${GIT_BRANCH:+ (${GIT_BRANCH})}"
+    else
+      printf "  %-18s %s\n" "Git" "跳过（使用 ${WWW_ROOT}/${DOMAIN} 现有代码）"
+    fi
+    if [[ "$SITE_TYPE" = "laravel" ]]; then
+      printf "  %-18s %s\n" "PHP 容器" "$(_php_container_for_site "$DOMAIN")"
+      if [[ "${NEED_DB:-y}" = "y" ]]; then
+        printf "  %-18s %s\n" "数据库" "${DB_HOST:-mysql} / ${DB_NAME:-?}"
+        printf "  %-18s %s\n" "建库 / migrate / seed" "${CREATE_DB:-y} / ${RUN_MIGRATE:-y} / ${RUN_SEED:-y}"
+      else
+        printf "  %-18s %s\n" "数据库" "不配置（n）"
+      fi
+      printf "  %-18s %s\n" "Redis"   "${REDIS_HOST:-redis}:${REDIS_PORT:-6379}${REDIS_PASSWORD:+ (有密码)}"
+      printf "  %-18s %s\n" "cron / Horizon" "${ADD_CRONTAB:-y} / ${NEED_HORIZON:-y}"
+      printf "  %-18s %s\n" "APP_NAME" "${APP_NAME:-Laravel}"
+      [[ ${#CUSTOM_ENV[@]} -gt 0 ]] && printf "  %-18s %s\n" "自定义 ENV" "${#CUSTOM_ENV[@]} 项"
+    else
+      printf "  %-18s %s\n" "前端子目录" "${FRONTEND_ROOT:-自动 (dist 优先)}"
+    fi
+    printf "  %-18s %s\n" "SSL" "${SSL_DNS:-webroot}${SSL_STAGING:+ (staging)}${FORCE_SSL:+ +force}"
+    echo ""
+    confirm "确认执行？" "y" || { warn "已取消"; return 0; }
+  fi
+
   ensure_placeholder_cert "$DOMAIN"
   normalize_nginx_cache_dir
   fix_nginx_main_pid_path
@@ -1400,6 +1885,8 @@ cmd_add() {
   echo ""
   hr; info "[1/6] Nginx 配置"; echo ""
   if [[ "$SITE_TYPE" = "laravel" ]]; then
+    apply_site_php_version_cli "$DOMAIN"
+    ensure_site_php_container "$DOMAIN"
     apply_site_sse_prefixes_cli "$DOMAIN"
     gen_nginx_laravel "$DOMAIN"
     wait_container_running "lnmp-nginx" 45
@@ -1499,7 +1986,7 @@ cmd_add() {
 #  子命令: update
 # ═══════════════════════════════════════════════
 cmd_update() {
-  [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名")
+  prompt_pick_domain "选择要更新的站点"
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
 
   local site_dir="${WWW_ROOT}/${DOMAIN}"
@@ -1526,13 +2013,17 @@ cmd_update() {
   fi
 
   if [[ "$site_type" = "laravel" ]]; then
+    apply_site_php_version_cli "$DOMAIN"
+    ensure_site_php_container "$DOMAIN"
+
     info "composer install..."
     local uid gid
     uid=$(id -u "${DEVOPS_USER}")
     gid=$(id -g "${DEVOPS_USER}")
-    ensure_lnmp_php_laravel_extensions
-    ensure_composer_in_lnmp_php
-    docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache lnmp-php \
+    local cname; cname="$(_php_container_for_site "$DOMAIN")"
+    ensure_lnmp_php_laravel_extensions "$cname"
+    ensure_composer_in_lnmp_php "$cname"
+    docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache "$cname" \
       composer install \
       --working-dir="${CONTAINER_WWW}/${DOMAIN}" \
       --no-dev --no-interaction --optimize-autoloader --no-progress --prefer-dist
@@ -1556,22 +2047,39 @@ cmd_update() {
       docker_php_artisan "$DOMAIN" migrate --force
     fi
 
-    info "artisan optimize..."
-    docker_php_artisan "$DOMAIN" optimize:clear 2>/dev/null || true
-    docker_php_artisan "$DOMAIN" optimize
+    local _lv; _lv="$(_laravel_min_for_site "$DOMAIN")"
+    if _lv_supports_optimize "$_lv"; then
+      info "artisan optimize..."
+      docker_php_artisan "$DOMAIN" optimize:clear 2>/dev/null || true
+      docker_php_artisan "$DOMAIN" optimize || warn "artisan optimize 失败（已忽略）"
+    else
+      info "跳过 artisan optimize（Laravel ${_lv:-未知} < 5.7 不支持）"
+      docker_php_artisan "$DOMAIN" cache:clear 2>/dev/null || true
+      docker_php_artisan "$DOMAIN" config:cache 2>/dev/null || true
+      docker_php_artisan "$DOMAIN" route:cache 2>/dev/null || true
+    fi
 
-    info "php-fpm graceful reload（清空 OPCache）..."
-    docker exec lnmp-php sh -c 'kill -USR2 1' 2>/dev/null \
-      && ok "PHP-FPM 已 graceful reload（OPCache 已清空）" \
-      || warn "PHP-FPM reload 失败，OPCache 未清空；如内存持续偏高请手动: docker restart lnmp-php"
+    info "php-fpm graceful reload（清空 OPCache，${cname}）..."
+    docker exec "$cname" sh -c 'kill -USR2 1' 2>/dev/null \
+      && ok "PHP-FPM 已 graceful reload（${cname}，OPCache 已清空）" \
+      || warn "PHP-FPM reload 失败，OPCache 未清空；如内存持续偏高请手动: docker restart ${cname}"
+
+    # 切换 PHP 版本时 cron 里的 docker exec 仍指向旧容器，若已注册过则重写
+    local _cron_log="${WWW_ROOT}/${DOMAIN}/storage/logs/cron.log"
+    local _cron_existing _cron_dom_esc
+    _cron_existing=$(crontab -u "${DEVOPS_USER}" -l 2>/dev/null || true)
+    # 域名内的 . 在 ERE 下是任意字符，转义后再 -F 严格匹配避免误中其他子域名
+    _cron_dom_esc="${DOMAIN//./\\.}"
+    if printf '%s\n' "$_cron_existing" | grep -qF "${_cron_log}" \
+      || printf '%s\n' "$_cron_existing" | grep -qE "docker exec[^|;&]*lnmp-php(-[0-9]+)?[[:space:]].*artisan[[:space:]]+schedule:run[^|;&]*${_cron_dom_esc}(\b|$)"; then
+      setup_crontab "$DOMAIN"
+    fi
 
     local sup_conf=""
     sup_conf=$(horizon_supervisor_conf_path "$DOMAIN") || true
-    if [[ -n "$sup_conf" ]] && supervisord_ready; then
-      info "重启 Horizon..."
-      supervisorctl restart "laravel-horizon-${DOMAIN}" &>/dev/null || true
-    elif [[ -n "$sup_conf" ]] && command -v supervisorctl &>/dev/null; then
-      warn "supervisord 未运行，跳过 Horizon 重启；启动后执行: supervisorctl restart laravel-horizon-${DOMAIN}"
+    if [[ -n "$sup_conf" ]]; then
+      # 站点已配 Horizon：可能切换了 PHP 版本，重写 supervisor conf 并重启
+      setup_horizon "$DOMAIN"
     fi
 
     interactive_sse_prefixes_maybe_for_update "$DOMAIN"
@@ -1616,7 +2124,7 @@ cmd_update() {
 #  子命令: remove
 # ═══════════════════════════════════════════════
 cmd_remove() {
-  [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名")
+  prompt_pick_domain "选择要移除的站点"
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
 
   echo ""
@@ -1625,6 +2133,7 @@ cmd_remove() {
   [[ "${YES:-0}" -eq 0 ]] && ! confirm "确认删除 ${DOMAIN}？所有配置和数据将被移除" "n" && { info "已取消"; return; }
 
   rm -f "${NGINX_CONF}/${DOMAIN}.sse-prefixes" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.php-version" 2>/dev/null || true
   if [[ -f "${NGINX_CONF}/${DOMAIN}.conf" ]]; then
     rm -f "${NGINX_CONF}/${DOMAIN}.conf"
     normalize_nginx_conf_d
@@ -1688,11 +2197,15 @@ _status_http_code_normalize() {
   [[ ${#c} -ge 3 ]] && printf '%s' "${c:0:3}" || printf '000'
 }
 
-# Laravel 用 /up 探活（避免纯 API 根路径 / 无路由或 FPM 长时间无响应导致误判）；前端用 /
+# Laravel 11+ 用 /up 探活；老 Laravel 与前端用 /；可由调用方传入 path 覆盖
 _status_http_code() {
-  local host="$1" use_https="$2" site_type="${3:-frontend}"
-  local path="/" raw=""
-  [[ "$site_type" = "laravel" ]] && path="/up"
+  local host="$1" use_https="$2" site_type="${3:-frontend}" probe_path="${4:-}"
+  local path raw=""
+  if [[ -n "$probe_path" ]]; then
+    path="$probe_path"
+  else
+    path="/"; [[ "$site_type" = "laravel" ]] && path="/up"
+  fi
   if [[ "$use_https" = 1 ]]; then
     raw=$(curl -sk -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 25 \
       --resolve "${host}:443:127.0.0.1" \
@@ -1712,17 +2225,23 @@ _status_laravel_fpm_tail_hints() {
   echo ""
   info "本站相关 Nginx error.log（含 server_name / Host）:"
   docker exec lnmp-nginx sh -c "grep -F '${dom}' /var/log/nginx/error.log 2>/dev/null | tail -n 20" 2>/dev/null | sed 's/^/  /' || true
-  [[ ! -s "${DATA_DIR}/php/log/fpm-slow.log" ]] && return 0
+  local _scn _ssub
+  _scn="$(_php_container_for_site "$dom")"
+  if [[ "$_scn" = "lnmp-php" ]]; then _ssub="php"; else _ssub="php-${_scn#lnmp-php-}"; fi
+  [[ ! -s "${DATA_DIR}/${_ssub}/log/fpm-slow.log" ]] && return 0
   echo ""
-  info "php-fpm 慢日志尾部（${DATA_DIR}/php/log/fpm-slow.log）:"
-  tail -n 30 "${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null | sed 's/^/  /' || true
+  info "php-fpm 慢日志尾部（${DATA_DIR}/${_ssub}/log/fpm-slow.log）:"
+  tail -n 30 "${DATA_DIR}/${_ssub}/log/fpm-slow.log" 2>/dev/null | sed 's/^/  /' || true
 }
 
 _status_print_hints() {
   local d="$1" code_http="$2" code_https="$3" site_type="$4" fe_sub="$5"
   local issues=()
   container_ok "lnmp-nginx" || issues+=("lnmp-nginx 未运行，本机 80/443 无服务")
-  [[ "$site_type" = "laravel" ]] && ! container_ok "lnmp-php" && issues+=("lnmp-php 未运行，Laravel 将出现 502（FastCGI 不可达）")
+  if [[ "$site_type" = "laravel" ]]; then
+    local _spc; _spc="$(_php_container_for_site "$d")"
+    container_ok "$_spc" || issues+=("${_spc} 未运行，Laravel 将出现 502（FastCGI 不可达）")
+  fi
   [[ ! -f "${NGINX_CONF}/${d}.conf" ]] && issues+=("无 Nginx 配置 ${NGINX_CONF}/${d}.conf，请求可能落到默认站点")
   [[ "$code_http" = "000" ]] && issues+=("HTTP 无响应：检查 docker 端口映射、本机防火墙、阿里云安全组是否放行 80")
   [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" = "laravel" ]] \
@@ -1743,15 +2262,32 @@ _status_print_hints() {
 }
 
 cmd_status() {
-  if [[ "${STATUS_ALL:-0}" -ne 1 ]]; then
-    [[ -z "${DOMAIN:-}" ]] && DOMAIN=$(prompt "站点域名（留空=检查 conf.d 中全部站点）" "")
-    [[ -z "$DOMAIN" ]] && STATUS_ALL=1
+  if [[ "${STATUS_ALL:-0}" -ne 1 && -z "${DOMAIN:-}" && -t 0 ]]; then
+    local -a _doms=()
+    while IFS= read -r d; do _doms+=("$d"); done < <(_list_deployed_domains)
+    if [[ ${#_doms[@]} -eq 0 ]]; then
+      STATUS_ALL=1
+    else
+      local _items=("全部站点（简略概览）" "${_doms[@]}")
+      local _i; _i=$(menu_select "选择要查看状态的站点" "${_items[@]}")
+      if [[ "$_i" -eq 0 ]]; then
+        STATUS_ALL=1; DOMAIN=""
+      else
+        DOMAIN="${_doms[$((_i - 1))]}"
+      fi
+    fi
   fi
+  [[ "${STATUS_ALL:-0}" -ne 1 && -z "$DOMAIN" ]] && STATUS_ALL=1
 
   echo ""
   hr; info "运行环境（Docker）"; echo ""
   local c _st
-  for c in lnmp-nginx lnmp-php lnmp-redis lnmp-mysql; do
+  local _stack=(lnmp-nginx lnmp-php lnmp-redis lnmp-mysql)
+  while IFS= read -r c; do
+    [[ -z "$c" || "$c" = "lnmp-php" ]] && continue
+    _stack+=("$c")
+  done < <(_iter_php_containers)
+  for c in "${_stack[@]}"; do
     if container_ok "$c"; then
       _st=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo "?")
       ok "${c}: ${_st}"
@@ -1829,10 +2365,10 @@ cmd_status() {
       warn "未找到证书: ${cert}"
     fi
 
-    local _probe_path="/"
-    [[ "$site_type" = "laravel" ]] && _probe_path="/up"
-    code_http=$(_status_http_code "$dom" 0 "$site_type")
-    code_https=$(_status_http_code "$dom" 1 "$site_type")
+    local _probe_path
+    _probe_path="$(_status_probe_path_for_site "$dom" "$site_type")"
+    code_http=$(_status_http_code "$dom" 0 "$site_type" "$_probe_path")
+    code_https=$(_status_http_code "$dom" 1 "$site_type" "$_probe_path")
     info "本机探测（127.0.0.1 + --resolve，路径: ${_probe_path}） HTTP=${code_http}  HTTPS=${code_https}"
     [[ "$code_http" =~ ^(301|302|307|308|200)$ ]] || [[ "$code_http" = "000" ]] || warn "HTTP 状态非预期（常见为 301 跳转 HTTPS）"
     [[ "$code_https" =~ ^(200|301|302|304|403|404|500|502|503)$ ]] || warn "HTTPS 状态: ${code_https}"
@@ -1852,15 +2388,23 @@ cmd_status() {
       fi
     fi
 
-    if [[ "$site_type" = "laravel" ]] && container_ok "lnmp-php"; then
-      echo ""
-      info "Laravel / PHP:"
-      if docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${dom}" lnmp-php php artisan --version &>/dev/null; then
-        docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${dom}" lnmp-php php artisan --version 2>&1 | sed 's/^/  /'
+    if [[ "$site_type" = "laravel" ]]; then
+      local _scn _sver _ssub
+      _scn="$(_php_container_for_site "$dom")"
+      _sver="$(_php_ver_for_site "$dom")"
+      if container_ok "$_scn"; then
+        echo ""
+        info "Laravel / PHP（容器: ${_scn}${_sver:+，版本声明 ${_sver}}）:"
+        if docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${dom}" "$_scn" php artisan --version &>/dev/null; then
+          docker exec -u "$(id -u "${DEVOPS_USER}")":"$(id -g "${DEVOPS_USER}")" -w "${CONTAINER_WWW}/${dom}" "$_scn" php artisan --version 2>&1 | sed 's/^/  /'
+        else
+          warn "artisan 执行失败（依赖、.env、权限等，查看完整错误请手动: docker exec -u ... ${_scn} ... php artisan --version）"
+        fi
+        if [[ "$_scn" = "lnmp-php" ]]; then _ssub="php"; else _ssub="php-${_scn#lnmp-php-}"; fi
+        [[ -d "${DATA_DIR}/${_ssub}/log" ]] && info "php-fpm 慢日志（宿主机）: ${DATA_DIR}/${_ssub}/log/fpm-slow.log"
       else
-        warn "artisan 执行失败（依赖、.env、权限等，查看完整错误请手动: docker exec -u ... lnmp-php ... php artisan --version）"
+        warn "${_scn} 未运行（站点声明 PHP ${_sver:-默认}），FastCGI 不可达将 502"
       fi
-      [[ -d "${DATA_DIR}/php/log" ]] && info "php-fpm 慢日志（宿主机）: ${DATA_DIR}/php/log/fpm-slow.log"
     fi
 
     echo ""
@@ -1918,8 +2462,15 @@ cmd_list() {
       cron="有"
     fi
 
-    printf "  %-30s 类型:%-10s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
-      "$name" "$type" "$status" "$ssl" "$cron"
+    local php_v="default" _vv lv_v="-"
+    _vv="$(_php_ver_for_site "$name")"
+    [[ -n "$_vv" ]] && php_v="$_vv"
+    if [[ "$type" = "laravel" ]]; then
+      local _lvv; _lvv="$(_laravel_min_for_site "$name")"
+      [[ -n "$_lvv" ]] && lv_v="$_lvv"
+    fi
+    printf "  %-30s 类型:%-10s Laravel:%-6s PHP:%-8s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
+      "$name" "$type" "$lv_v" "$php_v" "$status" "$ssl" "$cron"
   done
 
   [[ $found -eq 0 ]] && info "暂无站点"
@@ -1930,7 +2481,7 @@ cmd_list() {
 #  子命令: ssl
 # ═══════════════════════════════════════════════
 cmd_ssl() {
-  [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名")
+  prompt_pick_domain "选择要签发/续期的站点"
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
 
   local site_dir="${WWW_ROOT}/${DOMAIN}"
@@ -1941,8 +2492,8 @@ cmd_ssl() {
 
   container_ok "lnmp-acme" || die "lnmp-acme 未运行"
 
-  [[ -z "$SSL_DNS" ]] && SSL_DNS=$(prompt "SSL 校验方式 (webroot/dns_cf/dns_ali/dns_dp/dns_gd/dns_aws/dns_tencent)" "${ACME_SSL_DNS_DEFAULT:-webroot}")
-  SSL_DNS="${SSL_DNS:-webroot}"
+  _collect_ssl_dns_interactive
+  SSL_DNS="${SSL_DNS:-${ACME_SSL_DNS_DEFAULT:-webroot}}"
   case "$SSL_DNS" in
     webroot|dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) ;;
     *) die "无效 SSL 模式: ${SSL_DNS}" ;;
@@ -1981,6 +2532,8 @@ usage() {
   --git=地址            Git 仓库地址（留空或省略=跳过 clone/pull）
   --git-branch=名称     clone/pull 使用的分支或标签（留空=默认分支；无 --git 时忽略）
   --type=laravel|frontend  站点类型 [默认: laravel]
+  --php-version=主版本   站点 PHP 版本（如 8.2 / 7.4），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
+                       写入 ${NGINX_CONF}/<域名>.php-version；nginx fastcgi 与 composer/artisan/cron/horizon 自动路由到对应容器
   --app-name=名称       APP_NAME [Laravel]
   --redis-host=         REDIS_HOST [redis]
   --redis-port=         REDIS_PORT [6379]
@@ -2020,6 +2573,8 @@ usage() {
   $0 add --domain=test.example.com --git=... --ssl-staging   # 测试证书
   $0 add --domain=x.com --git=... --dns=dns_ali --ali-key=AK --ali-secret=SK
   $0 add --domain=x.com --git=   # 或省略 --git，配合事先放入 ${DATA_DIR:-/data/docker-lnmp}/www/x.com
+  $0 add --domain=legacy.com --git=... --php-version=7.4   # 该站使用 lnmp-php-74
+  $0 update --domain=api.example.com --php-version=8.2     # 切到 lnmp-php-82
 EOF
 }
 
@@ -2043,27 +2598,24 @@ main() {
         hr
         printf "  多站点部署管理 v%s\n" "${VERSION}"
         hr
+        local _idx
+        _idx=$(menu_select "请选择操作" \
+          "查看站点列表（推荐先看一眼）" \
+          "部署新站点" \
+          "更新站点" \
+          "站点运行状态（含证书 / FPM / nginx 日志）" \
+          "SSL 证书签发/续期" \
+          "移除站点" \
+          "退出")
         echo ""
-        echo "    1) 部署新站点"
-        echo "    2) 更新站点"
-        echo "    3) 移除站点"
-        echo "    4) 查看站点列表"
-        echo "    5) SSL 证书管理"
-        echo "    6) 站点运行状态"
-        echo "    0) 退出"
-        echo ""
-        local action=""
-        read -rp "  请选择 [0-6]: " action </dev/tty 2>/dev/tty || action=""
-        echo ""
-        case "$action" in
+        case "$_idx" in
+          0) cmd_list ;;
           1) cmd_add ;;
           2) cmd_update ;;
-          3) cmd_remove ;;
-          4) cmd_list ;;
-          5) cmd_ssl ;;
-          6) STATUS_ALL=0; DOMAIN=""; cmd_status ;;
-          0) ok "再见"; exit 0 ;;
-          *) warn "无效选择，请输入 0-6" ;;
+          3) STATUS_ALL=0; DOMAIN=""; cmd_status ;;
+          4) cmd_ssl ;;
+          5) cmd_remove ;;
+          6) ok "再见"; exit 0 ;;
         esac
         echo ""
         if ! confirm "返回主菜单？" "y"; then

@@ -176,6 +176,7 @@ conf_load() {
   DOCKER_MIRRORS_STR="${DOCKER_MIRRORS_STR:-}"
   ALPINE_MIRROR="${ALPINE_MIRROR:-mirrors.aliyun.com}"
   PHP_VERSION="${PHP_VERSION:-8.3}"
+  EXTRA_PHP_VERSIONS="${EXTRA_PHP_VERSIONS:-}"
   PHP_EXTENSIONS="${PHP_EXTENSIONS:-pdo_mysql,opcache,mysqli,curl,gd,xml,dom,pcntl,bcmath,sockets,mbstring,zip,exif,intl,fileinfo,redis}"
   ACME_EMAIL="${ACME_EMAIL:-}"
   SSH_PORT="${SSH_PORT:-22}"
@@ -202,6 +203,7 @@ GH_PROXY=${GH_PROXY}
 DOCKER_MIRRORS_STR=${DOCKER_MIRRORS_STR}
 ALPINE_MIRROR=${ALPINE_MIRROR}
 PHP_VERSION=${PHP_VERSION}
+EXTRA_PHP_VERSIONS=${EXTRA_PHP_VERSIONS}
 PHP_EXTENSIONS=${PHP_EXTENSIONS}
 ACME_EMAIL=${ACME_EMAIL}
 ACME_SSL_DNS_DEFAULT=${ACME_SSL_DNS_DEFAULT}
@@ -1234,39 +1236,35 @@ account_sshkey_menu_interactive() {
 
 _interactive_account_mgmt() {
   while true; do
-    echo ""
-    hr; info "账户管理"; hr; echo ""
-    echo "    1) 用户列表"
-    echo "    2) 新建用户"
-    echo "    3) 删除用户"
-    echo "    4) 修改密码"
-    echo "    5) SSH 公钥（查看/追加/覆盖/清空）"
-    echo "    6) 用户组列表"
-    echo "    7) 新建用户组"
-    echo "    8) 删除用户组"
-    echo "    9) 用户加入组"
-    echo "   10) 用户移出组"
-    echo "   11) 查看 AllowUsers"
-    echo "   12) 按 lnmp-env 重建 AllowUsers"
-    echo "    0) 返回主菜单"
-    echo ""
-    local c
-    read -rp "  选择 [0-12]: " c
-    case "$c" in
-      1)  account_user_list_display ;;
-      2)  account_user_add_interactive ;;
-      3)  account_user_delete_interactive ;;
-      4)  account_user_passwd_interactive ;;
-      5)  account_sshkey_menu_interactive ;;
+    local _i
+    _i=$(menu_select "账户管理" \
+      "用户列表" \
+      "新建用户" \
+      "修改密码" \
+      "SSH 公钥（查看/追加/覆盖/清空）" \
+      "查看 AllowUsers" \
+      "按 lnmp-env 重建 AllowUsers" \
+      "用户组列表" \
+      "新建用户组" \
+      "用户加入组" \
+      "用户移出组" \
+      "删除用户" \
+      "删除用户组" \
+      "返回主菜单")
+    case "$_i" in
+      0)  account_user_list_display ;;
+      1)  account_user_add_interactive ;;
+      2)  account_user_passwd_interactive ;;
+      3)  account_sshkey_menu_interactive ;;
+      4)  account_allowusers_display ;;
+      5)  account_allowusers_resync_from_conf ;;
       6)  account_groups_list_display ;;
       7)  account_group_add_interactive ;;
-      8)  account_group_delete_interactive ;;
-      9)  account_user_addgroup_interactive ;;
-      10) account_user_delgroup_interactive ;;
-      11) account_allowusers_display ;;
-      12) account_allowusers_resync_from_conf ;;
-      0)  return 0 ;;
-      *)  warn "无效选择" ;;
+      8)  account_user_addgroup_interactive ;;
+      9)  account_user_delgroup_interactive ;;
+      10) account_user_delete_interactive ;;
+      11) account_group_delete_interactive ;;
+      12) return 0 ;;
     esac
   done
 }
@@ -1295,9 +1293,49 @@ AEOF
 # ═══════════════════════════════════════════════
 #  LNMP
 # ═══════════════════════════════════════════════
+_php_ver_no_dot() { printf '%s' "${1//./}"; }
+
+# 主.次版本号比较（_lv_ge "5.7" "5.6" → 0）
+_lv_ge() {
+  local a="$1" b="$2" a1 a2 b1 b2
+  a1="${a%%.*}"; a2="${a#*.}"; [[ "$a2" = "$a" ]] && a2=0
+  b1="${b%%.*}"; b2="${b#*.}"; [[ "$b2" = "$b" ]] && b2=0
+  a1="${a1//[^0-9]/}"; a2="${a2%%.*}"; a2="${a2//[^0-9]/}"
+  b1="${b1//[^0-9]/}"; b2="${b2%%.*}"; b2="${b2//[^0-9]/}"
+  : "${a1:=0}"; : "${a2:=0}"; : "${b1:=0}"; : "${b2:=0}"
+  if [[ $a1 -ne $b1 ]]; then [[ $a1 -gt $b1 ]]; return $?; fi
+  [[ $a2 -ge $b2 ]]
+}
+
+# 输出去重、跳过空与主版本（PHP_VERSION）的额外版本列表（一行一个）
+_php_extra_list() {
+  local seen=" ${PHP_VERSION} "
+  local v
+  IFS=',' read -ra _vs <<< "${EXTRA_PHP_VERSIONS:-}"
+  for v in "${_vs[@]}"; do
+    v="${v//[[:space:]]/}"
+    [[ -z "$v" ]] && continue
+    case "$seen" in *" $v "*) continue ;; esac
+    seen+="$v "
+    printf '%s\n' "$v"
+  done
+}
+
+# 默认 PHP（lnmp-php）的数据子目录是 "php"；额外版本是 "php-XX"
+_php_data_subdir() {
+  local ver="${1:-${PHP_VERSION}}"
+  if [[ "$ver" = "${PHP_VERSION}" ]]; then printf 'php'; else printf 'php-%s' "$(_php_ver_no_dot "$ver")"; fi
+}
+_php_service_name() {
+  local ver="${1:-${PHP_VERSION}}"
+  if [[ "$ver" = "${PHP_VERSION}" ]]; then printf 'php'; else printf 'php%s' "$(_php_ver_no_dot "$ver")"; fi
+}
+_php_container_name() { printf 'lnmp-%s' "$(_php_service_name "$1")"; }
+
 _write_php_laravel_conf() {
-  mkdir -p "${DATA_DIR}/php/conf.d"
-  cat > "${DATA_DIR}/php/conf.d/99-laravel.ini" <<'PHPINI'
+  local sub="${1:-php}"
+  mkdir -p "${DATA_DIR}/${sub}/conf.d"
+  cat > "${DATA_DIR}/${sub}/conf.d/99-laravel.ini" <<'PHPINI'
 output_buffering = 4096
 
 opcache.enable = 1
@@ -1311,8 +1349,9 @@ PHPINI
 }
 
 _write_php_fpm_slowlog_conf() {
-  mkdir -p "${DATA_DIR}/php/fpm.d"
-  cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
+  local sub="${1:-php}"
+  mkdir -p "${DATA_DIR}/${sub}/fpm.d"
+  cat > "${DATA_DIR}/${sub}/fpm.d/zz-slowlog.conf" <<'FPMCONF'
 ; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
 ; 小内存 VPS 默认上限，可按机器内存调高
 [www]
@@ -1328,12 +1367,13 @@ FPMCONF
 }
 
 _write_php_fpm_wave_pool_conf() {
-  mkdir -p "${DATA_DIR}/php/fpm.d"
-  local _wpf="${DATA_DIR}/php/fpm.d/wave-pool.conf"
+  local sub="${1:-php}"
+  mkdir -p "${DATA_DIR}/${sub}/fpm.d"
+  local _wpf="${DATA_DIR}/${sub}/fpm.d/wave-pool.conf"
   # Docker 在宿主机缺少该文件时 up 可能误建「目录」wave-pool.conf，导致 php-fpm 读配置失败、容器反复退出
   [[ -d "$_wpf" ]] && rm -rf "$_wpf"
   cat > "$_wpf" <<'FPMCONF'
-; SSE 专用池；Nginx fastcgi_pass php:9001；须监听 0.0.0.0 以便跨容器访问
+; SSE 专用池；Nginx fastcgi_pass <service>:9001；须监听 0.0.0.0 以便跨容器访问
 ; 可按内存调整 pm.max_children（每个长连接占 1 worker）
 [wave]
 user = www-data
@@ -1367,11 +1407,48 @@ MYCNF
 
 _ensure_php_fpm_slowlog_host_layout() {
   has_service "php" || return 0
-  mkdir -p "${DATA_DIR}/php/log"
-  : >>"${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
-  chown -R 82:82 "${DATA_DIR}/php/log" 2>/dev/null || true
-  chmod 755 "${DATA_DIR}/php/log" 2>/dev/null || true
-  chmod 664 "${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
+  local sub
+  for sub in php $(_php_extra_list | while read -r v; do _php_data_subdir "$v"; done); do
+    mkdir -p "${DATA_DIR}/${sub}/log"
+    : >>"${DATA_DIR}/${sub}/log/fpm-slow.log" 2>/dev/null || true
+    chown -R 82:82 "${DATA_DIR}/${sub}/log" 2>/dev/null || true
+    chmod 755 "${DATA_DIR}/${sub}/log" 2>/dev/null || true
+    chmod 664 "${DATA_DIR}/${sub}/log/fpm-slow.log" 2>/dev/null || true
+  done
+}
+
+_php_service_yaml() {
+  local ver="$1" php_deps="$2" php_env="$3"
+  local sub svc cname volname
+  sub="$(_php_data_subdir "$ver")"
+  svc="$(_php_service_name "$ver")"
+  cname="$(_php_container_name "$ver")"
+  if [[ "$ver" = "${PHP_VERSION}" ]]; then volname="php-extensions"; else volname="php-extensions-$(_php_ver_no_dot "$ver")"; fi
+  local out="
+  ${svc}:
+    image: php:${ver}-fpm-alpine
+    container_name: ${cname}
+    user: \"82:82\"
+    security_opt: [\"no-new-privileges:true\"]
+    volumes:
+      - ${DATA_DIR}/www:${CONTAINER_WWW}
+      - ${DATA_DIR}/${sub}/conf.d/99-laravel.ini:/usr/local/etc/php/conf.d/99-laravel.ini:ro
+      - ${DATA_DIR}/${sub}/fpm.d/zz-slowlog.conf:/usr/local/etc/php-fpm.d/zz-slowlog.conf:ro
+      - ${DATA_DIR}/${sub}/fpm.d/wave-pool.conf:/usr/local/etc/php-fpm.d/wave-pool.conf:ro
+      - ${DATA_DIR}/${sub}/log:/var/log/php-fpm
+      - ${DATA_DIR}/${sub}/composer-cache:/tmp/composer-cache
+      - ${volname}:/usr/local/lib/php/extensions"
+  if [[ -n "$php_env" ]]; then out+="
+    environment:
+${php_env}"; fi
+  if [[ -n "$php_deps" ]]; then out+="
+    depends_on:
+${php_deps}"; fi
+  out+="
+    restart: always
+    networks: [lnmp-net]
+"
+  printf '%s' "$out"
 }
 
 lnmp_gen_compose() {
@@ -1379,9 +1456,19 @@ lnmp_gen_compose() {
   chmod 1777 "${DATA_DIR}/php/composer-cache" 2>/dev/null || true
 
   if has_service "php"; then
-    _write_php_laravel_conf
-    _write_php_fpm_slowlog_conf
-    _write_php_fpm_wave_pool_conf
+    _write_php_laravel_conf "php"
+    _write_php_fpm_slowlog_conf "php"
+    _write_php_fpm_wave_pool_conf "php"
+    local _ev _esub
+    while IFS= read -r _ev; do
+      [[ -z "$_ev" ]] && continue
+      _esub="$(_php_data_subdir "$_ev")"
+      mkdir -p "${DATA_DIR}/${_esub}"/{conf.d,fpm.d,log,composer-cache}
+      chmod 1777 "${DATA_DIR}/${_esub}/composer-cache" 2>/dev/null || true
+      _write_php_laravel_conf "$_esub"
+      _write_php_fpm_slowlog_conf "$_esub"
+      _write_php_fpm_wave_pool_conf "$_esub"
+    done < <(_php_extra_list)
   fi
   _write_mysql_low_memory_conf
 
@@ -1392,6 +1479,13 @@ lnmp_gen_compose() {
   local volumes_section=""
 
   if has_service "nginx"; then
+    local _nginx_deps="[php"
+    local _ev
+    while IFS= read -r _ev; do
+      [[ -z "$_ev" ]] && continue
+      _nginx_deps+=", $(_php_service_name "$_ev")"
+    done < <(_php_extra_list)
+    _nginx_deps+="]"
     yaml+="
   nginx:
     image: ${NGINX_IMAGE}
@@ -1399,7 +1493,7 @@ lnmp_gen_compose() {
     user: \"101:101\"
     security_opt: [\"no-new-privileges:true\"]
     cap_add: [NET_BIND_SERVICE]
-    depends_on: [php]
+    depends_on: ${_nginx_deps}
     ports: [\"80:80\", \"443:443\"]
     volumes:
       - ${DATA_DIR}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -1422,35 +1516,18 @@ lnmp_gen_compose() {
 " && php_env+="      - REDIS_HOST=redis
 "
 
-    yaml+="
-  php:
-    image: php:${PHP_VERSION}-fpm-alpine
-    container_name: lnmp-php
-    user: \"82:82\"
-    security_opt: [\"no-new-privileges:true\"]
-    volumes:
-      - ${DATA_DIR}/www:${CONTAINER_WWW}
-      - ${DATA_DIR}/php/conf.d/99-laravel.ini:/usr/local/etc/php/conf.d/99-laravel.ini:ro
-      - ${DATA_DIR}/php/fpm.d/zz-slowlog.conf:/usr/local/etc/php-fpm.d/zz-slowlog.conf:ro
-      - ${DATA_DIR}/php/fpm.d/wave-pool.conf:/usr/local/etc/php-fpm.d/wave-pool.conf:ro
-      - ${DATA_DIR}/php/log:/var/log/php-fpm
-      - ${DATA_DIR}/php/composer-cache:/tmp/composer-cache
-      - php-extensions:/usr/local/lib/php/extensions"
-
-    if [[ -n "$php_env" ]]; then yaml+="
-    environment:
-${php_env}"; fi
-    if [[ -n "$php_deps" ]]; then yaml+="
-    depends_on:
-${php_deps}"; fi
-
-    yaml+="
-    restart: always
-    networks: [lnmp-net]
-"
+    yaml+="$(_php_service_yaml "$PHP_VERSION" "$php_deps" "$php_env")"
     volumes_section="
 volumes:
   php-extensions:"
+
+    local _ev
+    while IFS= read -r _ev; do
+      [[ -z "$_ev" ]] && continue
+      yaml+="$(_php_service_yaml "$_ev" "$php_deps" "$php_env")"
+      volumes_section+="
+  php-extensions-$(_php_ver_no_dot "$_ev"):"
+    done < <(_php_extra_list)
   fi
 
   if has_service "mysql"; then
@@ -1659,11 +1736,18 @@ install_lnmp() {
 
 _setup_logrotate() {
   command -v logrotate &>/dev/null || { info "logrotate 未安装，跳过日志轮转配置"; return 0; }
+  local extra_logs="" _ev _esub
+  while IFS= read -r _ev; do
+    [[ -z "$_ev" ]] && continue
+    _esub="$(_php_data_subdir "$_ev")"
+    extra_logs+="
+${DATA_DIR}/${_esub}/log/*.log"
+  done < <(_php_extra_list)
   cat > /etc/logrotate.d/lnmp <<LOGROTATE
 ${DATA_DIR}/logs/*.log
 /var/log/acme-renew.log
 ${DATA_DIR}/nginx/logs/*.log
-${DATA_DIR}/php/log/*.log {
+${DATA_DIR}/php/log/*.log${extra_logs} {
     daily
     rotate 14
     compress
@@ -1707,14 +1791,24 @@ update_lnmp() {
   if [[ -n "$one" ]]; then
     case "$one" in
       nginx|php|mysql|redis|acme) ;;
-      *) die "未知 LNMP 组件: $one（nginx|php|mysql|redis|acme）" ;;
+      php-*)
+        local _ev="${one#php-}"
+        _php_extra_list | grep -qx "$_ev" || die "未知 LNMP 组件: $one（请确认 EXTRA_PHP_VERSIONS 含此版本）"
+        local _esvc; _esvc="$(_php_service_name "$_ev")"
+        compose_cmd -f "$COMPOSE_FILE" pull "$_esvc"
+        _compose_lnmp_up_recreate "$_esvc"
+        _wait_container "$(_php_container_name "$_ev")" 45
+        _install_php_extensions_one "$(_php_container_name "$_ev")"
+        conf_save; ok "LNMP 已更新"; return 0
+        ;;
+      *) die "未知 LNMP 组件: $one（nginx|php|mysql|redis|acme|php-<版本>）" ;;
     esac
     has_service "$one" || die "当前编排未包含 lnmp-${one}"
     compose_cmd -f "$COMPOSE_FILE" pull "$one"
     _compose_lnmp_up_recreate "$one"
     if [[ "$one" = "php" ]]; then
       _wait_container "php" 45
-      _install_php_extensions
+      _install_php_extensions_one "lnmp-php"
     fi
   else
     compose_cmd -f "$COMPOSE_FILE" pull
@@ -1730,23 +1824,28 @@ update_lnmp() {
 
 _wait_container() {
   local name="$1" max="${2:-30}"
+  local cname="lnmp-${name}"
+  [[ "$name" = lnmp-* ]] && cname="$name"
   for _ in $(seq 1 "$max"); do
-    container_ok "$name" && docker exec "lnmp-${name}" true &>/dev/null && return 0
+    docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$" \
+      && docker exec "$cname" true &>/dev/null && return 0
     sleep 2
   done
-  if [[ "$name" = "php" ]]; then
-    warn "lnmp-php 诊断提示: docker logs lnmp-php 2>&1 | tail -n 40"
-    warn "若曾缺少 wave-pool.conf 即执行过 compose up，宿主机 ${DATA_DIR}/php/fpm.d/wave-pool.conf 可能被建成目录；应 rm -rf 后重新 init 写入配置并 force-recreate php"
+  if [[ "$cname" = lnmp-php* ]]; then
+    local _sub="php"
+    [[ "$cname" != "lnmp-php" ]] && _sub="php-${cname#lnmp-php-}"
+    warn "${cname} 诊断提示: docker logs ${cname} 2>&1 | tail -n 40"
+    warn "若曾缺少 wave-pool.conf 即执行过 compose up，宿主机 ${DATA_DIR}/${_sub}/fpm.d/wave-pool.conf 可能被建成目录；应 rm -rf 后重新 init 写入配置并 force-recreate ${cname#lnmp-}"
   fi
-  die "容器 lnmp-${name} 启动超时"
+  die "容器 ${cname} 启动超时"
 }
 
 _php_ext_exec_with_apk_retry() {
-  local inner="$1"
+  local cname="$1" inner="$2"
   local attempt=1 max=12 pause=5
   sleep 2
   while ((attempt <= max)); do
-    if docker exec -u root -e TERM=dumb lnmp-php sh -c "$inner"; then
+    if docker exec -u root -e TERM=dumb "$cname" sh -c "$inner"; then
       return 0
     fi
     if ((attempt < max)); then
@@ -1758,8 +1857,9 @@ _php_ext_exec_with_apk_retry() {
   return 1
 }
 
-_install_php_extensions() {
-  info "安装 PHP 扩展..."
+_install_php_extensions_one() {
+  local cname="$1"
+  info "安装 PHP 扩展（${cname}）..."
 
   IFS=',' read -ra exts <<< "$PHP_EXTENSIONS"
   local need_gd=0 need_intl=0 need_redis=0
@@ -1778,31 +1878,61 @@ _install_php_extensions() {
   local alpine_sed=""
   [[ -n "$ALPINE_MIRROR" ]] && alpine_sed="sed -i 's|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g' /etc/apk/repositories && apk update && "
 
+  local php_ver gd_args redis_pkg
+  php_ver="$(docker exec "$cname" php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || true)"
+  [[ "$php_ver" =~ ^[0-9]+\.[0-9]+$ ]] || php_ver=""
+  : "${php_ver:=8.3}"
+  gd_args="--with-freetype --with-jpeg --with-webp"
+  _lv_ge "$php_ver" "7.4" || gd_args="--with-freetype-dir=/usr --with-jpeg-dir=/usr --with-png-dir=/usr --with-webp-dir=/usr"
+  if   ! _lv_ge "$php_ver" "7.2"; then redis_pkg="redis-4.3.0"
+  elif ! _lv_ge "$php_ver" "7.4"; then redis_pkg="redis-5.3.7"
+  else redis_pkg=""; fi
+
   local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
   local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
 
-  if [[ $need_gd -eq 1 ]]; then cmd+=" && docker-php-ext-configure gd --with-freetype --with-jpeg --with-webp"; fi
-  if [[ $need_intl -eq 1 ]]; then cmd+=" && docker-php-ext-configure intl"; fi
+  if [[ $need_gd -eq 1 ]]; then cmd+=" && docker-php-ext-configure gd ${gd_args}"; fi
+  if [[ $need_intl -eq 1 ]]; then
+    if _lv_ge "$php_ver" "7.2"; then
+      cmd+=" && docker-php-ext-configure intl"
+    else
+      warn "PHP ${php_ver} 镜像下 intl 编译可能因 icu 版本不兼容而失败，自动跳过 intl（${cname}）"
+      need_intl=0
+      ext_install=$(echo " $ext_install " | sed 's/ intl / /g' | xargs)
+    fi
+  fi
   if [[ -n "$ext_install" ]]; then cmd+=" && docker-php-ext-install -j\$(nproc) ${ext_install}"; fi
   if [[ $need_redis -eq 1 ]]; then
-    cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install redis || true; fi"
+    cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install ${redis_pkg:-redis} || true; fi"
     cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
   fi
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
 
   cmd="sleep 2; ${cmd}"
-  _php_ext_exec_with_apk_retry "$cmd" || die "PHP 扩展安装失败（apk 多次重试仍失败：请确认无其他进程在 lnmp-php 内执行 apk，或 docker restart lnmp-php 后重试）"
-  docker restart lnmp-php
-  _wait_container "php" 20
+  _php_ext_exec_with_apk_retry "$cname" "$cmd" || die "PHP 扩展安装失败（apk 多次重试仍失败：请确认无其他进程在 ${cname} 内执行 apk，或 docker restart ${cname} 后重试）"
+  docker restart "$cname"
+  local svc="${cname#lnmp-}"
+  _wait_container "$svc" 20
 
   if [[ $need_redis -eq 1 ]]; then
-    docker exec lnmp-php php -m | grep -q redis || die "PHP redis 扩展安装失败"
+    docker exec "$cname" php -m | grep -q redis || die "PHP redis 扩展安装失败（${cname}）"
   fi
   if [[ " $ext_install " = *" pdo_mysql "* ]]; then
-    docker exec lnmp-php php -m | grep -q pdo_mysql || die "PHP pdo_mysql 扩展安装失败"
+    docker exec "$cname" php -m | grep -q pdo_mysql || die "PHP pdo_mysql 扩展安装失败（${cname}）"
   fi
 
-  ok "PHP 扩展安装完成"
+  ok "PHP 扩展安装完成（${cname}）"
+}
+
+_install_php_extensions() {
+  _install_php_extensions_one "lnmp-php"
+  local _ev _ec
+  while IFS= read -r _ev; do
+    [[ -z "$_ev" ]] && continue
+    _ec="$(_php_container_name "$_ev")"
+    _wait_container "$_ec" 45
+    _install_php_extensions_one "$_ec"
+  done < <(_php_extra_list)
 }
 
 _setup_acme_cron() {
@@ -1833,9 +1963,36 @@ uninstall_lnmp() {
       cd "$DATA_DIR" && compose_cmd -f "$COMPOSE_FILE" down -v 2>/dev/null || true
     fi
     LNMP_SERVICES=""
+    EXTRA_PHP_VERSIONS=""
     /bin/rm -f "$COMPOSE_FILE"
     if confirm "是否删除数据目录 ${DATA_DIR}？" "n"; then
       /bin/rm -rf "$DATA_DIR"
+    fi
+  elif [[ "$component" = php-* ]]; then
+    local _ev="${component#php-}"
+    local _esvc; _esvc="$(_php_service_name "$_ev")"
+    local _ec;   _ec="$(_php_container_name "$_ev")"
+    local _esub; _esub="$(_php_data_subdir "$_ev")"
+    docker stop "$_ec" 2>/dev/null || true
+    docker rm "$_ec" 2>/dev/null || true
+    # compose project 名取决于 cwd basename / -p 参数；用模糊匹配兜底防漏删
+    local _vsfx="php-extensions-$(_php_ver_no_dot "$_ev")"
+    docker volume rm "$(basename "$DATA_DIR")_${_vsfx}" 2>/dev/null || true
+    docker volume ls -q 2>/dev/null | awk -v p="_${_vsfx}\$" '$0 ~ p' \
+      | xargs -r docker volume rm 2>/dev/null || true
+    local newv="" v
+    while IFS= read -r v; do
+      [[ -z "$v" ]] && continue
+      [[ "$v" = "$_ev" ]] && continue
+      newv+="${newv:+,}${v}"
+    done < <(_php_extra_list)
+    EXTRA_PHP_VERSIONS="$newv"
+    if [[ -d "${DATA_DIR}/${_esub}" ]] && confirm "是否删除 ${DATA_DIR}/${_esub} 数据目录（含日志/扩展缓存）？" "n"; then
+      /bin/rm -rf "${DATA_DIR}/${_esub}"
+    fi
+    if has_service "php"; then
+      lnmp_gen_compose
+      compose_cmd -f "$COMPOSE_FILE" up -d 2>/dev/null || true
     fi
   else
     local new_services=""
@@ -1849,6 +2006,17 @@ uninstall_lnmp() {
 
     docker stop "lnmp-${component}" 2>/dev/null || true
     docker rm "lnmp-${component}" 2>/dev/null || true
+
+    if [[ "$component" = "php" ]]; then
+      local _ev _ec
+      while IFS= read -r _ev; do
+        [[ -z "$_ev" ]] && continue
+        _ec="$(_php_container_name "$_ev")"
+        docker stop "$_ec" 2>/dev/null || true
+        docker rm "$_ec" 2>/dev/null || true
+      done < <(_php_extra_list)
+      EXTRA_PHP_VERSIONS=""
+    fi
 
     if [[ -n "$LNMP_SERVICES" ]]; then
       lnmp_gen_compose
@@ -1910,13 +2078,23 @@ show_status() {
     fi
     printf "  %-20s %s\n" "lnmp-${c}" "$_s"
   done
+  local _ev _ec
+  while IFS= read -r _ev; do
+    [[ -z "$_ev" ]] && continue
+    _ec="$(_php_container_name "$_ev")"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_ec}$"; then _s="运行中 (PHP ${_ev})"
+    elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${_ec}$"; then _s="已停止 (PHP ${_ev})"
+    else _s="未部署 (PHP ${_ev})"; fi
+    printf "  %-20s %s\n" "${_ec}" "$_s"
+  done < <(_php_extra_list)
 
   echo ""
   has_service "nginx" && printf "  %-20s %s\n" "Nginx 镜像" "${NGINX_IMAGE:-}"
   has_service "mysql" && printf "  %-20s %s\n" "MySQL 镜像" "${MYSQL_IMAGE:-}"
   has_service "redis" && printf "  %-20s %s\n" "Redis 镜像" "${REDIS_IMAGE:-}"
   has_service "acme" && printf "  %-20s %s\n" "ACME 镜像" "${ACME_IMAGE:-}"
-  printf "  %-20s %s\n" "PHP 版本" "${PHP_VERSION:-未配置}"
+  printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}"
+  printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
   printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
   printf "  %-20s %s\n" "GitHub 代理" "${GH_PROXY:-无}"
   printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"
@@ -1928,12 +2106,28 @@ show_status() {
 #  配置收集（交互模式）
 # ═══════════════════════════════════════════════
 collect_github_proxy() {
+  echo ""
+  info "当前: ${GH_PROXY:-<官方直连>}"
   local idx
-  idx=$(menu_select "GitHub 加速代理" "官方源（直连）" "ghfast.top" "自定义")
+  idx=$(menu_select "GitHub 加速代理" \
+    "保持当前不变" \
+    "官方源（直连）" \
+    "ghfast.top（推荐国内）" \
+    "自定义")
   case "$idx" in
-    0) GH_PROXY="" ;;
-    1) GH_PROXY="https://ghfast.top" ;;
-    2) GH_PROXY=$(prompt "GitHub 代理地址 (如 https://ghfast.top)"); GH_PROXY="${GH_PROXY%/}" ;;
+    0) return 0 ;;
+    1) GH_PROXY="" ;;
+    2) GH_PROXY="https://ghfast.top" ;;
+    3)
+      while true; do
+        GH_PROXY=$(prompt "GitHub 代理地址 (如 https://ghfast.top；- 清空)")
+        if [[ "$GH_PROXY" = "-" ]]; then GH_PROXY=""; return 0; fi
+        if [[ "$GH_PROXY" =~ ^https?://[^[:space:]]+$ ]]; then
+          GH_PROXY="${GH_PROXY%/}"; return 0
+        fi
+        warn "无效 URL，请重新输入（http/https 开头）"
+      done
+      ;;
   esac
 }
 
@@ -1978,21 +2172,111 @@ collect_php_version() {
     3) PHP_VERSION="8.4" ;;
     4) PHP_VERSION="8.5" ;;
     5)
-      PHP_VERSION=$(prompt "主版本号" "${PHP_VERSION:-8.3}")
-      [[ -n "$PHP_VERSION" ]] || PHP_VERSION="8.3"
-      if ! [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+ ]]; then die "无效的 PHP 版本格式（需如 8.3）"; fi
+      while true; do
+        PHP_VERSION=$(prompt "主版本号 (X.Y)" "${PHP_VERSION:-8.3}")
+        [[ -z "$PHP_VERSION" ]] && PHP_VERSION="8.3"
+        [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] && break
+        warn "无效的 PHP 版本格式：${PHP_VERSION}（应为 8.3 / 7.4 形式），请重新输入"
+      done
       ;;
   esac
 }
 
+collect_extra_php_versions() {
+  echo ""
+  info "额外 PHP 版本（与默认 ${PHP_VERSION} 共存，每版本独立 fpm 容器：lnmp-php-XX）"
+  info "当前: ${EXTRA_PHP_VERSIONS:-<无>}"
+  local -a _cands=(5.6 7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4)
+  # 过滤已是默认版的项
+  local -a _items=() _idx_ver=()
+  local _c
+  for _c in "${_cands[@]}"; do
+    [[ "$_c" = "$PHP_VERSION" ]] && continue
+    _items+=("$_c")
+    _idx_ver+=("$_c")
+  done
+  _items+=("不启用 / 清空" "保持当前不变" "手动输入 CSV...")
+
+  local sel; sel=$(menu_multi "勾选要启用的额外 PHP 版本（同时选「保持当前」会忽略其他勾选）" "${_items[@]}")
+
+  local _last1=$(( ${#_items[@]} - 1 ))
+  local _last2=$(( ${#_items[@]} - 2 ))
+  local _last3=$(( ${#_items[@]} - 3 ))
+
+  # 包含「保持当前」→ 直接返回
+  for _i in $sel; do
+    if [[ "$_i" -eq "$_last2" ]]; then
+      info "保持原值不变: ${EXTRA_PHP_VERSIONS:-<无>}"
+      return 0
+    fi
+  done
+  # 包含「不启用」→ 清空
+  for _i in $sel; do
+    if [[ "$_i" -eq "$_last3" ]]; then
+      EXTRA_PHP_VERSIONS=""
+      info "已清空"
+      return 0
+    fi
+  done
+  # 包含「手动输入」→ 走 CSV，校验失败循环重输
+  for _i in $sel; do
+    if [[ "$_i" -eq "$_last1" ]]; then
+      while true; do
+        local v
+        v=$(prompt "EXTRA_PHP_VERSIONS（CSV，例 7.4,8.2；- 清空）" "${EXTRA_PHP_VERSIONS:-}")
+        if [[ "$v" = "-" ]]; then EXTRA_PHP_VERSIONS=""; return 0; fi
+        v="${v//[[:space:]]/}"
+        local out="" one bad=0
+        IFS=',' read -ra _vs <<< "$v"
+        for one in "${_vs[@]}"; do
+          [[ -z "$one" ]] && continue
+          if ! [[ "$one" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            warn "无效 PHP 版本: $one（应为 7.4 / 8.2 形式），请重新输入整行"
+            bad=1; break
+          fi
+          [[ "$one" = "$PHP_VERSION" ]] && { warn "已是默认 PHP 版本，跳过: $one"; continue; }
+          case ",$out," in *",$one,"*) continue ;; esac
+          out+="${out:+,}${one}"
+        done
+        [[ $bad -eq 1 ]] && continue
+        EXTRA_PHP_VERSIONS="$out"
+        return 0
+      done
+    fi
+  done
+  # 普通勾选合并（去重）
+  local out=""
+  for _i in $sel; do
+    [[ "$_i" -ge "${#_idx_ver[@]}" ]] && continue
+    local v="${_idx_ver[$_i]}"
+    case ",$out," in *",$v,"*) continue ;; esac
+    out+="${out:+,}${v}"
+  done
+  EXTRA_PHP_VERSIONS="$out"
+  info "已启用: ${EXTRA_PHP_VERSIONS:-<无>}"
+}
+
 collect_php_extensions() {
   local -a all_exts=(pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif intl fileinfo redis)
+  echo ""
+  info "当前已选: ${PHP_EXTENSIONS:-<空，默认全选>}"
   local sel
-  sel=$(menu_multi "PHP 扩展" "${all_exts[@]}")
-  PHP_EXTENSIONS=""
+  sel=$(menu_multi "PHP 扩展（回车=全选；空选=保留当前不变）" "${all_exts[@]}")
+  # menu_multi 返回为空 → 仅可能是 items 全部不可解析；按"全选"语义已在内部默认；
+  # 这里再做一次防御：用户若手动输入了非数字（如 -），保留当前值
+  local out=""
   for idx in $sel; do
-    PHP_EXTENSIONS+="${PHP_EXTENSIONS:+,}${all_exts[$idx]}"
+    out+="${out:+,}${all_exts[$idx]}"
   done
+  if [[ -z "$out" ]]; then
+    if [[ -n "$PHP_EXTENSIONS" ]]; then
+      info "保持当前不变"
+      return 0
+    fi
+    # 兜底：合理的 Laravel 默认集
+    out="pdo_mysql,opcache,mysqli,curl,gd,xml,dom,pcntl,bcmath,sockets,mbstring,zip,exif,intl,fileinfo,redis"
+  fi
+  PHP_EXTENSIONS="$out"
 }
 
 collect_mysql_password() {
@@ -2000,23 +2284,38 @@ collect_mysql_password() {
 }
 
 collect_acme_email() {
-  ACME_EMAIL=$(prompt "ACME 证书邮箱")
-  if [[ ! "$ACME_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]]; then die "邮箱格式无效"; fi
+  while true; do
+    ACME_EMAIL=$(prompt "ACME 证书邮箱（用于 Let's Encrypt 注册）" "${ACME_EMAIL:-}")
+    [[ "$ACME_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
+    warn "邮箱格式无效：${ACME_EMAIL:-<空>}，请重新输入"
+  done
 }
 
 collect_acme_ssl_dns_default() {
   info "deploy-site.sh 交互时未指定 --dns 的默认值（仅模式名，不含各云密钥）"
-  local v
-  v=$(prompt "默认 (webroot/dns_cf/dns_ali/dns_dp/dns_gd/dns_aws/dns_tencent)" "${ACME_SSL_DNS_DEFAULT:-webroot}")
-  case "$v" in
-    webroot|dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) ACME_SSL_DNS_DEFAULT="$v" ;;
-    *) die "无效值: $v" ;;
+  local _i
+  _i=$(menu_select "默认 SSL 校验方式" \
+    "webroot   (HTTP-01；最常见)" \
+    "dns_cf    (Cloudflare API Token)" \
+    "dns_ali   (阿里云 DNS Ali_Key/Secret)" \
+    "dns_dp    (DNSPod DP_Id/DP_Key)" \
+    "dns_gd    (GoDaddy)" \
+    "dns_aws   (Route53)" \
+    "dns_tencent (腾讯云 DNSPod API)")
+  case "$_i" in
+    0) ACME_SSL_DNS_DEFAULT="webroot" ;;
+    1) ACME_SSL_DNS_DEFAULT="dns_cf" ;;
+    2) ACME_SSL_DNS_DEFAULT="dns_ali" ;;
+    3) ACME_SSL_DNS_DEFAULT="dns_dp" ;;
+    4) ACME_SSL_DNS_DEFAULT="dns_gd" ;;
+    5) ACME_SSL_DNS_DEFAULT="dns_aws" ;;
+    6) ACME_SSL_DNS_DEFAULT="dns_tencent" ;;
   esac
 }
 
 collect_ssh_config() {
   local idx
-  idx=$(menu_select "SSH root 登录策略" "禁止 root 登录" "root 仅密钥登录")
+  idx=$(menu_select "SSH root 登录策略" "禁止 root 登录（推荐）" "root 仅密钥登录")
   case "$idx" in
     0) ROOT_LOGIN="no" ;;
     1) ROOT_LOGIN="prohibit-password" ;;
@@ -2024,8 +2323,13 @@ collect_ssh_config() {
 
   idx=$(menu_select "SSH 端口" "默认 22" "自定义")
   if [[ "$idx" = "1" ]]; then
-    SSH_PORT=$(prompt "SSH 端口 (1024-65535)")
-    if ! [[ "$SSH_PORT" -ge 1024 && "$SSH_PORT" -le 65535 ]] 2>/dev/null; then die "端口范围 1024-65535"; fi
+    while true; do
+      SSH_PORT=$(prompt "SSH 端口 (1024-65535)" "${SSH_PORT:-22022}")
+      if [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1024 && SSH_PORT <= 65535 )); then
+        break
+      fi
+      warn "端口范围 1024-65535，请重新输入"
+    done
   else
     SSH_PORT=22
   fi
@@ -2033,31 +2337,42 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  sel=$(menu_multi "LNMP 组件" "nginx" "php" "mysql" "redis" "acme.sh")
+  sel=$(menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "redis" "acme.sh")
   LNMP_SERVICES=""
   local -a names=(nginx php mysql redis acme)
   for idx in $sel; do
     LNMP_SERVICES+="${LNMP_SERVICES:+,}${names[$idx]}"
   done
+  # nginx 选了 → 自动补 php（fastcgi 后端）
   if [[ ",$LNMP_SERVICES," = *",nginx,"* && ",$LNMP_SERVICES," != *",php,"* ]]; then
     LNMP_SERVICES+=",php"
+    info "已自动补充 php（nginx fastcgi 后端必需）"
+  fi
+  # acme webroot 模式需要 nginx 提供 .well-known 端点
+  if [[ ",$LNMP_SERVICES," = *",acme,"* && ",$LNMP_SERVICES," != *",nginx,"* ]]; then
+    warn "已选 acme 但未选 nginx：webroot 校验将不可用，仅 dns_* 模式可签证书"
   fi
 }
 
 _collect_image() {
   local _varname="$1" _title="$2" _default="$3"; shift 3
   local -a _options=("$@")
-  _options+=("自定义（完整 镜像:TAG）")
+  local _cur="${!_varname:-$_default}"
+  _options+=("保持当前不变（${_cur}）" "自定义（完整 镜像:TAG）")
+  local _last=$(( ${#_options[@]} - 1 ))
+  local _keep=$(( ${#_options[@]} - 2 ))
   local _idx _val
-  _idx=$(menu_select "$_title" "${_options[@]}")
-  if [[ "$_idx" -lt $(( ${#_options[@]} - 1 )) ]]; then
+  _idx=$(menu_select "${_title}（当前: ${_cur}）" "${_options[@]}")
+  if [[ "$_idx" -eq "$_keep" ]]; then
+    return 0
+  elif [[ "$_idx" -eq "$_last" ]]; then
+    _val=$(prompt "镜像:TAG" "$_cur")
+    [[ -n "$_val" ]] || _val="$_default"
+    printf -v "$_varname" '%s' "$_val"
+  else
     _val="${_options[$_idx]}"
     _val="${_val%% (*}"
     _val="${_val%% }"
-    printf -v "$_varname" '%s' "$_val"
-  else
-    _val=$(prompt "镜像:TAG" "$_default")
-    [[ -n "$_val" ]] || _val="$_default"
     printf -v "$_varname" '%s' "$_val"
   fi
 }
@@ -2102,32 +2417,23 @@ interactive_setup() {
   show_status
 
   while true; do
-    echo ""
-    hr
-    info "操作菜单"
-    hr
-    echo ""
-    echo "    1) 全新安装（完整向导）"
-    echo "    2) 安装单个组件"
-    echo "    3) 卸载单个组件"
-    echo "    4) 更新配置"
-    echo "    5) 查看状态"
-    echo "    6) 账户管理（用户/组/密码/SSH 公钥/AllowUsers）"
-    echo "    0) 退出"
-    echo ""
-
-    local choice
-    read -rp "  选择 [0-6]: " choice
-
-    case "$choice" in
+    local _i
+    _i=$(menu_select "请选择操作" \
+      "查看状态" \
+      "全新安装（完整向导）" \
+      "更新配置（含 PHP 多版本、镜像源、SSH 等）" \
+      "安装单个组件" \
+      "账户管理（用户/组/密码/SSH 公钥/AllowUsers）" \
+      "卸载单个组件" \
+      "退出")
+    case "$_i" in
+      0) show_status ;;
       1) _interactive_full_install ;;
-      2) _interactive_install_one ;;
-      3) _interactive_uninstall_one ;;
-      4) _interactive_config ;;
-      5) show_status ;;
-      6) _interactive_account_mgmt ;;
-      0) echo ""; ok "退出"; exit 0 ;;
-      *) warn "无效选择" ;;
+      2) _interactive_config ;;
+      3) _interactive_install_one ;;
+      4) _interactive_account_mgmt ;;
+      5) _interactive_uninstall_one ;;
+      6) echo ""; ok "退出"; exit 0 ;;
     esac
   done
 }
@@ -2137,31 +2443,57 @@ _interactive_full_install() {
   hr; info "完整安装向导"; hr; echo ""
 
   local sel
-  sel=$(menu_multi "选择要安装的模块" "SSH 安全策略" "等保加固" "BBR" "Oh-My-Zsh" "Firewalld" "Docker" "LNMP" "Wheel 管理员" "saferm 安全删除")
+  sel=$(menu_multi "选择要安装的模块（推荐最少：Docker + LNMP；按高频排序）" \
+    "Docker (LNMP 前置)" \
+    "LNMP (nginx + php + mysql + redis + acme)" \
+    "SSH 安全策略 (改端口/禁 root)" \
+    "Firewalld (防火墙)" \
+    "BBR (TCP 拥塞)" \
+    "Oh-My-Zsh" \
+    "Wheel 管理员" \
+    "等保加固 (cyber 用户)" \
+    "saferm 安全删除")
 
   local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
     case "$idx" in
-      0) sel_ssh=1 ;; 1) sel_cyber=1 ;; 2) sel_bbr=1 ;; 3) sel_zsh=1 ;;
-      4) sel_fire=1 ;; 5) sel_docker=1 ;; 6) sel_lnmp=1 ;; 7) sel_wheel=1 ;;
+      0) sel_docker=1 ;; 1) sel_lnmp=1 ;;  2) sel_ssh=1 ;;   3) sel_fire=1 ;;
+      4) sel_bbr=1 ;;   5) sel_zsh=1 ;;   6) sel_wheel=1 ;; 7) sel_cyber=1 ;;
       8) sel_saferm=1 ;;
     esac
   done
 
-  collect_github_proxy
+  # LNMP 选了但 Docker 没勾 → 自动补，避免 install_lnmp 时 docker 不在
+  if [[ $sel_lnmp -eq 1 && $sel_docker -eq 0 ]] && ! is_docker_ok; then
+    info "已自动补充 Docker（LNMP 依赖）"
+    sel_docker=1
+  fi
 
+  # ── 收集顺序：账号 → 网络/源 → 基础设施(docker) → 应用(lnmp) → 系统加固(ssh) ──
+
+  # 1) 账号优先（LNMP 安装时 chown 需要 DEVOPS_USER 已确定）
+  DEVOPS_USER=$(prompt "devops 部署用户名" "${DEVOPS_USER:-devops}")
+  if [[ $sel_wheel -eq 1 ]]; then WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); fi
+
+  # 2) 仅当真用得到 GitHub 时才问代理（zsh / lnmp 需要 acme.sh 等）
+  if [[ $sel_zsh -eq 1 || $sel_lnmp -eq 1 || $sel_saferm -eq 1 ]]; then
+    collect_github_proxy
+  fi
+
+  # 3) Docker 镜像源（先于 LNMP，因为 LNMP 的 image pull 走它）
   if [[ $sel_docker -eq 1 ]]; then collect_docker_mirrors; fi
+
+  # 4) LNMP 套件（components → images → php(默认/额外/扩展/源) → mysql → acme）
   if [[ $sel_lnmp -eq 1 ]]; then
     collect_lnmp_services
     collect_lnmp_stack_images
-    if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_php_extensions; fi
+    if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "acme"; then collect_acme_email; fi
   fi
-  if [[ $sel_ssh -eq 1 ]]; then collect_ssh_config; fi
 
-  DEVOPS_USER=$(prompt "devops 部署用户名" "${DEVOPS_USER:-devops}")
-  if [[ $sel_wheel -eq 1 ]]; then WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); fi
+  # 5) SSH 安全策略（最后问：会改 sshd 配置，留给末尾减少变更冲突）
+  if [[ $sel_ssh -eq 1 ]]; then collect_ssh_config; fi
 
   echo ""
   hr; info "配置确认"; hr
@@ -2175,7 +2507,8 @@ _interactive_full_install() {
     if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
     if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"; fi
     if has_service "php"; then
-      printf "  %-20s %s\n" "PHP 版本" "$PHP_VERSION"
+      printf "  %-20s %s\n" "PHP 版本（默认）" "$PHP_VERSION"
+      printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
       printf "  %-20s %s\n" "PHP 扩展" "$PHP_EXTENSIONS"
       printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
     fi
@@ -2214,58 +2547,88 @@ _interactive_full_install() {
 
 _interactive_install_one() {
   local idx
-  idx=$(menu_select "选择要安装的组件" \
-    "BBR" "Firewalld" "Docker" "Oh-My-Zsh" "SSH 安全" "LNMP (全部)" \
-    "LNMP - nginx" "LNMP - php" "LNMP - mysql" "LNMP - redis" "LNMP - acme" \
-    "Wheel 管理员" "等保加固" "Devops 用户" "saferm 安全删除")
+  idx=$(menu_select "选择要安装的组件（按高频排序）" \
+    "LNMP (全部，推荐)" \
+    "LNMP - php" \
+    "LNMP - mysql" \
+    "LNMP - redis" \
+    "LNMP - nginx" \
+    "LNMP - acme" \
+    "Docker" \
+    "Devops 用户" \
+    "Wheel 管理员" \
+    "SSH 安全策略" \
+    "Firewalld" \
+    "BBR" \
+    "Oh-My-Zsh" \
+    "saferm 安全删除" \
+    "等保加固")
 
   case "$idx" in
-    0)  install_bbr ;;
-    1)  install_firewall ;;
-    2)  collect_docker_mirrors; install_docker ;;
-    3)  collect_github_proxy; install_zsh ;;
-    4)  collect_ssh_config; install_ssh ;;
-    5)
+    0)
+      DEVOPS_USER=$(prompt "devops 部署用户名（LNMP chown 需要）" "${DEVOPS_USER:-devops}")
       collect_lnmp_services
       collect_lnmp_stack_images
-      if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_php_extensions; fi
+      if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
       if has_service "mysql"; then collect_mysql_password; fi
       if has_service "acme"; then collect_acme_email; fi
       install_lnmp
       ;;
-    6)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
-    7)  collect_php_version; collect_php_extensions; collect_alpine_mirror
+    1)  collect_php_version; collect_extra_php_versions; collect_php_extensions; collect_alpine_mirror
         LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
-    8)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
-    9)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
-    10) collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
-    11) WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
-    12) setup_cyber_users ;;
-    13) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
-    14) install_saferm ;;
+    2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
+    3)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
+    4)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
+    5)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
+    6)  collect_docker_mirrors; install_docker ;;
+    7)  DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
+    8)  WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
+    9)  collect_ssh_config; install_ssh ;;
+    10) install_firewall ;;
+    11) install_bbr ;;
+    12) collect_github_proxy; install_zsh ;;
+    13) install_saferm ;;
+    14) setup_cyber_users ;;
   esac
   conf_save
 }
 
 _interactive_uninstall_one() {
   local idx
-  idx=$(menu_select "选择要卸载的组件" \
-    "BBR" "Firewalld" "Docker" "Oh-My-Zsh" "SSH (恢复默认)" \
-    "LNMP (全部)" "LNMP - nginx" "LNMP - php" "LNMP - mysql" "LNMP - redis" "LNMP - acme" \
-    "saferm")
+  idx=$(menu_select "选择要卸载的组件（高危操作前会二次确认）" \
+    "LNMP - php"   "LNMP - mysql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" \
+    "LNMP (全部)" "Docker" \
+    "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm")
+
+  # 高危项：标题→需要二次确认
+  local _danger_msg=""
+  case "$idx" in
+    0) _danger_msg="将停止 lnmp-php 与所有 lnmp-php-XX 容器" ;;
+    1) _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
+    2) _danger_msg="将停止并移除 lnmp-redis 容器" ;;
+    3) _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
+    4) _danger_msg="将停止并移除 lnmp-acme 容器" ;;
+    5) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
+    6) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
+    7) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
+  esac
+  if [[ -n "$_danger_msg" ]]; then
+    warn "$_danger_msg"
+    confirm "确认继续？" "n" || { info "已取消"; return 0; }
+  fi
 
   case "$idx" in
-    0)  uninstall_bbr ;;
-    1)  uninstall_firewall ;;
-    2)  uninstall_docker ;;
-    3)  uninstall_zsh ;;
-    4)  uninstall_ssh ;;
+    0)  uninstall_lnmp "php" ;;
+    1)  uninstall_lnmp "mysql" ;;
+    2)  uninstall_lnmp "redis" ;;
+    3)  uninstall_lnmp "nginx" ;;
+    4)  uninstall_lnmp "acme" ;;
     5)  uninstall_lnmp "all" ;;
-    6)  uninstall_lnmp "nginx" ;;
-    7)  uninstall_lnmp "php" ;;
-    8)  uninstall_lnmp "mysql" ;;
-    9)  uninstall_lnmp "redis" ;;
-    10) uninstall_lnmp "acme" ;;
+    6)  uninstall_docker ;;
+    7)  uninstall_ssh ;;
+    8)  uninstall_firewall ;;
+    9)  uninstall_bbr ;;
+    10) uninstall_zsh ;;
     11) uninstall_saferm ;;
   esac
   conf_save
@@ -2273,21 +2636,55 @@ _interactive_uninstall_one() {
 
 _interactive_config() {
   local idx
-  idx=$(menu_select "选择要更新的配置" \
-    "GitHub 代理" "Docker 镜像源" "Alpine 源" "PHP 版本" "PHP 扩展" \
-    "LNMP 组件镜像" "SSH 配置" "ACME 邮箱" "ACME SSL 默认 (deploy-site)" "Devops 用户")
+  idx=$(menu_select "选择要更新的配置（按高频排序）" \
+    "PHP 版本（额外，多版本共存）" \
+    "PHP 扩展" \
+    "PHP 版本（默认）" \
+    "LNMP 组件镜像" \
+    "Docker 镜像源" \
+    "Alpine 源" \
+    "GitHub 代理" \
+    "SSH 配置" \
+    "ACME 邮箱" \
+    "ACME SSL 默认 (deploy-site)" \
+    "Devops 用户")
 
   case "$idx" in
-    0) collect_github_proxy ;;
-    1) collect_docker_mirrors; _configure_docker_daemon ;;
-    2) collect_alpine_mirror ;;
-    3) collect_php_version ;;
-    4) collect_php_extensions; if has_service "php" && container_ok "php"; then _install_php_extensions; fi ;;
-    5) collect_lnmp_stack_images; if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok; then update_lnmp; else ok "已写入配置，安装 LNMP 后生效"; fi ;;
-    6) collect_ssh_config; install_ssh ;;
-    7) collect_acme_email ;;
-    8) collect_acme_ssl_dns_default ;;
-    9) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
+    0) collect_extra_php_versions
+       if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok && has_service "php"; then
+         update_lnmp
+       else
+         ok "已写入配置（安装 LNMP 后生效；可在主菜单 → 安装单个组件 → LNMP - php 重建）"
+       fi
+       ;;
+    1) collect_php_extensions
+       if has_service "php" && container_ok "lnmp-php"; then
+         _install_php_extensions
+       else
+         ok "已写入配置（lnmp-php 未运行，下次启动后通过此菜单或 LNMP - php 重建生效）"
+       fi
+       ;;
+    2) collect_php_version
+       if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok && has_service "php"; then
+         warn "默认 PHP 版本变更需重建 lnmp-php 容器（用同一菜单 → LNMP - php 单组件安装）"
+       fi
+       ;;
+    3) collect_lnmp_stack_images; if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok; then update_lnmp; else ok "已写入配置，安装 LNMP 后生效"; fi ;;
+    4) collect_docker_mirrors
+       if is_docker_ok; then _configure_docker_daemon; else ok "已写入配置（Docker 未安装，安装后自动应用）"; fi
+       ;;
+    5) collect_alpine_mirror; ok "已写入配置（PHP 扩展安装时生效）" ;;
+    6) collect_github_proxy ;;
+    7) collect_ssh_config; install_ssh ;;
+    8) collect_acme_email
+       if container_ok "lnmp-acme"; then
+         info "更新 acme.sh 注册账户邮箱..."
+         docker exec lnmp-acme acme.sh --register-account -m "$ACME_EMAIL" 2>/dev/null \
+           && ok "邮箱已更新" || warn "更新失败（首次签证书时也会自动注册）"
+       fi
+       ;;
+    9) collect_acme_ssl_dns_default ;;
+    10) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
   esac
   conf_save
   ok "配置已更新"
