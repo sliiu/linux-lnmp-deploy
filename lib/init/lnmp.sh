@@ -597,7 +597,7 @@ _install_php_extensions_one() {
   fi
   if [[ -n "$ext_install" ]]; then cmd+=" && docker-php-ext-install -j\$(nproc) ${ext_install}"; fi
   if [[ $need_redis -eq 1 ]]; then
-    cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install ${redis_pkg:-redis} || true; fi"
+    cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install ${redis_pkg:-redis}; fi"
     cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
   fi
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
