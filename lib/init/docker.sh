@@ -27,6 +27,13 @@ install_docker() {
   ok "Docker 就绪"
 }
 
+_fix_alinux4_docker_repo() {
+  [[ -f /etc/yum.repos.d/docker-ce.repo ]] || return 0
+  grep -q "Alibaba Cloud Linux 4" /etc/os-release 2>/dev/null || return 0
+  grep -q '\$releasever' /etc/yum.repos.d/docker-ce.repo 2>/dev/null \
+    && sed -i 's|\$releasever|9|g' /etc/yum.repos.d/docker-ce.repo || true
+}
+
 _install_docker_alinux() {
   dnf update dnf -y 2>/dev/null || true
   dnf clean packages 2>/dev/null || true
@@ -43,8 +50,8 @@ _install_docker_alinux() {
 
   if grep -q "Alibaba Cloud Linux 3" /etc/os-release 2>/dev/null; then
     dnf -y install dnf-plugin-releasever-adapter --repo alinux3-plus 2>/dev/null || true
-  elif grep -q "Alibaba Cloud Linux 4" /etc/os-release 2>/dev/null; then
-    sed -i 's|\$releasever|9|g' /etc/yum.repos.d/docker-ce.repo 2>/dev/null || true
+  else
+    _fix_alinux4_docker_repo
   fi
 
   dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin

@@ -128,6 +128,7 @@ main() {
   if [[ "$(id -u)" -ne 0 ]]; then die "请使用 root 执行"; fi
 
   conf_load
+  _fix_alinux4_docker_repo
 
   local cmd="${1:-}"
   if [[ "$cmd" = "-h" || "$cmd" = "--help" ]]; then usage; exit 0; fi
