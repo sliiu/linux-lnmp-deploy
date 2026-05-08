@@ -5,50 +5,57 @@
 
 ## 快速使用
 
-### 方式 1：直接使用
+`init.sh` / `deploy-site.sh` 会按顺序 `source` 仓库内 **`lib/**/*.sh`**（共享逻辑在 **`lib/common.sh`**）。请将入口脚本与同级的 **`lib/`** 目录一并保留（`bootstrap.sh` / `git clone` 即可获得完整 tree）。
+
+若某台机器上**只有入口脚本**、本地缺少个别 `lib` 文件，脚本会尝试用 **curl** 或 **wget** 从 **`_LIB_RAW_BASE`**（默认与同仓库 raw，与 `bootstrap` 同源）按需下载缺失模块后再继续；两台工具都不可用则退出。
+
+可选环境变量（与脚本内默认值一致时可省略）：**`_LIB_RAW_BASE`**、`INSTALL_DIR`、`REPO_URL`、`REPO_BRANCH`。
+
+### 方式 1：bootstrap.sh 一键引导（推荐）
+
+`bootstrap.sh` 会自动安装 `git`，把仓库 clone/更新到 `/opt/alibaba-cloud-ecs-deployment`，再执行目标脚本：
 
 ```bash
-# init.sh
-/bin/bash -c "$(curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/init.sh)"
+# 首次环境初始化
+curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | sudo bash -s init.sh
 
-# deploy-site.sh
-/bin/bash -c "$(curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh)"
+# 站点部署（参数原样透传给 deploy-site.sh）
+curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh \
+  | sudo bash -s deploy-site.sh add --domain=example.com --type=laravel --git=git@github.com:user/repo.git
 ```
 
-### 方式 2：下载后执行
+可通过环境变量覆盖：
 
-#### init.sh 环境部署
+- **`INSTALL_DIR`**：安装目录（默认 `/opt/alibaba-cloud-ecs-deployment`）
+- **`REPO_URL`** / **`REPO_BRANCH`**：仓库地址与分支
+
+### 方式 2：git clone 后执行
 
 ```bash
-# 下载
-curl -fsSL -o init.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/init.sh
+sudo git clone --depth=1 https://gitee.com/qing-u/alibaba-cloud-ecs-deployment.git /opt/alibaba-cloud-ecs-deployment
+cd /opt/alibaba-cloud-ecs-deployment
 
-# 执行权限
-chmod +x init.sh
-
-# 交互执行
-sudo ./init.sh
+sudo bash init.sh
+sudo bash deploy-site.sh add --domain=example.com ...
 ```
 
-#### deploy-site 站点部署
+### 升级到最新版
 
 ```bash
-# 下载
-curl -fsSL -o deploy-site.sh https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/deploy-site.sh
-
-# 执行权限
-chmod +x deploy-site.sh
-
-# 交互执行
-sudo ./deploy-site.sh
+# 方式 1 用户：再次运行 bootstrap.sh 即可，内部 fetch + reset 到最新
+# 方式 2 用户：
+sudo git -C /opt/alibaba-cloud-ecs-deployment pull --ff-only
 ```
 
 ## 脚本一览
 
+- **`bootstrap.sh`**：克隆/更新仓库到 **`INSTALL_DIR`** 后 **`exec`** 运行 **`init.sh`** 或 **`deploy-site.sh`**（参数透传）。
 - **`init.sh`**：以 **root** 安装/配置 BBR、防火墙、Docker、LNMP 容器、SSH、用户与可选等保加固；
-  写入 `/etc/lnmp-env.conf`；可选安装 **saferm**（见下文「saferm」）。
-- **`deploy-site.sh`**：以 **root** 在已有 LNMP 栈上 **新增/更新/删除** 站点：Nginx、可选 Git、SSL
-  （acme.sh）、Laravel 或静态前端。
+  写入 `/etc/lnmp-env.conf`；可选安装 **saferm**（见下文「saferm」）。实现按领域拆在 **`lib/init/*.sh`**（如 **`config`**、**`lnmp`**、**`docker`**、**`saferm`** 等），由 **`init.sh`** 统一加载。
+- **`deploy-site.sh`**：以 **root** 在已有 LNMP 栈上 **新增/更新/删除/列举/状态/SSL** 站点：Nginx、可选 Git、SSL
+  （acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、或静态前端。子命令实现在 **`lib/deploy/*.sh`**，由 **`deploy-site.sh`** 加载 **`lib/common.sh`** 与各 cmd 模块。
+
+**`lib/common.sh`**：`die`、菜单、确认等共用函数，供两个入口脚本共用。
 
 ---
 
@@ -85,15 +92,15 @@ sudo ./deploy-site.sh
   加入组 **`devops`**，sudoers 为 `%devops NOPASSWD: /usr/local/bin/deploy-site.sh`）、
   **saferm**（安全删除脚本，见「saferm」一节）。
 - LNMP：`/data/docker-lnmp/docker-compose.yml`，容器名 `lnmp-nginx`、`lnmp-php`、`lnmp-mysql`、
-  `lnmp-redis`、`lnmp-acme`（按勾选组件）。
+  `lnmp-redis`、`lnmp-acme`（按勾选组件）；**`EXTRA_PHP_VERSIONS`**（CSV，如 `7.4,8.2`）会再生成与 compose 一致的容器名 **`lnmp-php74`、`lnmp-php82`**（数字为无点号主版本），供 **`deploy-site.sh` `--php-version`** 选用。
 
 ### 推荐用法
 
-1. 上传脚本到服务器，赋予执行权限：`chmod +x init.sh`。
+1. 按上文「快速使用」用 `bootstrap.sh` 或 `git clone` 把仓库放到 `/opt/alibaba-cloud-ecs-deployment`。下文示例均假设当前目录为该仓库根目录。
 2. **交互模式**（无参数，菜单操作）：
 
    ```bash
-   sudo ./init.sh
+   sudo bash init.sh
    ```
 
    首次建议选 **「1) 全新安装（完整向导）」**，按提示勾选模块并填写密码、邮箱、镜像源等。
@@ -138,7 +145,7 @@ sudo ./deploy-site.sh
 **作用**：在服务器上用「回收站」方式处理删除——默认把路径 **移动到** **`/var/trash/files`**，而不是直接
 `rm`，降低误删不可恢复的风险。与桌面环境的 GNOME/KDE 回收站无关，是 **本机固定目录** 的集中暂存区。
 
-**安装 / 卸载**（脚本内容内嵌在 `init.sh` 中，安装时释放到系统路径）：
+**安装 / 卸载**（逻辑在 **`lib/init/saferm.sh`**，安装时写入 **`/usr/local/bin/saferm`**）：
 
 ```bash
 sudo ./init.sh install saferm      # 写入 /usr/local/bin/saferm 并 chmod +x
@@ -233,12 +240,14 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 
 ### 功能概要（deploy-site.sh）
 
-- 依赖 **`lnmp-nginx`、`lnmp-php`** 已运行；**`lnmp-acme`** 未运行时 `add` 会跳过 SSL 签发并告警，
+- 依赖 **`lnmp-nginx`、`lnmp-php`**（及按站点选用的 **`lnmp-phpNN`**，`NN` = 无主版本点小写，与 init 生成的 `container_name` 一致）已运行；**`lnmp-acme`** 未运行时 `add` 会跳过 SSL 签发并告警，
   **`ssl`** 子命令要求 acme 运行。
 - **Laravel**：`public` 为 Web 根目录；Nginx、占位证书、Let's Encrypt（acme.sh）、`.env` 合并、
   **composer**（容器内与站点目录属主一致）、**artisan**（`docker exec` 以 devops 身份、项目目录下
   `php artisan`）。**默认**：`NEED_DB` / `RUN_SEED` / `NEED_HORIZON` 为 **y**；默认连库时需
   **`--db-name`**（或交互填写），否则脚本会报错退出；不需要数据库时用 **`--need-db=n`**。
+- **PHP 版本（每站点）**：**`--php-version=`**（如 `8.2`、`7.4`）须在 **`init.sh`** 所写配置里的 **`EXTRA_PHP_VERSIONS`** 中已声明；会写入 **`conf.d/<域名>.php-version`**，Nginx **fastcgi** 与 **composer / artisan / cron / Horizon** 路由到对应 **`lnmp-php`** + **无点号主版本** 容器（如 **7.4 → `lnmp-php74`**）。**`update`** 时可改该项以切换站点所用 PHP 镜像。
+- **Laravel SSE（长连接）**：环境变量 **`LARAVEL_SSE_PREFIXES`** 为全局默认前缀列表（空格或逗号分隔，默认 **`wave`**）；**`--sse-prefixes=`** 或与 **`update`** 联用写入 **`conf.d/<域名>.sse-prefixes`**；亦可事后编辑该文件。细节以 **`deploy-site.sh --help`** 为准。
 - **frontend**：Nginx 在 **代码就绪后**生成。未指定 **`--frontend-root`** 时：若站点目录下存在
   **`dist/`** 则用 `dist`，否则 **站点根目录**即静态根。可用 **`--frontend-root`** 显式指定子目录。
 - **Git**：**`--git=` 留空或省略**跳过 clone/pull；**`--git-branch`** 指定分支/标签（clone 使用
@@ -262,8 +271,11 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 
 ### 安装到系统路径（与 init 中 sudoers 一致）
 
+脚本以自身所在目录查找 **`lib/`**；复制到 **`/usr/local/bin`** 时须**同时复制同级的 **`lib`** 目录**，否则会按 **`_LIB_RAW_BASE`** 在线拉取（需出站网络可用）。
+
 ```bash
 sudo cp deploy-site.sh /usr/local/bin/deploy-site.sh
+sudo cp -r lib /usr/local/bin/lib
 sudo chmod +x /usr/local/bin/deploy-site.sh
 ```
 
@@ -272,11 +284,12 @@ sudo chmod +x /usr/local/bin/deploy-site.sh
 - **`add`**：新站点；无参数时进入交互。
 - **`update`**：要求 **`www/<域名>/` 目录已存在**。若存在 **`.git`**：`git pull`（可选
   **`--git-branch`**）；若无 `.git`：跳过 Git 并提示。Laravel：**composer install**、可选 **migrate**、
-  **optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**。
-- **`remove`**：删除 Nginx 配置、SSL 目录、crontab/Horizon、可选删除代码目录。
+  **optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**。自动化可加 **`--run-migrate=y|n`**（及同类 y/n）避免交互。
+- **`remove`**：删除 Nginx 配置、SSL 目录、**.sse-prefixes**、crontab/Horizon、可选删除代码目录。
 - **`list`**：列出 `conf.d` 下站点及类型、SSL、Cron、部署状态等。
+- **`status`**：**`--domain=<域名>`** 检查该站证书、容器、日志等；**`--all`** 遍历 `conf.d` 全部站点（概要）。
 - **`ssl`**：对已有站点重新签发/续期证书。
-- **（无参数）**：数字菜单，等价于选择上述功能。
+- **（无参数）**：数字菜单（含站点运行状态一项），等价于选择上述功能。
 
 ### 常用示例
 
@@ -301,6 +314,9 @@ sudo /usr/local/bin/deploy-site.sh update --domain=api.example.com
 
 sudo /usr/local/bin/deploy-site.sh list
 
+sudo /usr/local/bin/deploy-site.sh status --domain=api.example.com
+# sudo ... status --all
+
 sudo /usr/local/bin/deploy-site.sh ssl --domain=api.example.com --force-ssl
 
 sudo /usr/local/bin/deploy-site.sh remove --domain=api.example.com --yes
@@ -320,6 +336,9 @@ sudo /usr/local/bin/deploy-site.sh add \
 ### 主要参数（add/ssl 等）
 
 - **`--domain`**、**`--git`**（可空=跳过 Git）、**`--git-branch`**、`--type=laravel|frontend`
+- **`--php-version`**：仅当 init 已为该主版本配置 **`EXTRA_PHP_VERSIONS`**（或该版本即为默认 **`lnmp-php`**）时有效（见上文）。
+- **SSE**：**`--sse-prefixes=`**、环境变量 **`LARAVEL_SSE_PREFIXES`**
+- **`status`**：**`--all`** 或 **`--domain`**
 - Laravel：**`--app-name`**、**`--redis-host`**、**`--redis-port`**、**`--redis-password`**、
   **`--need-db`**（默认 y）、**`--db-host`**、**`--db-name`**、**`--db-password`**、
   **`--create-db`**、**`--run-migrate`**、**`--run-seed`**（默认 y）、**`--add-crontab`**、
@@ -350,12 +369,13 @@ sudo /usr/local/bin/deploy-site.sh add \
 
 ## 典型流程
 
-1. 控制台用 root 或密钥登录 ECS，上传 `init.sh`。
-2. `chmod +x init.sh && sudo ./init.sh`（若已是 root 可省略 `sudo`），完成 Docker、LNMP、devops、
-   SSH、防火墙、ACME 邮箱等。
-3. 将 `deploy-site.sh` 安装到 `/usr/local/bin/` 并 `chmod +x`。
-4. 若使用 Git：为 devops 配置 SSH 公钥，保证能 clone/pull 私有仓库。
-5. `sudo /usr/local/bin/deploy-site.sh add`（或带全参数）添加站点；浏览器访问 `https://域名` 验证。
+1. 控制台用 root 或密钥登录 ECS，按「快速使用」一节执行 `bootstrap.sh` 或 `git clone` 仓库到
+   `/opt/alibaba-cloud-ecs-deployment`。
+2. `cd /opt/alibaba-cloud-ecs-deployment && sudo bash init.sh`（若已是 root 可省略 `sudo`），完成
+   Docker、LNMP、devops、SSH、防火墙、ACME 邮箱等。
+3. 若使用 Git：为 devops 配置 SSH 公钥，保证能 clone/pull 私有仓库。
+4. `sudo bash deploy-site.sh add`（或带全参数）添加站点；浏览器访问 `https://域名` 验证。
+   **`deploy-site.sh` 移到其它目录执行时须有同级 **`lib/`**（或与「安装到系统路径」一节相同做法）；否则依赖 curl/wget 从 **`_LIB_RAW_BASE`** 拉取缺失文件。
 
 ---
 
@@ -363,6 +383,8 @@ sudo /usr/local/bin/deploy-site.sh add \
 
 - **全局配置**：`/etc/lnmp-env.conf`（由 `init.sh` 维护；`deploy-site.sh` 会 source 以统一数据目录等
   变量）。与 LNMP 相关的常见键包括：`LNMP_SERVICES`、`PHP_VERSION`、`PHP_EXTENSIONS`、
+  **`EXTRA_PHP_VERSIONS`**、
   `NGINX_IMAGE`、`MYSQL_IMAGE`、`REDIS_IMAGE`、`ACME_IMAGE`、`ACME_EMAIL`、`ACME_SSL_DNS_DEFAULT`、
-  `CONTAINER_WWW` 等（完整列表以生成文件或 `sudo ./init.sh --help` 为准）。
+  `CONTAINER_WWW`、`LNMP_DATA_DIR` 等（完整列表以生成文件或 `sudo ./init.sh --help` 为准）。
+- **仅限 `deploy-site` 进程**：环境变量 **`LARAVEL_SSE_PREFIXES`** 可写入 shell 配置文件或在调用前导出，不写则走脚本内默认值；与 `/etc/lnmp-env.conf` 无必填关联。
 - 脚本内版本号均为 **2.0.0**（以脚本内 `VERSION=` 为准）。
