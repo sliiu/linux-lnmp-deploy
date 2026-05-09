@@ -535,15 +535,15 @@ _wait_container() {
 }
 
 _php_ext_exec_with_apk_retry() {
-  local cname="$1" inner="$2"
-  local attempt=1 max=12 pause=5
+  local cname="$1" inner="$2" logfile="$3"
+  local attempt=1 max=12 pause=5 _rc
   sleep 2
   while ((attempt <= max)); do
-    if docker exec -u root -e TERM=dumb "$cname" sh -c "$inner"; then
-      return 0
-    fi
+    docker exec -u root -e TERM=dumb "$cname" sh -c "$inner" 2>&1 | tee -a "$logfile"
+    _rc="${PIPESTATUS[0]}"
+    [[ "$_rc" -eq 0 ]] && return 0
     if ((attempt < max)); then
-      warn "容器内 apk 可能被占用或暂锁库，${pause}s 后重试 (${attempt}/${max})..."
+      warn "容器内 apk 可能被占用或暂锁库，${pause}s 后重试 (${attempt}/${max})..." | tee -a "$logfile"
       sleep "$pause"
     fi
     ((attempt++)) || true
@@ -551,9 +551,23 @@ _php_ext_exec_with_apk_retry() {
   return 1
 }
 
+_php_ext_show_log_tail() {
+  local logfile="$1"
+  [[ -f "$logfile" ]] || return 0
+  warn "=== 扩展安装日志（末尾 60 行）: ${logfile} ==="
+  tail -n 60 "$logfile" >&2
+  warn "=== 日志结束 ==="
+}
+
 _install_php_extensions_one() {
   local cname="$1"
-  info "安装 PHP 扩展（${cname}）..."
+  local logfile="${DATA_DIR}/$( \
+    svc="${cname#lnmp-}"; \
+    if [[ "$svc" = "php" ]]; then printf 'php'; \
+    else printf 'php-%s' "${svc#php}"; fi \
+  )/log/ext-install.log"
+  : > "$logfile" 2>/dev/null || logfile="/tmp/php-ext-install-${cname}.log"; : > "$logfile"
+  info "安装 PHP 扩展（${cname}），日志：${logfile}"
 
   IFS=',' read -ra exts <<< "$PHP_EXTENSIONS"
   local need_gd=0 need_intl=0 need_redis=0
@@ -608,16 +622,25 @@ _install_php_extensions_one() {
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
 
   cmd="sleep 2; ${cmd}"
-  _php_ext_exec_with_apk_retry "$cname" "$cmd" || die "PHP 扩展安装失败（apk 多次重试仍失败：请确认无其他进程在 ${cname} 内执行 apk，或 docker restart ${cname} 后重试）"
+  _php_ext_exec_with_apk_retry "$cname" "$cmd" "$logfile" || {
+    _php_ext_show_log_tail "$logfile"
+    die "PHP 扩展安装失败（apk 多次重试仍失败：请确认无其他进程在 ${cname} 内执行 apk，或 docker restart ${cname} 后重试。日志：${logfile}）"
+  }
   docker restart "$cname"
   local svc="${cname#lnmp-}"
   _wait_container "$svc" 20
 
   if [[ $need_redis -eq 1 ]]; then
-    docker exec "$cname" php -m | grep -q redis || die "PHP redis 扩展安装失败（${cname}）"
+    docker exec "$cname" php -m | grep -q redis || {
+      _php_ext_show_log_tail "$logfile"
+      die "PHP redis 扩展安装失败（${cname}）。日志：${logfile}"
+    }
   fi
   if [[ " $ext_install " = *" pdo_mysql "* ]]; then
-    docker exec "$cname" php -m | grep -q pdo_mysql || die "PHP pdo_mysql 扩展安装失败（${cname}）"
+    docker exec "$cname" php -m | grep -q pdo_mysql || {
+      _php_ext_show_log_tail "$logfile"
+      die "PHP pdo_mysql 扩展安装失败（${cname}）。日志：${logfile}"
+    }
   fi
 
   ok "PHP 扩展安装完成（${cname}）"
