@@ -613,6 +613,7 @@ _install_php_extensions_one() {
   if [[ $need_redis -eq 1 ]]; then
     local _redis_ipe_ver=""
     [[ -n "$redis_pkg" ]] && _redis_ipe_ver="@${redis_pkg#redis-}"
+    cmd+=" && export MAKEFLAGS=''"
     cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then"
     cmd+="   wget -qO /tmp/ipe https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
     cmd+="   && chmod +x /tmp/ipe && /tmp/ipe redis${_redis_ipe_ver} && rm -f /tmp/ipe;"
