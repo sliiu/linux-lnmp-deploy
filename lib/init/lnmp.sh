@@ -597,27 +597,27 @@ _install_php_extensions_one() {
   elif ! _lv_ge "$php_ver" "7.4"; then redis_pkg="redis-5.3.7"
   else redis_pkg=""; fi
 
-  local _loaded_list
-  _loaded_list="$(docker exec "$cname" php -m 2>/dev/null | tr '[:upper:]' '[:lower:]')"
-  local _filtered="" _e_lc
+  _ext_loaded() {
+    docker exec "$cname" php -r "exit(extension_loaded('$1')?0:1);" 2>/dev/null
+  }
+  local _filtered=""
   for e in $ext_install; do
-    _e_lc="$(echo "$e" | tr '[:upper:]' '[:lower:]')"
-    if printf '%s\n' "$_loaded_list" | grep -qx "$_e_lc"; then
+    if _ext_loaded "$e"; then
       info "扩展 ${e} 已加载（${cname}），跳过编译"
     else
       _filtered+=" $e"
     fi
   done
   ext_install="$(echo "$_filtered" | xargs)"
-  if [[ $need_gd -eq 1 ]] && printf '%s\n' "$_loaded_list" | grep -qx "gd"; then
+  if [[ $need_gd -eq 1 ]] && _ext_loaded "gd"; then
     info "扩展 gd 已加载（${cname}），跳过"
     need_gd=0
   fi
-  if [[ $need_intl -eq 1 ]] && printf '%s\n' "$_loaded_list" | grep -qx "intl"; then
+  if [[ $need_intl -eq 1 ]] && _ext_loaded "intl"; then
     info "扩展 intl 已加载（${cname}），跳过"
     need_intl=0
   fi
-  if [[ $need_redis -eq 1 ]] && printf '%s\n' "$_loaded_list" | grep -qx "redis"; then
+  if [[ $need_redis -eq 1 ]] && _ext_loaded "redis"; then
     info "扩展 redis 已加载（${cname}），跳过"
     need_redis=0
   fi
@@ -638,7 +638,7 @@ _install_php_extensions_one() {
   if [[ -n "$ext_install" ]]; then
     cmd+=" && for _e in ${ext_install}; do"
     cmd+="   echo \"=== docker-php-ext-install \$_e ===\";"
-    cmd+="   if php -m 2>/dev/null | tr '[:upper:]' '[:lower:]' | grep -qx \"\$_e\"; then"
+    cmd+="   if php -r \"exit(extension_loaded('\$_e')?0:1);\" 2>/dev/null; then"
     cmd+="     echo \"-- \$_e already loaded, skip\"; continue;"
     cmd+="   fi;"
     cmd+="   docker-php-ext-install -j\$(nproc) \"\$_e\" || { echo \"!! ext \$_e install failed\"; exit 42; };"
@@ -657,8 +657,8 @@ _install_php_extensions_one() {
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
 
   cmd="sleep 2; ${cmd}"
-  _php_ext_exec_with_apk_retry "$cname" "$cmd" "$logfile"
-  local _ext_rc=$?
+  local _ext_rc=0
+  _php_ext_exec_with_apk_retry "$cname" "$cmd" "$logfile" || _ext_rc=$?
   if [[ $_ext_rc -eq 42 ]]; then
     local _failed_ext
     _failed_ext="$(grep -oE '!! ext [^ ]+ install failed' "$logfile" | tail -n1 | awk '{print $3}')"

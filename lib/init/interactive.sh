@@ -366,7 +366,10 @@ _interactive_full_install() {
     sel_docker=1
   fi
 
-  # ── 收集顺序：账号 → 网络/源 → 基础设施(docker) → 应用(lnmp) → 系统加固(ssh) ──
+  # ── 收集顺序：等保加固(cyber) → 账号 → 网络/源 → 基础设施(docker) → 应用(lnmp) → 系统加固(ssh) ──
+
+  # 0) 等保加固前置（cyber 内部含交互+创建账号；ordinary 可作为 devops 默认值）
+  if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
 
   # 1) 账号优先（LNMP 安装时 chown 需要 DEVOPS_USER 已确定）
   DEVOPS_USER=$(prompt "devops 部署用户名" "${DEVOPS_USER:-devops}")
@@ -421,8 +424,6 @@ _interactive_full_install() {
 
   run_pkg install -y wget git screen supervisor acl 2>/dev/null || true
   ensure_supervisor_service
-
-  if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
 
   if [[ $sel_bbr -eq 1 ]]; then install_bbr; fi
   if [[ $sel_fire -eq 1 ]]; then install_firewall; fi
