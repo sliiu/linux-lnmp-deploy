@@ -649,7 +649,14 @@ _install_php_extensions_one() {
     cmd+="   if php -r \"exit(extension_loaded('\$_e')?0:1);\" 2>/dev/null; then"
     cmd+="     echo \"-- \$_e already loaded, skip\"; continue;"
     cmd+="   fi;"
-    cmd+="   docker-php-ext-install -j\$(nproc) \"\$_e\" || { echo \"!! ext \$_e install failed\"; exit 42; };"
+    cmd+="   if ! docker-php-ext-install -j\$(nproc) \"\$_e\"; then"
+    cmd+="     if [ \"\$_e\" = opcache ]; then"
+    cmd+="       echo \"-- opcache install failed, fallback to enable (PHP 8.5+ built-in)\";"
+    cmd+="       docker-php-ext-enable opcache 2>/dev/null || printf 'zend_extension=opcache\\n' > /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini;"
+    cmd+="       continue;"
+    cmd+="     fi;"
+    cmd+="     echo \"!! ext \$_e install failed\"; exit 42;"
+    cmd+="   fi;"
     cmd+=" done"
   fi
   if [[ $need_redis -eq 1 ]]; then
