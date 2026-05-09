@@ -622,6 +622,14 @@ _install_php_extensions_one() {
     need_redis=0
   fi
 
+  # PHP 8.5+: opcache 已内置（non-optional，无独立 .so），docker-php-ext-install 必然失败；改为直接启用
+  local opcache_85_enable=0
+  if [[ " $ext_install " = *" opcache "* ]] && _lv_ge "$php_ver" "8.5"; then
+    info "PHP ${php_ver}: opcache 已内置，跳过编译，仅启用（${cname}）"
+    ext_install="$(echo " $ext_install " | sed 's/ opcache / /g' | xargs)"
+    opcache_85_enable=1
+  fi
+
   local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
   local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
 
@@ -653,6 +661,9 @@ _install_php_extensions_one() {
     cmd+="   && chmod +x /tmp/ipe && /tmp/ipe redis${_redis_ipe_ver} && rm -f /tmp/ipe;"
     cmd+=" fi"
     cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
+  fi
+  if [[ $opcache_85_enable -eq 1 ]]; then
+    cmd+=" && (docker-php-ext-enable opcache 2>/dev/null || printf 'zend_extension=opcache\n' > /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini)"
   fi
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
 
