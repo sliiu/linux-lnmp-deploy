@@ -318,6 +318,7 @@ interactive_setup() {
     _i=$(menu_select "请选择操作" \
       "查看状态" \
       "全新安装（完整向导）" \
+      "一键重装 LNMP（沿用上次配置，跳过所有问询）" \
       "更新配置（含 PHP 多版本、镜像源、SSH 等）" \
       "安装单个组件" \
       "账户管理（用户/组/密码/SSH 公钥/AllowUsers）" \
@@ -326,13 +327,40 @@ interactive_setup() {
     case "$_i" in
       0) show_status ;;
       1) _interactive_full_install ;;
-      2) _interactive_config ;;
-      3) _interactive_install_one ;;
-      4) _interactive_account_mgmt ;;
-      5) _interactive_uninstall_one ;;
-      6) echo ""; ok "退出"; exit 0 ;;
+      2) _interactive_oneclick_reinstall ;;
+      3) _interactive_config ;;
+      4) _interactive_install_one ;;
+      5) _interactive_account_mgmt ;;
+      6) _interactive_uninstall_one ;;
+      7) echo ""; ok "退出"; exit 0 ;;
     esac
   done
+}
+
+_interactive_oneclick_reinstall() {
+  echo ""
+  hr; info "一键重装 LNMP（沿用上次配置）"; hr; echo ""
+  if [[ -z "${LNMP_SERVICES:-}" ]]; then
+    warn "未检测到上次 LNMP 配置（${CONF_FILE}），请先走「全新安装」或「安装单个组件」"
+    return
+  fi
+  printf "  %-20s %s\n" "Devops 用户" "$DEVOPS_USER"
+  printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
+  if has_service "nginx"; then printf "  %-20s %s\n" "Nginx 镜像" "$NGINX_IMAGE"; fi
+  if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
+  if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
+  if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"
+                              printf "  %-20s %s\n" "ACME 邮箱" "${ACME_EMAIL:-<未设置>}"; fi
+  if has_service "php"; then
+    printf "  %-20s %s\n" "PHP 默认版本" "${PHP_VERSION:-<未设置>}"
+    printf "  %-20s %s\n" "PHP 额外版本" "${EXTRA_PHP_VERSIONS:-<无>}"
+    printf "  %-20s %s\n" "PHP 扩展" "${PHP_EXTENSIONS:-<未设置>}"
+    printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
+  fi
+  echo ""
+  confirm "确认按上述配置执行 install_lnmp？" "y" || { warn "已取消"; return; }
+  install_lnmp
+  ok "一键重装完成"
 }
 
 _interactive_full_install() {

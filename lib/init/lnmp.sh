@@ -657,10 +657,12 @@ _install_php_extensions_one() {
     [[ -n "$redis_pkg" ]] && _redis_ipe_ver="@${redis_pkg#redis-}"
     cmd+=" && export MAKEFLAGS=''"
     cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then"
-    cmd+="   wget -qO /tmp/ipe https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
-    cmd+="   && chmod +x /tmp/ipe && /tmp/ipe redis${_redis_ipe_ver} && rm -f /tmp/ipe;"
+    cmd+="   { command -v curl >/dev/null 2>&1 || apk add --no-cache curl ca-certificates; }"
+    cmd+="   && curl -fsSL --retry 3 --retry-delay 2 -o /tmp/ipe https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
+    cmd+="   && chmod +x /tmp/ipe && /tmp/ipe redis${_redis_ipe_ver} && rm -f /tmp/ipe"
+    cmd+="   || { echo \"!! ext redis install failed\"; exit 42; };"
     cmd+=" fi"
-    cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
+    cmd+=" && { docker-php-ext-enable redis 2>/dev/null || true; }"
   fi
   if [[ $opcache_85_enable -eq 1 ]]; then
     cmd+=" && (docker-php-ext-enable opcache 2>/dev/null || printf 'zend_extension=opcache\n' > /usr/local/etc/php/conf.d/docker-php-ext-opcache.ini)"
