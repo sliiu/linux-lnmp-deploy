@@ -308,6 +308,9 @@ interactive_setup() {
   hr
   echo ""
 
+  conf_save
+  conf_load
+
   show_status
 
   while true; do
@@ -338,6 +341,7 @@ _interactive_full_install() {
 
   local sel
   sel=$(menu_multi "选择要安装的模块（推荐最少：Docker + LNMP；按高频排序）" \
+    "等保加固 (cyber 三权用户)" \
     "Docker (LNMP 前置)" \
     "LNMP (nginx + php + mysql + redis + acme)" \
     "SSH 安全策略 (改端口/禁 root)" \
@@ -345,14 +349,13 @@ _interactive_full_install() {
     "BBR (TCP 拥塞)" \
     "Oh-My-Zsh" \
     "Wheel 管理员" \
-    "等保加固 (cyber 用户)" \
     "saferm 安全删除")
 
   local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
     case "$idx" in
-      0) sel_docker=1 ;; 1) sel_lnmp=1 ;;  2) sel_ssh=1 ;;   3) sel_fire=1 ;;
-      4) sel_bbr=1 ;;   5) sel_zsh=1 ;;   6) sel_wheel=1 ;; 7) sel_cyber=1 ;;
+      0) sel_cyber=1 ;; 1) sel_docker=1 ;; 2) sel_lnmp=1 ;;  3) sel_ssh=1 ;;
+      4) sel_fire=1 ;;  5) sel_bbr=1 ;;    6) sel_zsh=1 ;;   7) sel_wheel=1 ;;
       8) sel_saferm=1 ;;
     esac
   done
@@ -419,9 +422,10 @@ _interactive_full_install() {
   run_pkg install -y wget git screen supervisor acl 2>/dev/null || true
   ensure_supervisor_service
 
+  if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
+
   if [[ $sel_bbr -eq 1 ]]; then install_bbr; fi
   if [[ $sel_fire -eq 1 ]]; then install_firewall; fi
-  if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
 
   setup_devops_user
   if [[ $sel_wheel -eq 1 ]]; then setup_wheel_user; fi

@@ -542,6 +542,7 @@ _php_ext_exec_with_apk_retry() {
     docker exec -u root -e TERM=dumb "$cname" sh -c "$inner" 2>&1 | tee -a "$logfile"
     _rc="${PIPESTATUS[0]}"
     [[ "$_rc" -eq 0 ]] && return 0
+    [[ "$_rc" -eq 42 ]] && return 42
     if ((attempt < max)); then
       warn "容器内 apk 可能被占用或暂锁库，${pause}s 后重试 (${attempt}/${max})..." | tee -a "$logfile"
       sleep "$pause"
@@ -634,7 +635,15 @@ _install_php_extensions_one() {
       ext_install=$(echo " $ext_install " | sed 's/ intl / /g' | xargs)
     fi
   fi
-  if [[ -n "$ext_install" ]]; then cmd+=" && docker-php-ext-install -j\$(nproc) ${ext_install}"; fi
+  if [[ -n "$ext_install" ]]; then
+    cmd+=" && for _e in ${ext_install}; do"
+    cmd+="   echo \"=== docker-php-ext-install \$_e ===\";"
+    cmd+="   if php -m 2>/dev/null | tr '[:upper:]' '[:lower:]' | grep -qx \"\$_e\"; then"
+    cmd+="     echo \"-- \$_e already loaded, skip\"; continue;"
+    cmd+="   fi;"
+    cmd+="   docker-php-ext-install -j\$(nproc) \"\$_e\" || { echo \"!! ext \$_e install failed\"; exit 42; };"
+    cmd+=" done"
+  fi
   if [[ $need_redis -eq 1 ]]; then
     local _redis_ipe_ver=""
     [[ -n "$redis_pkg" ]] && _redis_ipe_ver="@${redis_pkg#redis-}"
@@ -648,10 +657,17 @@ _install_php_extensions_one() {
   cmd+=" && apk del --no-cache build-base linux-headers autoconf"
 
   cmd="sleep 2; ${cmd}"
-  _php_ext_exec_with_apk_retry "$cname" "$cmd" "$logfile" || {
+  _php_ext_exec_with_apk_retry "$cname" "$cmd" "$logfile"
+  local _ext_rc=$?
+  if [[ $_ext_rc -eq 42 ]]; then
+    local _failed_ext
+    _failed_ext="$(grep -oE '!! ext [^ ]+ install failed' "$logfile" | tail -n1 | awk '{print $3}')"
+    _php_ext_show_log_tail "$logfile"
+    die "PHP 扩展 ${_failed_ext:-?} 安装失败（${cname}）。日志：${logfile}"
+  elif [[ $_ext_rc -ne 0 ]]; then
     _php_ext_show_log_tail "$logfile"
     die "PHP 扩展安装失败（apk 多次重试仍失败：请确认无其他进程在 ${cname} 内执行 apk，或 docker restart ${cname} 后重试。日志：${logfile}）"
-  }
+  fi
   docker restart "$cname"
   local svc="${cname#lnmp-}"
   _wait_container "$svc" 20
