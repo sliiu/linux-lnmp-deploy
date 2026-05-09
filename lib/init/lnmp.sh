@@ -596,6 +596,31 @@ _install_php_extensions_one() {
   elif ! _lv_ge "$php_ver" "7.4"; then redis_pkg="redis-5.3.7"
   else redis_pkg=""; fi
 
+  local _loaded_list
+  _loaded_list="$(docker exec "$cname" php -m 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+  local _filtered="" _e_lc
+  for e in $ext_install; do
+    _e_lc="$(echo "$e" | tr '[:upper:]' '[:lower:]')"
+    if printf '%s\n' "$_loaded_list" | grep -qx "$_e_lc"; then
+      info "扩展 ${e} 已加载（${cname}），跳过编译"
+    else
+      _filtered+=" $e"
+    fi
+  done
+  ext_install="$(echo "$_filtered" | xargs)"
+  if [[ $need_gd -eq 1 ]] && printf '%s\n' "$_loaded_list" | grep -qx "gd"; then
+    info "扩展 gd 已加载（${cname}），跳过"
+    need_gd=0
+  fi
+  if [[ $need_intl -eq 1 ]] && printf '%s\n' "$_loaded_list" | grep -qx "intl"; then
+    info "扩展 intl 已加载（${cname}），跳过"
+    need_intl=0
+  fi
+  if [[ $need_redis -eq 1 ]] && printf '%s\n' "$_loaded_list" | grep -qx "redis"; then
+    info "扩展 redis 已加载（${cname}），跳过"
+    need_redis=0
+  fi
+
   local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
   local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
 
