@@ -70,7 +70,7 @@ usage() {
   status                查看当前状态
   install <组件>        安装指定组件
   uninstall <组件>      卸载指定组件
-  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: nginx|php|mysql|redis|acme
+  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: nginx|php|mysql|redis|acme|phpmyadmin
   account [子命令]      账户/组/AllowUsers（见 account help）
 
 组件:
@@ -85,6 +85,7 @@ usage() {
   mysql       MySQL 容器
   redis       Redis 容器
   acme        ACME 证书容器
+  phpmyadmin  phpMyAdmin 容器
   wheel       Wheel 管理员
   cyber       等保加固
   devops      Devops 部署用户
@@ -100,6 +101,9 @@ usage() {
   --mysql-image=IMG       MySQL 镜像 (如 mysql:8.0)
   --redis-image=IMG       Redis 镜像 (如 redis:alpine)
   --acme-image=IMG        acme.sh 镜像 (如 neilpang/acme.sh:latest)
+  --phpmyadmin-image=IMG  phpMyAdmin 镜像 (如 phpmyadmin:latest)
+  --phpmyadmin-bind=ADDR  phpMyAdmin 绑定地址（默认 127.0.0.1）
+  --phpmyadmin-port=PORT  phpMyAdmin 端口（默认 8080）
   --mysql-pwd=PWD         MySQL root 密码
   --acme-email=EMAIL      ACME 邮箱
   --ssh-port=PORT         SSH 端口
@@ -151,6 +155,9 @@ main() {
       --mysql-image=*)    MYSQL_IMAGE="${arg#*=}" ;;
       --redis-image=*)    REDIS_IMAGE="${arg#*=}" ;;
       --acme-image=*)     ACME_IMAGE="${arg#*=}" ;;
+      --phpmyadmin-image=*) PHPMYADMIN_IMAGE="${arg#*=}" ;;
+      --phpmyadmin-bind=*)  PHPMYADMIN_BIND="${arg#*=}" ;;
+      --phpmyadmin-port=*)  PHPMYADMIN_PORT="${arg#*=}" ;;
       --mysql-pwd=*)      MYSQL_ROOT_PWD="${arg#*=}" ;;
       --acme-email=*)     ACME_EMAIL="${arg#*=}" ;;
       --ssh-port=*)       SSH_PORT="${arg#*=}" ;;
@@ -184,6 +191,7 @@ main() {
         mysql)    LNMP_SERVICES="${LNMP_SERVICES},mysql";  install_lnmp "mysql" ;;
         redis)    LNMP_SERVICES="${LNMP_SERVICES},redis";  install_lnmp "redis" ;;
         acme)     LNMP_SERVICES="${LNMP_SERVICES},acme";   install_lnmp "acme" ;;
+        phpmyadmin) LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
         wheel)    setup_wheel_user ;;
         cyber)    setup_cyber_users ;;
         devops)   setup_devops_user ;;
@@ -225,6 +233,7 @@ main() {
         mysql)    uninstall_lnmp "mysql" ;;
         redis)    uninstall_lnmp "redis" ;;
         acme)     uninstall_lnmp "acme" ;;
+        phpmyadmin) uninstall_lnmp "phpmyadmin" ;;
         saferm)   uninstall_saferm ;;
         *)        die "未知组件: $target" ;;
       esac

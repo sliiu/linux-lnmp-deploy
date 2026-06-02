@@ -231,9 +231,9 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  sel=$(menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "redis" "acme.sh")
+  sel=$(menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "redis" "acme.sh" "phpMyAdmin")
   LNMP_SERVICES=""
-  local -a names=(nginx php mysql redis acme)
+  local -a names=(nginx php mysql redis acme phpmyadmin)
   for idx in $sel; do
     LNMP_SERVICES+="${LNMP_SERVICES:+,}${names[$idx]}"
   done
@@ -245,6 +245,11 @@ collect_lnmp_services() {
   # acme webroot 模式需要 nginx 提供 .well-known 端点
   if [[ ",$LNMP_SERVICES," = *",acme,"* && ",$LNMP_SERVICES," != *",nginx,"* ]]; then
     warn "已选 acme 但未选 nginx：webroot 校验将不可用，仅 dns_* 模式可签证书"
+  fi
+  # phpmyadmin 选了 → 自动补 mysql（数据库后端必需）
+  if [[ ",$LNMP_SERVICES," = *",phpmyadmin,"* && ",$LNMP_SERVICES," != *",mysql,"* ]]; then
+    LNMP_SERVICES+=",mysql"
+    info "已自动补充 mysql（phpMyAdmin 后端必需）"
   fi
 }
 
@@ -291,11 +296,41 @@ collect_acme_image() {
     "neilpang/acme.sh:latest (推荐)" "neilpang/acme.sh:3.0.6" "neilpang/acme.sh:3.0.7"
 }
 
+collect_phpmyadmin_image() {
+  _collect_image PHPMYADMIN_IMAGE "phpMyAdmin 镜像" "${PHPMYADMIN_IMAGE:-phpmyadmin:latest}" \
+    "phpmyadmin:latest (推荐)" "phpmyadmin:apache" "phpmyadmin:fpm-alpine" "phpmyadmin:5.2" "phpmyadmin:5"
+}
+
+collect_phpmyadmin_listen() {
+  echo ""
+  info "当前: ${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}"
+  local _i
+  _i=$(menu_select "phpMyAdmin 监听地址（建议仅本机+SSH 隧道，避免直接暴露公网）" \
+    "127.0.0.1:8080（仅本机/SSH 隧道，推荐）" \
+    "0.0.0.0:8080（公网可达；务必用防火墙限制源 IP）" \
+    "保持当前不变" \
+    "自定义")
+  case "$_i" in
+    0) PHPMYADMIN_BIND="127.0.0.1"; PHPMYADMIN_PORT="8080" ;;
+    1) PHPMYADMIN_BIND="0.0.0.0";   PHPMYADMIN_PORT="8080" ;;
+    2) return 0 ;;
+    3)
+      PHPMYADMIN_BIND=$(prompt "监听地址" "${PHPMYADMIN_BIND:-127.0.0.1}")
+      while true; do
+        PHPMYADMIN_PORT=$(prompt "监听端口 (1-65535)" "${PHPMYADMIN_PORT:-8080}")
+        if [[ "$PHPMYADMIN_PORT" =~ ^[0-9]+$ ]] && (( PHPMYADMIN_PORT > 0 && PHPMYADMIN_PORT < 65536 )); then break; fi
+        warn "无效端口"
+      done
+      ;;
+  esac
+}
+
 collect_lnmp_stack_images() {
   has_service "nginx" && collect_nginx_image
   has_service "mysql" && collect_mysql_image
   has_service "redis" && collect_redis_image
   has_service "acme" && collect_acme_image
+  if has_service "phpmyadmin"; then collect_phpmyadmin_image; collect_phpmyadmin_listen; fi
 }
 
 # ═══════════════════════════════════════════════
@@ -351,6 +386,8 @@ _interactive_oneclick_reinstall() {
   if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
   if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"
                               printf "  %-20s %s\n" "ACME 邮箱" "${ACME_EMAIL:-<未设置>}"; fi
+  if has_service "phpmyadmin"; then printf "  %-20s %s\n" "phpMyAdmin 镜像" "$PHPMYADMIN_IMAGE"
+                                    printf "  %-20s %s\n" "phpMyAdmin 监听" "${PHPMYADMIN_BIND}:${PHPMYADMIN_PORT}"; fi
   if has_service "php"; then
     printf "  %-20s %s\n" "PHP 默认版本" "${PHP_VERSION:-<未设置>}"
     printf "  %-20s %s\n" "PHP 额外版本" "${EXTRA_PHP_VERSIONS:-<无>}"
@@ -434,6 +471,10 @@ _interactive_full_install() {
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
     if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
     if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"; fi
+    if has_service "phpmyadmin"; then
+      printf "  %-20s %s\n" "phpMyAdmin 镜像" "$PHPMYADMIN_IMAGE"
+      printf "  %-20s %s\n" "phpMyAdmin 监听" "${PHPMYADMIN_BIND}:${PHPMYADMIN_PORT}"
+    fi
     if has_service "php"; then
       printf "  %-20s %s\n" "PHP 版本（默认）" "$PHP_VERSION"
       printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
@@ -481,6 +522,7 @@ _interactive_install_one() {
     "LNMP - redis" \
     "LNMP - nginx" \
     "LNMP - acme" \
+    "LNMP - phpMyAdmin" \
     "Docker" \
     "Devops 用户" \
     "Wheel 管理员" \
@@ -507,15 +549,16 @@ _interactive_install_one() {
     3)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
     4)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
     5)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
-    6)  collect_docker_mirrors; install_docker ;;
-    7)  DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
-    8)  WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
-    9)  collect_ssh_config; install_ssh ;;
-    10) install_firewall ;;
-    11) install_bbr ;;
-    12) collect_github_proxy; install_zsh ;;
-    13) install_saferm ;;
-    14) setup_cyber_users ;;
+    6)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
+    7)  collect_docker_mirrors; install_docker ;;
+    8)  DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
+    9)  WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
+    10) collect_ssh_config; install_ssh ;;
+    11) install_firewall ;;
+    12) install_bbr ;;
+    13) collect_github_proxy; install_zsh ;;
+    14) install_saferm ;;
+    15) setup_cyber_users ;;
   esac
   conf_save
 }
@@ -523,7 +566,7 @@ _interactive_install_one() {
 _interactive_uninstall_one() {
   local idx
   idx=$(menu_select "选择要卸载的组件（高危操作前会二次确认）" \
-    "LNMP - php"   "LNMP - mysql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" \
+    "LNMP - php"   "LNMP - mysql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin" \
     "LNMP (全部)" "Docker" \
     "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm")
 
@@ -535,9 +578,10 @@ _interactive_uninstall_one() {
     2) _danger_msg="将停止并移除 lnmp-redis 容器" ;;
     3) _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
     4) _danger_msg="将停止并移除 lnmp-acme 容器" ;;
-    5) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
-    6) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
-    7) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
+    5) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
+    6) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
+    7) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
+    8) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
   esac
   if [[ -n "$_danger_msg" ]]; then
     warn "$_danger_msg"
@@ -550,13 +594,14 @@ _interactive_uninstall_one() {
     2)  uninstall_lnmp "redis" ;;
     3)  uninstall_lnmp "nginx" ;;
     4)  uninstall_lnmp "acme" ;;
-    5)  uninstall_lnmp "all" ;;
-    6)  uninstall_docker ;;
-    7)  uninstall_ssh ;;
-    8)  uninstall_firewall ;;
-    9)  uninstall_bbr ;;
-    10) uninstall_zsh ;;
-    11) uninstall_saferm ;;
+    5)  uninstall_lnmp "phpmyadmin" ;;
+    6)  uninstall_lnmp "all" ;;
+    7)  uninstall_docker ;;
+    8)  uninstall_ssh ;;
+    9)  uninstall_firewall ;;
+    10) uninstall_bbr ;;
+    11) uninstall_zsh ;;
+    12) uninstall_saferm ;;
   esac
   conf_save
 }

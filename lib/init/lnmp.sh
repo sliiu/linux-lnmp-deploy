@@ -261,6 +261,26 @@ volumes:
 "
   fi
 
+  if has_service "phpmyadmin"; then
+    local pma_deps=""
+    has_service "mysql" && pma_deps="
+    depends_on: [mysql]"
+    yaml+="
+  phpmyadmin:
+    image: ${PHPMYADMIN_IMAGE}
+    container_name: lnmp-phpmyadmin
+    security_opt: [\"no-new-privileges:true\"]${pma_deps}
+    ports: [\"${PHPMYADMIN_BIND}:${PHPMYADMIN_PORT}:80\"]
+    environment:
+      - PMA_HOST=mysql
+      - PMA_PORT=3306
+      - UPLOAD_LIMIT=128M
+      - TZ=Asia/Shanghai
+    restart: always
+    networks: [lnmp-net]
+"
+  fi
+
   if has_service "acme"; then
     yaml+="
   acme:
@@ -365,6 +385,7 @@ install_lnmp() {
   if [[ "$component" != "all" ]]; then
     if [[ ",$LNMP_SERVICES," != *",$component,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},${component}"; fi
     if [[ "$component" = "nginx" && ",$LNMP_SERVICES," != *",php,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},php"; fi
+    if [[ "$component" = "phpmyadmin" && ",$LNMP_SERVICES," != *",mysql,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},mysql"; fi
   fi
 
   lnmp_gen_compose
@@ -484,7 +505,7 @@ update_lnmp() {
   _ensure_php_fpm_slowlog_host_layout
   if [[ -n "$one" ]]; then
     case "$one" in
-      nginx|php|mysql|redis|acme) ;;
+      nginx|php|mysql|redis|acme|phpmyadmin) ;;
       php-*)
         local _ev="${one#php-}"
         _php_extra_list | grep -qx "$_ev" || die "未知 LNMP 组件: $one（请确认 EXTRA_PHP_VERSIONS 含此版本）"
@@ -495,7 +516,7 @@ update_lnmp() {
         _install_php_extensions_one "$(_php_container_name "$_ev")"
         conf_save; ok "LNMP 已更新"; return 0
         ;;
-      *) die "未知 LNMP 组件: $one（nginx|php|mysql|redis|acme|php-<版本>）" ;;
+      *) die "未知 LNMP 组件: $one（nginx|php|mysql|redis|acme|phpmyadmin|php-<版本>）" ;;
     esac
     has_service "$one" || die "当前编排未包含 lnmp-${one}"
     compose_cmd -f "$COMPOSE_FILE" pull "$one"
@@ -660,13 +681,19 @@ _install_php_extensions_one() {
     cmd+=" done"
   fi
   if [[ $need_redis -eq 1 ]]; then
-    local _redis_ipe_ver=""
+    local _redis_ipe_ver="" _redis_pecl="${redis_pkg:-redis}"
     [[ -n "$redis_pkg" ]] && _redis_ipe_ver="@${redis_pkg#redis-}"
     cmd+=" && export MAKEFLAGS=''"
     cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then"
-    cmd+="   { command -v curl >/dev/null 2>&1 || apk add --no-cache curl ca-certificates; }"
-    cmd+="   && curl -fsSL --retry 3 --retry-delay 2 -o /tmp/ipe https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
-    cmd+="   && chmod +x /tmp/ipe && /tmp/ipe redis${_redis_ipe_ver} && rm -f /tmp/ipe"
+    cmd+="   echo \"=== pecl install ${_redis_pecl} ===\";"
+    cmd+="   if printf '\\n' | pecl install ${_redis_pecl}; then"
+    cmd+="     echo \"-- redis via pecl ok\";"
+    cmd+="   else"
+    cmd+="     echo \"-- pecl failed, fallback install-php-extensions (ipe)...\";"
+    cmd+="     { command -v curl >/dev/null 2>&1 || apk add --no-cache curl ca-certificates; }"
+    cmd+="     && curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /tmp/ipe https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions"
+    cmd+="     && chmod +x /tmp/ipe && /tmp/ipe redis${_redis_ipe_ver} && rm -f /tmp/ipe"
+    cmd+="   fi"
     cmd+="   || { echo \"!! ext redis install failed\"; exit 42; };"
     cmd+=" fi"
     cmd+=" && { docker-php-ext-enable redis 2>/dev/null || true; }"

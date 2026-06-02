@@ -33,7 +33,7 @@ show_status() {
   echo ""
   info "LNMP 容器"
   echo ""
-  for c in nginx php mysql redis acme; do
+  for c in nginx php mysql redis acme phpmyadmin; do
     if container_ok "$c"; then
       _s="运行中"
       if ! has_service "$c"; then
@@ -61,6 +61,10 @@ show_status() {
   has_service "mysql" && printf "  %-20s %s\n" "MySQL 镜像" "${MYSQL_IMAGE:-}"
   has_service "redis" && printf "  %-20s %s\n" "Redis 镜像" "${REDIS_IMAGE:-}"
   has_service "acme" && printf "  %-20s %s\n" "ACME 镜像" "${ACME_IMAGE:-}"
+  if has_service "phpmyadmin"; then
+    printf "  %-20s %s\n" "phpMyAdmin 镜像" "${PHPMYADMIN_IMAGE:-}"
+    printf "  %-20s %s\n" "phpMyAdmin 监听" "${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}"
+  fi
   printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}"
   printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
   printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
