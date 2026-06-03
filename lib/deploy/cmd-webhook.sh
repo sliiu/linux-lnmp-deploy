@@ -216,9 +216,23 @@ cmd_webhook_list() {
 }
 
 cmd_webhook_setup() {
-  local script_path old_mode old_domain new_proxy
+  local script_path old_mode old_domain new_proxy cli_reconfig=0
   script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy-site.sh"
   [[ -x "$script_path" ]] || script_path="${SCRIPT_DIR}/deploy-site.sh"
+
+  [[ -n "${WEBHOOK_PUBLIC_MODE:-}" || -n "${WEBHOOK_PROXY_DOMAIN:-}" \
+     || -n "${WEBHOOK_BIND:-}" || -n "${WEBHOOK_PORT:-}" || -n "${WEBHOOK_PATH:-}" ]] && cli_reconfig=1
+
+  if [[ "$cli_reconfig" -eq 0 ]] && _webhook_is_installed; then
+    _webhook_load_listener_env
+    ok "Webhook 监听服务已安装，跳过"
+    info "本机监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}（mode=${WEBHOOK_PUBLIC_MODE:-local}）"
+    info "回调 URL: $(_webhook_public_callback_url)"
+    systemctl is-active lnmp-deploy-webhook &>/dev/null && ok "systemd: 运行中" \
+      || warn "systemd: 未运行（systemctl restart lnmp-deploy-webhook）"
+    info "重新配置: $0 webhook setup --webhook-proxy-domain=域名 或 --webhook-bind=0.0.0.0"
+    return 0
+  fi
 
   _webhook_load_listener_env
   old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
