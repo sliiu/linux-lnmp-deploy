@@ -836,21 +836,26 @@ class Handler(BaseHTTPRequestHandler):
             event = self.headers.get("X-GitHub-Event") or self.headers.get("X-Gitee-Event") or ""
             gh_sig = self.headers.get("X-Hub-Signature-256") or self.headers.get("X-Hub-Signature") or ""
             gitee_token = self.headers.get("X-Gitee-Token") or ""
-            proc = subprocess.run(
+            subprocess.Popen(
                 [SCRIPT, "webhook", "handle",
                  "--body-file", body_path,
                  "--headers-file", hdr_path,
                  "--event", event,
                  "--github-signature", gh_sig,
                  "--gitee-token", gitee_token],
-                capture_output=True, text=True
+                start_new_session=True,
             )
-            out = (proc.stdout or "") + (proc.stderr or "")
-            code = 200 if proc.returncode == 0 else 500
-            self.send_response(code)
+            body_path = hdr_path = None
+            self.send_response(202)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(out.encode("utf-8", errors="replace") or b"ok")
+            self.wfile.write(b"accepted, deploying in background\n")
+        except Exception as exc:
+            sys.stderr.write("webhook handle spawn failed: %s\n" % exc)
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"spawn failed\n")
         finally:
             for p in (body_path, hdr_path):
                 if p:

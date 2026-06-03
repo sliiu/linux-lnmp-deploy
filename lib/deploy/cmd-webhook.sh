@@ -368,6 +368,8 @@ cmd_webhook_serve() {
 
 cmd_webhook_handle() {
   [[ -n "$WEBHOOK_BODY_FILE" && -f "$WEBHOOK_BODY_FILE" ]] || die "缺少 --body-file"
+  local _cleanup_body="$WEBHOOK_BODY_FILE" _cleanup_hdr="${WEBHOOK_HEADERS_FILE:-}"
+  trap 'rm -f "$_cleanup_body" "$_cleanup_hdr" 2>/dev/null || true' EXIT
   if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}"; then
     warn "webhook payload 处理失败"
     return 1
