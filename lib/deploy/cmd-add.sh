@@ -203,7 +203,7 @@ HORIZON
 # ═══════════════════════════════════════════════
 #  子命令: add
 # ═══════════════════════════════════════════════
-DOMAIN="" GIT_REPO="" GIT_BRANCH="" SITE_TYPE=""
+DOMAIN="" GIT_REPO="" GIT_BRANCH="" GIT_REF="" SITE_TYPE=""
 SITE_PHP_VERSION="" SITE_PHP_VERSION_CLI=0
 SITE_SSE_PREFIXES="" SITE_SSE_PREFIXES_CLI=0
 APP_NAME="" REDIS_HOST="" REDIS_PORT="" REDIS_PASSWORD=""
@@ -216,8 +216,13 @@ SSL_DNS="" CF_TOKEN="" FORCE_SSL="" SSL_STAGING=0
 ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
 AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" TENCENT_SECRET_ID="" TENCENT_SECRET_KEY=""
 CUSTOM_ENV=()
+WEBHOOK_MODE="" WEBHOOK_RELEASE_NAME="" WEBHOOK_SECRET="" WEBHOOK_ENABLE=0
+ROLLBACK_TO="" ROLLBACK_INDEX=0
+WEBHOOK_BODY_FILE="" WEBHOOK_HEADERS_FILE="" WEBHOOK_EVENT=""
+WEBHOOK_GH_SIG="" WEBHOOK_GITEE_TOKEN=""
 YES=0
 STATUS_ALL=0
+SKIP_GIT=0
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -238,6 +243,10 @@ parse_args() {
       --git)             shift; GIT_REPO="$1" ;;
       --git-branch=*)    GIT_BRANCH="${1#*=}" ;;
       --git-branch)      shift; GIT_BRANCH="$1" ;;
+      --git-ref=*)       GIT_REF="${1#*=}" ;;
+      --git-ref)         shift; GIT_REF="$1" ;;
+      --git-tag=*)       GIT_REF="${1#*=}" ;;
+      --git-tag)         shift; GIT_REF="$1" ;;
       --type=*)          SITE_TYPE="${1#*=}" ;;
       --type)            shift; SITE_TYPE="$1" ;;
       --php-version=*)   SITE_PHP_VERSION="${1#*=}"; SITE_PHP_VERSION_CLI=1 ;;
@@ -299,6 +308,26 @@ parse_args() {
       --need-horizon)    shift; NEED_HORIZON="$1" ;;
       --frontend-root=*) FRONTEND_ROOT="${1#*=}" ;;
       --frontend-root)   shift; FRONTEND_ROOT="$1" ;;
+      --webhook=*)       WEBHOOK_MODE="${1#*=}"; WEBHOOK_ENABLE=1 ;;
+      --webhook)         shift; WEBHOOK_MODE="$1"; WEBHOOK_ENABLE=1 ;;
+      --webhook-release-name=*) WEBHOOK_RELEASE_NAME="${1#*=}" ;;
+      --webhook-release-name)   shift; WEBHOOK_RELEASE_NAME="$1" ;;
+      --webhook-secret=*) WEBHOOK_SECRET="${1#*=}" ;;
+      --webhook-secret)   shift; WEBHOOK_SECRET="$1" ;;
+      --rollback-to=*)   ROLLBACK_TO="${1#*=}" ;;
+      --rollback-to)     shift; ROLLBACK_TO="$1" ;;
+      --rollback-index=*) ROLLBACK_INDEX="${1#*=}" ;;
+      --rollback-index)  shift; ROLLBACK_INDEX="$1" ;;
+      --body-file=*)     WEBHOOK_BODY_FILE="${1#*=}" ;;
+      --body-file)       shift; WEBHOOK_BODY_FILE="$1" ;;
+      --headers-file=*)  WEBHOOK_HEADERS_FILE="${1#*=}" ;;
+      --headers-file)    shift; WEBHOOK_HEADERS_FILE="$1" ;;
+      --event=*)         WEBHOOK_EVENT="${1#*=}" ;;
+      --event)           shift; WEBHOOK_EVENT="$1" ;;
+      --github-signature=*) WEBHOOK_GH_SIG="${1#*=}" ;;
+      --github-signature) shift; WEBHOOK_GH_SIG="$1" ;;
+      --gitee-token=*)   WEBHOOK_GITEE_TOKEN="${1#*=}" ;;
+      --gitee-token)     shift; WEBHOOK_GITEE_TOKEN="$1" ;;
       --env=*)           CUSTOM_ENV+=("${1#*=}") ;;
       --env)             shift; CUSTOM_ENV+=("$1") ;;
       --dns=*)           SSL_DNS="${1#*=}" ;;
@@ -735,6 +764,8 @@ cmd_add() {
     info "目录: ${WWW_ROOT}/${DOMAIN}"
     hr
   fi
+
+  _webhook_save_on_add
 }
 
 # ═══════════════════════════════════════════════
@@ -760,8 +791,12 @@ cmd_update() {
   ensure_mysql_low_memory_host_artifacts
   warn_mysql_low_memory_compose_missing
 
-  if [[ -d "${site_dir}/.git" ]]; then
-    _git_pull_or_clone "${site_dir}" "" "${GIT_BRANCH:-}"
+  if [[ "${SKIP_GIT:-0}" -ne 1 && -d "${site_dir}/.git" ]]; then
+    if [[ -n "${GIT_REF:-}" ]]; then
+      _git_fetch_checkout "${site_dir}" "${GIT_REF}"
+    else
+      _git_pull_or_clone "${site_dir}" "" "${GIT_BRANCH:-}"
+    fi
     ok "代码已更新"
   else
     warn "未检测到 .git，跳过 git pull（请事先将新版本同步到 ${site_dir}）"

@@ -8,6 +8,17 @@ _build_git_ssh_cmd() {
   printf '%s' "$cmd"
 }
 
+_git_fetch_checkout() {
+  local site_dir="$1" ref="$2"
+  local git_ssh
+  git_ssh=$(_build_git_ssh_cmd)
+  git config --global --replace-all safe.directory "${site_dir}" 2>/dev/null || true
+  export GIT_SSH_COMMAND="$git_ssh"
+  info "git fetch 并 checkout ${ref}..."
+  su - "${DEVOPS_USER}" -c "export GIT_SSH_COMMAND='${git_ssh}'; cd '${site_dir}' && git fetch --all --tags && git checkout '${ref}'" \
+    || die "git fetch/checkout ${ref} 失败"
+}
+
 _git_pull_or_clone() {
   local site_dir="$1" git_repo="${2:-}" git_branch="${3:-}"
   local git_ssh

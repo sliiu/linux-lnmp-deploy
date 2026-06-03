@@ -40,6 +40,8 @@ usage() {
 命令:
   add       部署新站点（无参数进入交互模式）
   update    更新已有站点（有 .git 则 pull；Laravel：composer、migrate、optimize、Horizon）
+  rollback  回退到历史部署版本（webhook/自动部署前会保留快照）
+  webhook   Webhook 自动部署（enable | disable | setup | serve | list）
   remove    移除站点（Nginx、SSL、crontab、Horizon、代码）
   list      列出已部署站点
   status    站点运行状态（本机 curl、容器、证书、日志；可加 --all）
@@ -51,6 +53,12 @@ usage() {
   环境变量 LARAVEL_SSE_PREFIXES  无 per-site 文件时的默认（空格/逗号分隔，规则同上）[默认: wave]
   --git=地址            Git 仓库地址（留空或省略=跳过 clone/pull）
   --git-branch=名称     clone/pull 使用的分支或标签（留空=默认分支；无 --git 时忽略）
+  --git-ref=名称        update 时 checkout 指定 tag/commit（不 pull）
+  --webhook=release|tag  add 时启用 webhook（静态=release，Laravel=tag）
+  --webhook-release-name=  release 模式：匹配的 Release 名称或 tag
+  --webhook-secret=     webhook 密钥（留空自动生成）
+  --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
+  --rollback-index=N    rollback 序号（同 --rollback-to 数字形式）
   --type=laravel|frontend  站点类型 [默认: laravel]
   --php-version=主版本   站点 PHP 版本（如 8.2 / 7.4），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
                        写入 ${NGINX_CONF}/<域名>.php-version；nginx fastcgi 与 composer/artisan/cron/horizon 自动路由到对应容器
@@ -84,7 +92,10 @@ usage() {
 示例:
   $0 add --domain=api.example.com --git=git@gitee.com:user/repo.git --git-branch=develop --need-db=y --db-name=app --db-password=secret
   $0 update --domain=api.example.com
-  $0 update --domain=api.example.com --run-migrate=n   # 不询问、不执行 migrate
+  $0 update --domain=api.example.com --git-ref=v1.2.0
+  $0 webhook enable --domain=www.example.com --webhook=release --webhook-release-name=production --git=git@github.com:org/repo.git
+  $0 webhook setup
+  $0 rollback --domain=www.example.com --rollback-to=1
   $0 remove --domain=api.example.com
   $0 list
   $0 status --domain=api.example.com

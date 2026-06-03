@@ -73,10 +73,12 @@ _source_lib lib/deploy/perms.sh
 _source_lib lib/deploy/nginx.sh
 _source_lib lib/deploy/ssl.sh
 _source_lib lib/deploy/git.sh
+_source_lib lib/deploy/webhook.sh
 _source_lib lib/deploy/cmd-add.sh
 _source_lib lib/deploy/cmd-remove.sh
 _source_lib lib/deploy/cmd-list.sh
 _source_lib lib/deploy/cmd-ssl.sh
+_source_lib lib/deploy/cmd-webhook.sh
 
 # ═══════════════════════════════════════════════
 #  主入口
@@ -88,6 +90,8 @@ main() {
     -h|--help) usage; exit 0 ;;
     add)    shift; parse_args "$@"; cmd_add ;;
     update) shift; parse_args "$@"; cmd_update ;;
+    rollback) shift; parse_args "$@"; cmd_rollback ;;
+    webhook) shift; cmd_webhook "$@" ;;
     remove) shift; parse_args "$@"; cmd_remove ;;
     list)   cmd_list ;;
     status) shift; parse_args "$@"; cmd_status ;;
@@ -103,6 +107,8 @@ main() {
           "查看站点列表（推荐先看一眼）" \
           "部署新站点" \
           "更新站点" \
+          "Webhook 自动部署" \
+          "回退站点版本" \
           "站点运行状态（含证书 / FPM / nginx 日志）" \
           "SSL 证书签发/续期" \
           "移除站点" \
@@ -112,10 +118,12 @@ main() {
           0) cmd_list ;;
           1) cmd_add ;;
           2) cmd_update ;;
-          3) STATUS_ALL=0; DOMAIN=""; cmd_status ;;
-          4) cmd_ssl ;;
-          5) cmd_remove ;;
-          6) ok "再见"; exit 0 ;;
+          3) cmd_webhook ;;
+          4) cmd_rollback ;;
+          5) STATUS_ALL=0; DOMAIN=""; cmd_status ;;
+          6) cmd_ssl ;;
+          7) cmd_remove ;;
+          8) ok "再见"; exit 0 ;;
         esac
         echo ""
         if ! confirm "返回主菜单？" "y"; then

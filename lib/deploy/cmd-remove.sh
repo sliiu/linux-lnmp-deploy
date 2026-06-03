@@ -11,6 +11,7 @@ cmd_remove() {
 
   rm -f "${NGINX_CONF}/${DOMAIN}.sse-prefixes" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.php-version" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.webhook" 2>/dev/null || true
   if [[ -f "${NGINX_CONF}/${DOMAIN}.conf" ]]; then
     rm -f "${NGINX_CONF}/${DOMAIN}.conf"
     normalize_nginx_conf_d
