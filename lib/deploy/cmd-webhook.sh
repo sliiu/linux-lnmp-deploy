@@ -143,12 +143,12 @@ _collect_webhook_setup_interactive() {
 cmd_webhook() {
   local sub="${1:-}"; shift || true
   case "$sub" in
-    enable)  shift; parse_args "$@"; cmd_webhook_enable ;;
-    disable) shift; parse_args "$@"; cmd_webhook_disable ;;
-    setup)   shift; parse_args "$@"; cmd_webhook_setup ;;
+    enable)  parse_args "$@"; cmd_webhook_enable ;;
+    disable) parse_args "$@"; cmd_webhook_disable ;;
+    setup)   parse_args "$@"; cmd_webhook_setup ;;
     serve)   cmd_webhook_serve ;;
-    handle)  shift; parse_args "$@"; cmd_webhook_handle ;;
-    list)    shift; parse_args "$@"; cmd_webhook_list ;;
+    handle)  parse_args "$@"; cmd_webhook_handle ;;
+    list)    parse_args "$@"; cmd_webhook_list ;;
     "")
       while true; do
         hr
