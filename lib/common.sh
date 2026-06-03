@@ -38,28 +38,13 @@ deploy_log_bind_domain() {
 
 deploy_log_session_start() {
   local cmd="${1:-deploy-site}" args="${2:-}"
-  info "===== $(date '+%Y-%m-%d %H:%M:%S') START ${cmd} ${args} pid=$$ log=${LOG_FILE} (deploy-log v2) ====="
-}
-
-deploy_log_session_end() {
-  local status="${1:-0}"
-  if [[ "$status" -eq 0 ]]; then
-    ok "===== $(date '+%Y-%m-%d %H:%M:%S') END pid=$$ status=ok log=${LOG_FILE} ====="
-  else
-    warn "===== $(date '+%Y-%m-%d %H:%M:%S') END pid=$$ status=${status} log=${LOG_FILE} ====="
-  fi
-}
-
-_deploy_log_mirror_line() {
-  [[ "${DEPLOY_LOG_MIRROR:-0}" = "1" && -n "${DEPLOY_LOG_LEGACY:-}" ]] || return 0
-  printf '%s\n' "$1" >> "$DEPLOY_LOG_LEGACY"
+  info "===== $(date '+%Y-%m-%d %H:%M:%S') START ${cmd} ${args} pid=$$ log=${LOG_FILE} ====="
 }
 
 _deploy_log_out() {
   if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
     printf '%s\n' "$1" >> "$LOG_FILE"
   fi
-  _deploy_log_mirror_line "$1"
   printf '%s\n' "$1"
 }
 
@@ -67,7 +52,6 @@ die() {
   if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
     printf '✗ %s\n' "$*" >> "$LOG_FILE"
   fi
-  _deploy_log_mirror_line "✗ $*"
   printf '✗ %s\n' "$*" >&2
   exit 1
 }

@@ -343,11 +343,6 @@ cmd_webhook_setup() {
   fi
 
   _webhook_write_listener_env
-  if [[ -x /usr/local/bin/deploy-site.sh ]] \
-    && [[ "${script_path}" -nt /usr/local/bin/deploy-site.sh ]]; then
-    cp -a "${script_path}" /usr/local/bin/deploy-site.sh
-    ok "已同步 /usr/local/bin/deploy-site.sh"
-  fi
   _webhook_write_systemd_unit "$script_path"
 
   if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
@@ -358,7 +353,6 @@ cmd_webhook_setup() {
   systemctl enable lnmp-deploy-webhook
   systemctl restart lnmp-deploy-webhook || die "systemd 启动 lnmp-deploy-webhook 失败（journalctl -u lnmp-deploy-webhook -n 20）"
   ok "Webhook 监听服务已安装"
-  info "部署日志: ${DATA_DIR}/logs/<域名>/（START 行含 deploy-log v2）；汇总 tail 请在 lnmp-env.conf 设 DEPLOY_LOG_MIRROR=1"
   _webhook_load_listener_env
   info "本机监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}"
   info "回调 URL: $(_webhook_public_callback_url)"
@@ -375,9 +369,9 @@ cmd_webhook_serve() {
 cmd_webhook_handle() {
   [[ -n "$WEBHOOK_BODY_FILE" && -f "$WEBHOOK_BODY_FILE" ]] || die "缺少 --body-file"
   local _cleanup_body="$WEBHOOK_BODY_FILE" _cleanup_hdr="${WEBHOOK_HEADERS_FILE:-}"
-  trap 'deploy_log_session_end "$?"; rm -f "$_cleanup_body" "$_cleanup_hdr" 2>/dev/null || true' EXIT
+  trap 'rm -f "$_cleanup_body" "$_cleanup_hdr" 2>/dev/null || true' EXIT
   if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}"; then
-    warn "webhook handle 结束: 处理失败"
+    warn "webhook handle 结束: payload 处理失败"
     return 1
   fi
   ok "webhook handle 结束"

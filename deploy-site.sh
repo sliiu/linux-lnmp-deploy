@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="2.0.1"
+VERSION="2.0.0"
 CONF_FILE="/etc/lnmp-env.conf"
 [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
 ACME_SSL_DNS_DEFAULT="${ACME_SSL_DNS_DEFAULT:-webroot}"
@@ -15,9 +15,6 @@ LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 export DEPLOY_LOG_TEE=1
-# 默认按域名分文件；需在单文件 tail -f 时在 /etc/lnmp-env.conf 设 DEPLOY_LOG_MIRROR=1
-export DEPLOY_LOG_MIRROR="${DEPLOY_LOG_MIRROR:-0}"
-export DEPLOY_LOG_LEGACY="${DEPLOY_LOG_LEGACY:-${DATA_DIR}/logs/deploy-site.log}"
 export DEPLOY_SESSION_CMD="$0"
 export DEPLOY_SESSION_ARGS="$*"
 readonly NGINX_C_UID=101
