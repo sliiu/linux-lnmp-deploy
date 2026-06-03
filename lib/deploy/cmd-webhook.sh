@@ -102,10 +102,12 @@ _collect_webhook_setup_interactive() {
   fi
 
   local _i
-  _i=$(menu_select "Webhook 公网访问方式" \
+  info "请选择 Webhook 公网访问方式（回车 = 第 1 项）："
+  menu_select "Webhook 公网访问方式" \
     "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
     "直接绑定 0.0.0.0（外网直连端口）" \
-    "仅本机 127.0.0.1（默认）")
+    "仅本机 127.0.0.1（默认）"
+  _i=${MENU_SELECT_IDX:-0}
   case "$_i" in
     0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
     1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
@@ -120,7 +122,9 @@ _collect_webhook_setup_interactive() {
     while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
     if [[ ${#doms[@]} -gt 0 ]]; then
       local _items=("${doms[@]}" "手动输入域名...")
-      _i=$(menu_select "反代到哪个域名" "${_items[@]}")
+      info "请选择反代域名（回车 = 第 1 项）："
+      menu_select "反代到哪个域名" "${_items[@]}"
+      _i=${MENU_SELECT_IDX:-0}
       if [[ "$_i" -lt ${#doms[@]} ]]; then
         WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
       else
@@ -219,16 +223,7 @@ cmd_webhook_setup() {
   script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy-site.sh"
   [[ -x "$script_path" ]] || script_path="${SCRIPT_DIR}/deploy-site.sh"
 
-  [[ -n "${WEBHOOK_PUBLIC_MODE:-}" || -n "${WEBHOOK_PROXY_DOMAIN:-}" \
-     || -n "${WEBHOOK_BIND:-}" || -n "${WEBHOOK_PORT:-}" || -n "${WEBHOOK_PATH:-}" ]] && cli_reconfig=1
-
-  if [[ "$cli_reconfig" -eq 0 ]] && ! interactive_tty_ok && ! [[ -t 0 ]]; then
-    die "webhook setup 需交互终端。请 SSH 登录后直接执行（勿用 curl 管道）:
-  sudo ${script_path} webhook setup
-或指定参数非交互安装:
-  sudo ${script_path} webhook setup --webhook-proxy-domain=hook.example.com
-  sudo ${script_path} webhook setup --webhook-bind=0.0.0.0 --webhook-port=9080"
-  fi
+  cli_reconfig=${WEBHOOK_SETUP_CLI:-0}
 
   _webhook_load_listener_env
   old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
@@ -272,7 +267,7 @@ cmd_webhook_setup() {
 
   systemctl daemon-reload
   systemctl enable lnmp-deploy-webhook
-  systemctl restart lnmp-deploy-webhook
+  systemctl restart lnmp-deploy-webhook || die "systemd 启动 lnmp-deploy-webhook 失败（journalctl -u lnmp-deploy-webhook -n 20）"
   ok "Webhook 监听服务已安装"
   _webhook_load_listener_env
   info "本机监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}"

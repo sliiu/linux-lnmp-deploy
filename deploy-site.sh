@@ -25,6 +25,14 @@ else
 fi
 _TEE_PID=$!
 exec > "$_LOG_PIPE" 2>&1
+# 交互菜单额外写 fd 3（/dev/tty），避免 stdout 重定向到管道后终端看不到菜单
+if [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null; then
+  exec 3>/dev/tty
+  export DEPLOY_HAS_UI_TTY=1
+else
+  exec 3>&2
+  export DEPLOY_HAS_UI_TTY=0
+fi
 # 脚本退出时清理管道和 tee 进程
 trap 'exec >/dev/null 2>&1; rm -f "$_LOG_PIPE"; wait "$_TEE_PID" 2>/dev/null || true' EXIT
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="

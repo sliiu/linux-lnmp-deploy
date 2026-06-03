@@ -226,6 +226,7 @@ WEBHOOK_PORT=""
 WEBHOOK_PATH=""
 WEBHOOK_PROXY_DOMAIN=""
 WEBHOOK_PUBLIC_MODE=""
+WEBHOOK_SETUP_CLI=0
 YES=0
 STATUS_ALL=0
 SKIP_GIT=0
@@ -290,6 +291,7 @@ reset_menu_deploy_state() {
   WEBHOOK_PATH=""
   WEBHOOK_PROXY_DOMAIN=""
   WEBHOOK_PUBLIC_MODE=""
+  WEBHOOK_SETUP_CLI=0
   YES=0
   STATUS_ALL=0
   SKIP_GIT=0
@@ -386,16 +388,16 @@ parse_args() {
       --webhook-secret=*) WEBHOOK_SECRET="${1#*=}" ;;
       --webhook-secret)   shift; WEBHOOK_SECRET="$1" ;;
       --webhook-only)    WEBHOOK_ONLY=1; WEBHOOK_ENABLE=1 ;;
-      --webhook-bind=*)  WEBHOOK_BIND="${1#*=}"; WEBHOOK_PUBLIC_MODE=bind ;;
-      --webhook-bind)    shift; WEBHOOK_BIND="$1"; WEBHOOK_PUBLIC_MODE=bind ;;
-      --webhook-port=*)  WEBHOOK_PORT="${1#*=}" ;;
-      --webhook-port)    shift; WEBHOOK_PORT="$1" ;;
-      --webhook-path=*)  WEBHOOK_PATH="${1#*=}" ;;
-      --webhook-path)    shift; WEBHOOK_PATH="$1" ;;
-      --webhook-proxy-domain=*) WEBHOOK_PROXY_DOMAIN="${1#*=}"; WEBHOOK_PUBLIC_MODE=nginx ;;
-      --webhook-proxy-domain)   shift; WEBHOOK_PROXY_DOMAIN="$1"; WEBHOOK_PUBLIC_MODE=nginx ;;
-      --webhook-public-mode=*) WEBHOOK_PUBLIC_MODE="${1#*=}" ;;
-      --webhook-public-mode)   shift; WEBHOOK_PUBLIC_MODE="$1" ;;
+      --webhook-bind=*)  WEBHOOK_BIND="${1#*=}"; WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-bind)    shift; WEBHOOK_BIND="$1"; WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-port=*)  WEBHOOK_PORT="${1#*=}"; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-port)    shift; WEBHOOK_PORT="$1"; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-path=*)  WEBHOOK_PATH="${1#*=}"; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-path)    shift; WEBHOOK_PATH="$1"; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-proxy-domain=*) WEBHOOK_PROXY_DOMAIN="${1#*=}"; WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-proxy-domain)   shift; WEBHOOK_PROXY_DOMAIN="$1"; WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-public-mode=*) WEBHOOK_PUBLIC_MODE="${1#*=}"; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-public-mode)   shift; WEBHOOK_PUBLIC_MODE="$1"; WEBHOOK_SETUP_CLI=1 ;;
       --rollback-to=*)   ROLLBACK_TO="${1#*=}" ;;
       --rollback-to)     shift; ROLLBACK_TO="$1" ;;
       --rollback-index=*) ROLLBACK_INDEX="${1#*=}" ;;

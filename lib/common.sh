@@ -8,18 +8,20 @@ ok()   { echo "  ✓ $*"; }
 warn() { echo "  ! $*"; }
 hr()   { echo "══════════════════════════════════════════════"; }
 
-# deploy-site 将 stdout/stderr 重定向到日志管道；交互提示走 stderr（tee 可见），
-# 命令替换 $(menu_select/prompt) 的 stdout 仅返回选项/输入值。
+# deploy-site 将 stdout/stderr 重定向到日志管道；交互提示同时写 fd3(/dev/tty) 与 stderr(日志)。
 interactive_tty_ok() {
-  [[ -e /dev/tty ]] && ( : >/dev/tty ) 2>/dev/null
+  [[ "${DEPLOY_HAS_UI_TTY:-0}" -eq 1 ]] || { [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null; }
 }
 
 _ui_msg() {
-  echo "  $*" >&2
+  printf '  %s\n' "$*" >&2
+  [[ "${DEPLOY_HAS_UI_TTY:-0}" -eq 1 ]] && printf '  %s\n' "$*" >&3 2>/dev/null || true
 }
 
 _ui_read() {
-  if interactive_tty_ok; then
+  if [[ "${DEPLOY_HAS_UI_TTY:-0}" -eq 1 ]]; then
+    read -r "$@" <&3 2>/dev/null || read -r "$@" </dev/tty 2>/dev/null || true
+  elif interactive_tty_ok; then
     read -r "$@" </dev/tty 2>/dev/null || true
   elif [[ -t 0 ]]; then
     read -r "$@" || true
@@ -70,6 +72,7 @@ menu_select() {
     choice=-1
   fi
   [[ $choice -ge 0 && $choice -lt ${#items[@]} ]] || choice=0
+  MENU_SELECT_IDX=$choice
   echo "$choice"
 }
 
