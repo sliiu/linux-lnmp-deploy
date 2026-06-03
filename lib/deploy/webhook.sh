@@ -368,30 +368,76 @@ for k, v in out.items():
 PY
 }
 
+_webhook_file_size() {
+  local f="$1" n=0
+  [[ -f "$f" ]] || { printf '0'; return 0; }
+  n="$(wc -c <"$f" 2>/dev/null | tr -d '[:space:]')"
+  [[ -n "$n" && "$n" =~ ^[0-9]+$ ]] || n="$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)"
+  printf '%s' "${n:-0}"
+}
+
+_webhook_download_progress_monitor() {
+  local dest="$1" stop_file="$2"
+  while [[ ! -f "$stop_file" ]]; do
+    sleep 10
+    [[ -f "$stop_file" ]] && break
+    info "下载中: 已下载 $(_webhook_file_size "$dest") 字节"
+  done
+}
+
+_webhook_download_progress_stop() {
+  local monitor_pid="$1" stop_file="$2"
+  touch "$stop_file" 2>/dev/null || true
+  if [[ -n "$monitor_pid" ]]; then
+    kill "$monitor_pid" 2>/dev/null || true
+    wait "$monitor_pid" 2>/dev/null || true
+  fi
+  rm -f "$stop_file"
+}
+
 _webhook_download_url() {
   local url="$1" dest="$2" token="${3:-}"
-  local hdr=() err rc
+  local hdr=() err rc=0 t0 t1 nbytes monitor_pid=0 stop_file
   [[ -n "$token" ]] && hdr+=(-H "Authorization: Bearer ${token}")
   if [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]]; then
     hdr+=(-H "Accept: application/octet-stream")
   fi
+  stop_file="$(mktemp)"
+  t0=$(date +%s)
+  _webhook_download_progress_monitor "$dest" "$stop_file" &
+  monitor_pid=$!
   if command -v curl &>/dev/null; then
     err="$(curl -fsSL "${hdr[@]}" -o "$dest" "$url" 2>&1)" || rc=$?
-    if [[ "${rc:-0}" -ne 0 ]]; then
+    _webhook_download_progress_stop "$monitor_pid" "$stop_file"
+    monitor_pid=0
+    t1=$(date +%s)
+    if [[ "$rc" -ne 0 ]]; then
       warn "${err:-curl 下载失败}"
       if [[ -z "$token" && "$url" == *"github.com/"*"/releases/download/"* ]]; then
         warn "提示: 私有仓库需在站点 webhook 配置 github_token（classic PAT 需 repo 权限）"
       fi
       return 1
     fi
+    nbytes="$(_webhook_file_size "$dest")"
+    info "下载完成: ${nbytes} 字节, 耗时 $((t1 - t0)) 秒"
     return 0
   elif command -v wget &>/dev/null; then
     local wget_hdr=()
     [[ -n "$token" ]] && wget_hdr+=(--header="Authorization: Bearer ${token}")
     [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]] \
       && wget_hdr+=(--header="Accept: application/octet-stream")
-    wget -q "${wget_hdr[@]}" -O "$dest" "$url" || return 1
+    wget -q "${wget_hdr[@]}" -O "$dest" "$url" || rc=$?
+    _webhook_download_progress_stop "$monitor_pid" "$stop_file"
+    monitor_pid=0
+    t1=$(date +%s)
+    if [[ "$rc" -ne 0 ]]; then
+      return 1
+    fi
+    nbytes="$(_webhook_file_size "$dest")"
+    info "下载完成: ${nbytes} 字节, 耗时 $((t1 - t0)) 秒"
+    return 0
   else
+    _webhook_download_progress_stop "$monitor_pid" "$stop_file"
     die "缺少 curl/wget"
   fi
 }
