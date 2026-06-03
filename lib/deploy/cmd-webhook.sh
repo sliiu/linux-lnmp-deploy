@@ -220,6 +220,14 @@ cmd_webhook_setup() {
   [[ -n "${WEBHOOK_PUBLIC_MODE:-}" || -n "${WEBHOOK_PROXY_DOMAIN:-}" \
      || -n "${WEBHOOK_BIND:-}" || -n "${WEBHOOK_PORT:-}" || -n "${WEBHOOK_PATH:-}" ]] && cli_reconfig=1
 
+  if [[ "$cli_reconfig" -eq 0 ]] && ! interactive_tty_ok; then
+    die "webhook setup 需交互终端。请 SSH 登录后直接执行（勿用 curl 管道）:
+  sudo ${script_path} webhook setup
+或指定参数非交互安装:
+  sudo ${script_path} webhook setup --webhook-proxy-domain=hook.example.com
+  sudo ${script_path} webhook setup --webhook-bind=0.0.0.0 --webhook-port=9080"
+  fi
+
   _webhook_load_listener_env
   old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
   old_domain="${WEBHOOK_PROXY_DOMAIN:-}"

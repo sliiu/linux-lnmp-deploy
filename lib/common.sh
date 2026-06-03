@@ -9,15 +9,31 @@ warn() { echo "  ! $*"; }
 hr()   { echo "══════════════════════════════════════════════"; }
 
 # deploy-site 将 stdout/stderr 重定向到日志管道后，[[ -t 0 ]] 常为假。
-# 交互一律走 /dev/tty（见 prompt/menu_select/confirm）；勿用本函数拦截菜单。
+# 交互优先 /dev/tty；不可用时回退 stdout/stdin，避免 set -e 因 >/dev/tty 失败而静默退出。
 interactive_tty_ok() {
   [[ -r /dev/tty && -w /dev/tty ]]
+}
+
+_ui_out() {
+  if interactive_tty_ok; then
+    cat > /dev/tty || cat
+  else
+    cat
+  fi
+}
+
+_ui_read() {
+  if interactive_tty_ok; then
+    read -r "$@" </dev/tty 2>/dev/tty || true
+  else
+    read -r "$@" || true
+  fi
 }
 
 confirm() {
   local msg="${1:-确认？}" default="${2:-y}" ans=""
   local prompt_str="[Y/n]"; [[ "$default" != "y" ]] && prompt_str="[y/N]"
-  read -rp "  ${msg} ${prompt_str}: " ans </dev/tty 2>/dev/tty || true
+  _ui_read -rp "  ${msg} ${prompt_str}: " ans
   ans=${ans:-$default}
   [[ "$ans" =~ ^[yY]$ ]]
 }
@@ -25,9 +41,9 @@ confirm() {
 prompt() {
   local msg="$1" default="${2:-}" var=""
   if [[ -n "$default" ]]; then
-    read -rp "  ${msg} [${default}]: " var </dev/tty 2>/dev/tty || true
+    _ui_read -rp "  ${msg} [${default}]: " var
   else
-    read -rp "  ${msg}: " var </dev/tty 2>/dev/tty || true
+    _ui_read -rp "  ${msg}: " var
   fi
   echo "${var:-$default}"
 }
@@ -45,9 +61,9 @@ menu_select() {
     echo ""
     info "回车或无效输入 = 第 1 项（推荐默认）"
     echo ""
-  } >/dev/tty
+  } | _ui_out
   local choice raw
-  read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw </dev/tty >/dev/tty || raw=""
+  _ui_read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw
   if [[ "$raw" =~ ^[0-9]+$ ]]; then
     choice=$((raw - 1))
   else
