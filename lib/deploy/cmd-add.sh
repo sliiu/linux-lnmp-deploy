@@ -456,6 +456,7 @@ parse_args() {
     esac
     shift
   done
+  deploy_log_bind_domain "${DOMAIN:-}"
 }
 
 # 列出 ${NGINX_CONF}/*.conf 已部署站点（去掉 default）
@@ -486,6 +487,7 @@ prompt_pick_domain() {
   else
     DOMAIN=$(prompt "站点域名")
   fi
+  deploy_log_bind_domain "${DOMAIN:-}"
 }
 
 # PHP 版本菜单：基于在线 lnmp-php / lnmp-phpNN 容器
@@ -633,6 +635,7 @@ collect_interactive() {
   # 1) 域名（决策性，最早问）
   [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  deploy_log_bind_domain "$DOMAIN"
 
   # 2) 站点类型（与主菜单相同：直接 menu_select，勿预判 tty；误判时会静默默认 laravel）
   if [[ "${SITE_TYPE_CLI:-0}" -ne 1 ]]; then

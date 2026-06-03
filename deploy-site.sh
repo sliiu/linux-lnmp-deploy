@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-VERSION="2.0.0"
+VERSION="2.0.1"
 CONF_FILE="/etc/lnmp-env.conf"
 [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
 ACME_SSL_DNS_DEFAULT="${ACME_SSL_DNS_DEFAULT:-webroot}"
@@ -14,8 +14,12 @@ SSL_DIR="${DATA_DIR}/ssl"
 LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
-LOG_FILE="${DATA_DIR}/logs/deploy-site.log"
-export LOG_FILE DEPLOY_LOG_TEE=1
+export DEPLOY_LOG_TEE=1
+# 默认按域名分文件；需在单文件 tail -f 时在 /etc/lnmp-env.conf 设 DEPLOY_LOG_MIRROR=1
+export DEPLOY_LOG_MIRROR="${DEPLOY_LOG_MIRROR:-0}"
+export DEPLOY_LOG_LEGACY="${DEPLOY_LOG_LEGACY:-${DATA_DIR}/logs/deploy-site.log}"
+export DEPLOY_SESSION_CMD="$0"
+export DEPLOY_SESSION_ARGS="$*"
 readonly NGINX_C_UID=101
 readonly NGINX_C_GID=101
 # PHP-FPM 容器内 uid（与 init.sh docker-compose 中 php 镜像默认 www-data 82 一致）
@@ -66,7 +70,8 @@ _source_lib lib/deploy/cmd-list.sh
 _source_lib lib/deploy/cmd-ssl.sh
 _source_lib lib/deploy/cmd-webhook.sh
 
-info "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="
+deploy_log_init ""
+deploy_log_session_start "$0" "$*"
 
 # ═══════════════════════════════════════════════
 #  主入口

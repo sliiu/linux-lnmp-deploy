@@ -2,20 +2,79 @@
 # init.sh / deploy-site.sh 共用工具函数
 # 此文件由两个入口脚本通过 source 引入，脚本独立运行时请使用 bootstrap.sh
 
-if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
-  _deploy_log() { printf '%s\n' "$1" >> "$LOG_FILE"; printf '%s\n' "$1"; }
-  die()  { printf '✗ %s\n' "$*" >> "$LOG_FILE"; printf '✗ %s\n' "$*" >&2; exit 1; }
-  info() { _deploy_log "  $*"; }
-  ok()   { _deploy_log "  ✓ $*"; }
-  warn() { _deploy_log "  ! $*"; }
-  hr()   { _deploy_log "══════════════════════════════════════════════"; }
-else
-  die()  { echo "✗ $*" >&2; exit 1; }
-  info() { echo "  $*"; }
-  ok()   { echo "  ✓ $*"; }
-  warn() { echo "  ! $*"; }
-  hr()   { echo "══════════════════════════════════════════════"; }
-fi
+_deploy_log_bound_domain=""
+
+_deploy_log_safe_slug() {
+  local s="$1"
+  s="${s//\//_}"
+  s="${s// /_}"
+  printf '%s' "$s"
+}
+
+# 日志：${DATA_DIR}/logs/<域名>/<域名>-YYYY-MM-DD-HH-MM-SS.log；无域名时用 _global/
+deploy_log_init() {
+  local domain="${1:-}" slug base="${DATA_DIR:-/data/docker-lnmp}/logs" ts
+  ts="$(date '+%Y-%m-%d-%H-%M-%S')"
+  if [[ -n "$domain" ]]; then
+    slug="$(_deploy_log_safe_slug "$domain")"
+    mkdir -p "${base}/${slug}"
+    LOG_FILE="${base}/${slug}/${slug}-${ts}.log"
+    _deploy_log_bound_domain="$domain"
+  else
+    mkdir -p "${base}/_global"
+    LOG_FILE="${base}/_global/deploy-site-${ts}.log"
+    _deploy_log_bound_domain=""
+  fi
+  export LOG_FILE
+}
+
+deploy_log_bind_domain() {
+  local d="${1:-}"
+  [[ -z "$d" ]] && return 0
+  [[ "$d" = "${_deploy_log_bound_domain:-}" ]] && return 0
+  deploy_log_init "$d"
+  deploy_log_session_start "${DEPLOY_SESSION_CMD:-deploy-site}" "${DEPLOY_SESSION_ARGS:-}"
+}
+
+deploy_log_session_start() {
+  local cmd="${1:-deploy-site}" args="${2:-}"
+  info "===== $(date '+%Y-%m-%d %H:%M:%S') START ${cmd} ${args} pid=$$ log=${LOG_FILE} (deploy-log v2) ====="
+}
+
+deploy_log_session_end() {
+  local status="${1:-0}"
+  if [[ "$status" -eq 0 ]]; then
+    ok "===== $(date '+%Y-%m-%d %H:%M:%S') END pid=$$ status=ok log=${LOG_FILE} ====="
+  else
+    warn "===== $(date '+%Y-%m-%d %H:%M:%S') END pid=$$ status=${status} log=${LOG_FILE} ====="
+  fi
+}
+
+_deploy_log_mirror_line() {
+  [[ "${DEPLOY_LOG_MIRROR:-0}" = "1" && -n "${DEPLOY_LOG_LEGACY:-}" ]] || return 0
+  printf '%s\n' "$1" >> "$DEPLOY_LOG_LEGACY"
+}
+
+_deploy_log_out() {
+  if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
+    printf '%s\n' "$1" >> "$LOG_FILE"
+  fi
+  _deploy_log_mirror_line "$1"
+  printf '%s\n' "$1"
+}
+
+die() {
+  if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
+    printf '✗ %s\n' "$*" >> "$LOG_FILE"
+  fi
+  _deploy_log_mirror_line "✗ $*"
+  printf '✗ %s\n' "$*" >&2
+  exit 1
+}
+info() { _deploy_log_out "  $*"; }
+ok()   { _deploy_log_out "  ✓ $*"; }
+warn() { _deploy_log_out "  ! $*"; }
+hr()   { _deploy_log_out "══════════════════════════════════════════════"; }
 
 interactive_tty_ok() {
   [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null

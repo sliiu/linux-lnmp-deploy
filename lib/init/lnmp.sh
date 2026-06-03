@@ -459,7 +459,8 @@ _setup_logrotate() {
 ${DATA_DIR}/${_esub}/log/*.log"
   done < <(_php_extra_list)
   cat > /etc/logrotate.d/lnmp <<LOGROTATE
-${DATA_DIR}/logs/*.log
+${DATA_DIR}/logs/*/*.log
+${DATA_DIR}/logs/_global/*.log
 /var/log/acme-renew.log
 ${DATA_DIR}/nginx/logs/*.log
 ${DATA_DIR}/php/log/*.log${extra_logs} {

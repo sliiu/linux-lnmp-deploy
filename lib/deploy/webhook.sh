@@ -146,13 +146,23 @@ _webhook_load_listener_env() {
 
 _webhook_acquire_lock() {
   local domain="$1"
-  local lf; lf="$(_webhook_lock_file "$domain")"
+  local lf holder
+  lf="$(_webhook_lock_file "$domain")"
   mkdir -p "$(dirname "$lf")"
-  if ! ( set -o noclobber; echo "$$" > "$lf" ) 2>/dev/null; then
-    warn "站点 ${domain} 正在部署中，跳过"
-    return 1
+  if ( set -o noclobber; echo "$$" > "$lf" ) 2>/dev/null; then
+    return 0
   fi
-  return 0
+  holder="$(tr -d '[:space:]' < "$lf" 2>/dev/null || true)"
+  if [[ -n "$holder" && "$holder" =~ ^[0-9]+$ ]] && ! kill -0 "$holder" 2>/dev/null; then
+    warn "站点 ${domain} 陈旧部署锁（pid ${holder} 已退出），已清除并重试"
+    rm -f "$lf"
+    if ( set -o noclobber; echo "$$" > "$lf" ) 2>/dev/null; then
+      return 0
+    fi
+    holder="$(tr -d '[:space:]' < "$lf" 2>/dev/null || true)"
+  fi
+  warn "站点 ${domain} 正在部署中（锁 pid=${holder:-?}），跳过"
+  return 1
 }
 
 _webhook_release_lock() {
@@ -237,6 +247,7 @@ _webhook_restore_backup() {
     [[ -d "${site_dir}/.git" ]] || die "站点无 .git，无法回退 git ref"
     _git_fetch_checkout "$site_dir" "$ref"
     DOMAIN="$domain"
+    deploy_log_bind_domain "$domain"
     YES=1
     RUN_MIGRATE=n
     SKIP_GIT=1
@@ -457,7 +468,9 @@ _webhook_deploy_release() {
   ver="${release_tag:-$release_name}"
   [[ -n "$ver" ]] || ver="release"
 
-  _webhook_acquire_lock "$domain" || return 1
+  if ! _webhook_acquire_lock "$domain"; then
+    return 1
+  fi
   trap '_webhook_release_lock "'"$domain"'"' RETURN
 
   _webhook_backup_site "$domain" "$ver" "release" >/dev/null
@@ -494,12 +507,15 @@ _webhook_deploy_tag() {
   local site_dir="${WWW_ROOT}/${domain}"
   [[ -d "${site_dir}/.git" ]] || die "站点 ${domain} 无 .git，无法按 tag 更新"
 
-  _webhook_acquire_lock "$domain" || return 1
+  if ! _webhook_acquire_lock "$domain"; then
+    return 1
+  fi
   trap '_webhook_release_lock "'"$domain"'"' RETURN
 
   _webhook_backup_site "$domain" "$tag" "tag" >/dev/null
   _git_fetch_checkout "$site_dir" "$tag"
   DOMAIN="$domain"
+  deploy_log_bind_domain "$domain"
   YES=1
   RUN_MIGRATE="${WEBHOOK_RUN_MIGRATE:-y}"
   GIT_REF=""
@@ -572,6 +588,7 @@ _webhook_process_payload() {
     site_count=$((site_count + 1))
     domain="${line%%|*}"
     mode="${line#*|}"
+    deploy_log_bind_domain "$domain"
     wf="$(site_webhook_file "$domain")"
     secret="$(_webhook_read_kv "$wf" secret)"
     ok_verify=0
@@ -600,24 +617,31 @@ _webhook_process_payload() {
         warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 name=${rel_name:-} tag=${rel_tag:-}）"
         continue
       fi
-      _webhook_deploy_release "$domain" "$body_file" "$rel_name" "$rel_tag" ""
-      matched=1
+      if _webhook_deploy_release "$domain" "$body_file" "$rel_name" "$rel_tag" ""; then
+        matched=1
+      else
+        warn "站点 ${domain} release 部署未执行（见上方原因）"
+      fi
     elif [[ "$mode" = "tag" ]]; then
       local tag="${ref#refs/tags/}"
       [[ -n "$tag" && "$ref" == refs/tags/* ]] || { warn "站点 ${domain} 跳过: 无 tag ref"; continue; }
       [[ "$event" = "push" || "$event" = "Push Hook" || "$event" = "Tag Push Hook" ]] || { warn "站点 ${domain} 跳过: event=${event}"; continue; }
-      _webhook_deploy_tag "$domain" "$tag"
-      matched=1
+      if _webhook_deploy_tag "$domain" "$tag"; then
+        matched=1
+      else
+        warn "站点 ${domain} tag 部署未执行（见上方原因）"
+      fi
     fi
   done < <(_webhook_sites_for_repo "$norm")
 
   if [[ "$matched" -eq 1 ]]; then
+    info "webhook 处理完成: 已触发部署"
     return 0
   fi
   if [[ "$site_count" -eq 0 ]]; then
-    info "无已启用 webhook 站点匹配仓库 ${norm}（slug=$(_webhook_repo_slug "$norm")）"
+    info "webhook 处理完成: 无已启用 webhook 站点匹配仓库 ${norm}（slug=$(_webhook_repo_slug "$norm")）"
   else
-    info "仓库 ${norm} 有 ${site_count} 个站点，均未触发部署（见上方跳过原因）"
+    info "webhook 处理完成: 仓库 ${norm} 有 ${site_count} 个站点，均未触发部署（见上方跳过原因）"
   fi
   return 0
 }
@@ -785,7 +809,8 @@ _webhook_remove_nginx_proxy() {
 }
 
 _webhook_write_systemd_unit() {
-  local script_path="$1"
+  local script_path="$1" workdir
+  workdir="$(cd "$(dirname "$script_path")" && pwd)"
   cat > "$WEBHOOK_SYSTEMD_UNIT" <<EOF
 [Unit]
 Description=LNMP deploy-site webhook listener
@@ -793,6 +818,8 @@ After=network.target docker.service
 
 [Service]
 Type=simple
+WorkingDirectory=${workdir}
+EnvironmentFile=-/etc/lnmp-env.conf
 ExecStart=${script_path} webhook serve
 Restart=on-failure
 RestartSec=3

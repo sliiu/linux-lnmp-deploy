@@ -344,7 +344,12 @@ sudo /usr/local/bin/deploy-site.sh add \
 
 ### 日志路径（deploy-site.sh）
 
-- `/data/docker-lnmp/logs/deploy-site.log`
+- 按域名分目录：`/data/docker-lnmp/logs/<域名>/<域名>-YYYY-MM-DD-HH-MM-SS.log`
+- 无站点上下文（主菜单、`list` 等）：`/data/docker-lnmp/logs/_global/deploy-site-YYYY-MM-DD-HH-MM-SS.log`
+- 可选汇总：在 `/etc/lnmp-env.conf` 设 `DEPLOY_LOG_MIRROR=1` 后，同时追加到
+  `/data/docker-lnmp/logs/deploy-site.log`（默认关闭镜像，避免与分域名日志混淆）
+- 日志行含 `(deploy-log v2)` 表示脚本已更新；更新后执行 `git pull` 并
+  `systemctl restart lnmp-deploy-webhook`
 
 ### 注意事项（deploy-site.sh）
 
