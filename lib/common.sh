@@ -8,18 +8,14 @@ ok()   { echo "  ✓ $*"; }
 warn() { echo "  ! $*"; }
 hr()   { echo "══════════════════════════════════════════════"; }
 
-# deploy-site 将 stdout/stderr 重定向到日志管道后，[[ -t 0 ]] 常为假。
-# 交互优先 /dev/tty；不可用时回退 stdout/stdin，避免 set -e 因 >/dev/tty 失败而静默退出。
+# deploy-site 将 stdout/stderr 重定向到日志管道；交互提示走 stderr（tee 可见），
+# 命令替换 $(menu_select/prompt) 的 stdout 仅返回选项/输入值。
 interactive_tty_ok() {
   [[ -e /dev/tty ]] && ( : >/dev/tty ) 2>/dev/null
 }
 
-_ui_out() {
-  if interactive_tty_ok; then
-    cat > /dev/tty 2>/dev/null || cat >&2
-  else
-    cat >&2
-  fi
+_ui_msg() {
+  echo "  $*" >&2
 }
 
 _ui_read() {
@@ -35,6 +31,7 @@ _ui_read() {
 confirm() {
   local msg="${1:-确认？}" default="${2:-y}" ans=""
   local prompt_str="[Y/n]"; [[ "$default" != "y" ]] && prompt_str="[y/N]"
+  _ui_msg "${msg} ${prompt_str}:"
   _ui_read -rp "  ${msg} ${prompt_str}: " ans
   ans=${ans:-$default}
   [[ "$ans" =~ ^[yY]$ ]]
@@ -43,8 +40,10 @@ confirm() {
 prompt() {
   local msg="$1" default="${2:-}" var=""
   if [[ -n "$default" ]]; then
+    _ui_msg "${msg} [${default}]:"
     _ui_read -rp "  ${msg} [${default}]: " var
   else
+    _ui_msg "${msg}:"
     _ui_read -rp "  ${msg}: " var
   fi
   echo "${var:-$default}"
@@ -53,17 +52,16 @@ prompt() {
 menu_select() {
   local title="$1"; shift
   local -a items=("$@")
-  {
-    echo ""
-    info "$title"
-    echo ""
-    for i in "${!items[@]}"; do
-      printf "    %d) %s\n" $((i + 1)) "${items[$i]}"
-    done
-    echo ""
-    info "回车或无效输入 = 第 1 项（推荐默认）"
-    echo ""
-  } | _ui_out
+  echo "" >&2
+  _ui_msg "$title"
+  echo "" >&2
+  local i
+  for i in "${!items[@]}"; do
+    _ui_msg "    $((i + 1))) ${items[$i]}"
+  done
+  echo "" >&2
+  _ui_msg "回车或无效输入 = 第 1 项（推荐默认）"
+  echo "" >&2
   local choice raw
   _ui_read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw
   if [[ "$raw" =~ ^[0-9]+$ ]]; then

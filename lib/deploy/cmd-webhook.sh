@@ -106,8 +106,6 @@ _collect_webhook_setup_interactive() {
     "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
     "直接绑定 0.0.0.0（外网直连端口）" \
     "仅本机 127.0.0.1（默认）")
-  _i="${_i##*$'\n'}"
-  _i="${_i//[^0-9]/}"
   case "$_i" in
     0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
     1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
@@ -123,9 +121,7 @@ _collect_webhook_setup_interactive() {
     if [[ ${#doms[@]} -gt 0 ]]; then
       local _items=("${doms[@]}" "手动输入域名...")
       _i=$(menu_select "反代到哪个域名" "${_items[@]}")
-      _i="${_i##*$'\n'}"
-      _i="${_i//[^0-9]/}"
-      if [[ "$_i" =~ ^[0-9]+$ && "$_i" -lt ${#doms[@]} ]]; then
+      if [[ "$_i" -lt ${#doms[@]} ]]; then
         WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
       else
         WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}")
