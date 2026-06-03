@@ -41,7 +41,7 @@ _webhook_normalize_repo() {
   elif [[ "$raw" =~ ^https?://([^/]+)/(.+)$ ]]; then
     host="${BASH_REMATCH[1]}"
     path="${BASH_REMATCH[2]}"
-  elif [[ "$raw" =~ ^([^/]+)/([^/]+)$ ]]; then
+  elif [[ "$raw" != *:* && "$raw" =~ ^([^/]+)/([^/]+)$ ]]; then
     host=""
     path="${raw}"
   else
@@ -60,6 +60,13 @@ _webhook_normalize_repo() {
   repo="${path#*/}"
   repo="${repo%%/*}"
   printf '%s:%s/%s' "$provider" "$owner" "$repo"
+}
+
+# 可比对的 owner/repo（忽略 provider 前缀）
+_webhook_repo_slug() {
+  local norm="$(_webhook_normalize_repo "$1")"
+  [[ "$norm" =~ ^[^:]+:(.+)$ ]] && { printf '%s' "${BASH_REMATCH[1]}"; return 0; }
+  printf '%s' "$norm"
 }
 
 _webhook_read_kv() {
@@ -265,13 +272,15 @@ _webhook_json_field() {
 }
 
 _webhook_sites_for_repo() {
-  local norm="$1" conf name mode repo
+  local norm="$1" conf name mode repo want slug
+  want="$(_webhook_repo_slug "$norm")"
   for conf in "${NGINX_CONF}"/*.webhook; do
     [[ -f "$conf" ]] || continue
     [[ "$(_webhook_read_kv "$conf" enabled)" = "1" ]] || continue
     repo="$(_webhook_read_kv "$conf" git_repo)"
     [[ -n "$repo" ]] || continue
-    [[ "$(_webhook_normalize_repo "$repo")" = "$norm" ]] || continue
+    slug="$(_webhook_repo_slug "$repo")"
+    [[ "$slug" = "$want" ]] || continue
     name=$(basename "$conf" .webhook)
     mode="$(_webhook_read_kv "$conf" mode)"
     printf '%s|%s\n' "$name" "$mode"
@@ -426,9 +435,10 @@ _webhook_process_payload() {
   [[ -z "$clone_url" ]] && clone_url="$(_webhook_json_field "$body_file" '"git_ssh_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
   html_url="$(_webhook_json_field "$body_file" '"html_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
   [[ -z "$html_url" ]] && html_url="$(_webhook_json_field "$body_file" '"url"[[:space:]]*:[[:space:]]*"https://gitee\.com[^"]+"')"
-  [[ -n "$repo_full" ]] && norm="$(_webhook_normalize_repo "$repo_full")"
-  [[ -z "$norm" && -n "$clone_url" ]] && norm="$(_webhook_normalize_repo "$clone_url")"
+  norm=""
+  [[ -n "$clone_url" ]] && norm="$(_webhook_normalize_repo "$clone_url")"
   [[ -z "$norm" && -n "$html_url" ]] && norm="$(_webhook_normalize_repo "$html_url")"
+  [[ -z "$norm" && -n "$repo_full" ]] && norm="$(_webhook_normalize_repo "$repo_full")"
   [[ -n "$norm" ]] || { warn "无法解析仓库"; return 1; }
   provider="${norm%%:*}"
 
