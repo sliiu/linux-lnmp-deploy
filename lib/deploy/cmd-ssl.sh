@@ -40,6 +40,7 @@ usage() {
 命令:
   add       部署新站点（无参数进入交互模式）
   update    更新已有站点（有 .git 则 pull；Laravel：composer、migrate、optimize、Horizon）
+            已有站点可 --webhook=release|tag 恢复/更新 Webhook 配置；--webhook-only 仅写配置
   rollback  回退到历史部署版本（webhook/自动部署前会保留快照）
   webhook   Webhook 自动部署（enable | disable | setup | serve | list）
   remove    移除站点（Nginx、SSL、crontab、Horizon、代码）
@@ -54,7 +55,8 @@ usage() {
   --git=地址            Git 仓库地址（留空或省略=跳过 clone/pull）
   --git-branch=名称     clone/pull 使用的分支或标签（留空=默认分支；无 --git 时忽略）
   --git-ref=名称        update 时 checkout 指定 tag/commit（不 pull）
-  --webhook=release|tag  add 时启用 webhook（静态=release，Laravel=tag）
+  --webhook=release|tag  add/update 启用或恢复 webhook（静态=release，Laravel=tag）
+  --webhook-only        与 update --webhook 联用：仅写 webhook 配置，不 pull/composer
   --webhook-release-name=  release 模式：匹配的 Release 名称或 tag
   --webhook-secret=     webhook 密钥（留空自动生成）
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
@@ -93,6 +95,7 @@ usage() {
   $0 add --domain=api.example.com --git=git@gitee.com:user/repo.git --git-branch=develop --need-db=y --db-name=app --db-password=secret
   $0 update --domain=api.example.com
   $0 update --domain=api.example.com --git-ref=v1.2.0
+  $0 update --domain=www.example.com --webhook=release --webhook-release-name=production --git=git@github.com:org/repo.git --webhook-only
   $0 webhook enable --domain=www.example.com --webhook=release --webhook-release-name=production --git=git@github.com:org/repo.git
   $0 webhook setup
   $0 rollback --domain=www.example.com --rollback-to=1

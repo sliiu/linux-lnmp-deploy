@@ -358,6 +358,10 @@ NGINX
 # 前端静态根相对 ${WWW_ROOT}/<domain>：按「index.html 所在目录」推断，避免仅有空 dist/ 时 root 指错导致 /js/* 全 404
 effective_frontend_subdir() {
   local domain="$1"
+  if frontend_release_webhook_site "$domain" 2>/dev/null || _adding_frontend_release_webhook; then
+    printf '%s\n' ""
+    return
+  fi
   local site="${WWW_ROOT}/${domain}"
   local fe="${FRONTEND_ROOT:-}"
   [[ "$fe" = "." ]] && fe=""

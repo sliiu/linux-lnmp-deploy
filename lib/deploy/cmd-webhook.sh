@@ -15,12 +15,78 @@ _webhook_save_on_add() {
   [[ "$mode" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
     || die "静态站点 release 模式需 --webhook-release-name="
   local fe="" sec
-  [[ "$SITE_TYPE" = "frontend" ]] && fe="${FRONTEND_ROOT:-}"
-  sec="$(_webhook_write_site_config "$DOMAIN" "$mode" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "${WEBHOOK_SECRET:-}" "$fe")"
+  sec="$(_webhook_write_site_config "$DOMAIN" "$mode" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "${WEBHOOK_SECRET:-}")"
   ok "Webhook 已配置（mode=${mode}）"
+  if [[ "$mode" = "release" ]]; then
+    info "  静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
+  fi
   info "  回调 URL: http://<服务器>:$(_webhook_load_listener_env; echo "${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}")"
   info "  Secret: ${sec}（写入 $(site_webhook_file "$DOMAIN")）"
   info "  执行 webhook setup 安装 systemd 监听服务"
+}
+
+# 为已有站点写入/恢复 ${NGINX_CONF}/<域名>.webhook（update / webhook enable 共用）
+_webhook_configure_site() {
+  local site_dir="${WWW_ROOT}/${DOMAIN}"
+  [[ -d "$site_dir" ]] || die "站点 ${DOMAIN} 不存在"
+
+  local st="laravel"
+  [[ -f "${site_dir}/artisan" ]] || st="frontend"
+
+  local wf_old="" old_secret old_rel
+  wf_old="$(site_webhook_file "$DOMAIN")"
+  if [[ -f "$wf_old" ]]; then
+    old_secret="$(_webhook_read_kv "$wf_old" secret)" || true
+    old_rel="$(_webhook_read_kv "$wf_old" release_name)" || true
+    info "检测到已有 Webhook 配置，将更新（未指定 --webhook-secret 时保留原 Secret）"
+  fi
+
+  if [[ -z "$WEBHOOK_MODE" ]]; then
+    if [[ "$st" = "frontend" ]]; then
+      WEBHOOK_MODE="release"
+    else
+      local _i; _i=$(menu_select "Webhook 模式" "tag（监听 Git tag 推送）" "release（监听 Release 发版）")
+      [[ "$_i" -eq 1 ]] && WEBHOOK_MODE="release" || WEBHOOK_MODE="tag"
+    fi
+  fi
+
+  [[ -n "$GIT_REPO" ]] || {
+    local remote=""
+    if [[ -d "${site_dir}/.git" ]]; then
+      remote="$(su - "${DEVOPS_USER}" -c "cd '${site_dir}' && git remote get-url origin 2>/dev/null" || true)"
+    fi
+    if [[ -n "$remote" ]]; then
+      GIT_REPO="$remote"
+    elif [[ -f "$wf_old" ]]; then
+      GIT_REPO="$(_webhook_read_kv "$wf_old" git_repo)"
+    else
+      GIT_REPO=$(prompt "Git 仓库地址（release 仅匹配用；tag 模式需可 pull）")
+    fi
+  }
+  [[ -n "$GIT_REPO" ]] || die "Git 仓库地址不能为空"
+
+  if [[ "$WEBHOOK_MODE" = "release" && -z "$WEBHOOK_RELEASE_NAME" ]]; then
+    WEBHOOK_RELEASE_NAME=$(prompt "Release 名称（与 Release name 或 tag 匹配）" "${old_rel:-}")
+  fi
+  [[ "$WEBHOOK_MODE" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
+    || die "release 模式需 --webhook-release-name="
+
+  local sec="${WEBHOOK_SECRET:-${old_secret:-}}"
+  sec="$(_webhook_write_site_config "$DOMAIN" "$WEBHOOK_MODE" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "$sec")"
+  WEBHOOK_ENABLE=1
+  ok "Webhook 已配置: ${DOMAIN} (${WEBHOOK_MODE})"
+  if [[ "$WEBHOOK_MODE" = "release" ]]; then
+    info "静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
+    if [[ "$st" = "frontend" ]] && container_ok "lnmp-nginx"; then
+      gen_nginx_frontend "$DOMAIN" ""
+      fix_site_readable_for_nginx "$DOMAIN" "frontend" ""
+      if docker exec lnmp-nginx nginx -t 2>&1; then
+        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已切换为站点根目录"
+      fi
+    fi
+  fi
+  info "Secret: ${sec}"
+  info "请执行: $0 webhook setup（若尚未安装监听）"
 }
 
 cmd_webhook() {
@@ -63,41 +129,7 @@ cmd_webhook() {
 cmd_webhook_enable() {
   prompt_pick_domain "选择站点"
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
-  local site_dir="${WWW_ROOT}/${DOMAIN}"
-  [[ -d "$site_dir" ]] || die "站点不存在"
-
-  local st="laravel"
-  [[ -f "${site_dir}/artisan" ]] || st="frontend"
-
-  if [[ -z "$WEBHOOK_MODE" ]]; then
-    if [[ "$st" = "frontend" ]]; then
-      WEBHOOK_MODE="release"
-    else
-      local _i; _i=$(menu_select "Webhook 模式" "tag（监听 Git tag 推送）" "release（监听 Release 发版）")
-      [[ "$_i" -eq 1 ]] && WEBHOOK_MODE="release" || WEBHOOK_MODE="tag"
-    fi
-  fi
-
-  [[ -n "$GIT_REPO" ]] || {
-    local remote=""
-    if [[ -d "${site_dir}/.git" ]]; then
-      remote="$(su - "${DEVOPS_USER}" -c "cd '${site_dir}' && git remote get-url origin 2>/dev/null" || true)"
-    fi
-    GIT_REPO="${remote:-$(prompt "Git 仓库地址")}"
-  }
-  [[ -n "$GIT_REPO" ]] || die "Git 仓库地址不能为空"
-
-  if [[ "$WEBHOOK_MODE" = "release" && -z "$WEBHOOK_RELEASE_NAME" ]]; then
-    WEBHOOK_RELEASE_NAME=$(prompt "Release 名称（与 GitHub/Gitee Release name 或 tag 匹配）")
-  fi
-
-  local fe=""
-  [[ "$st" = "frontend" ]] && fe="${FRONTEND_ROOT:-$(effective_frontend_subdir "$DOMAIN")}"
-  local sec
-  sec="$(_webhook_write_site_config "$DOMAIN" "$WEBHOOK_MODE" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "${WEBHOOK_SECRET:-}" "$fe")"
-  ok "Webhook 已启用: ${DOMAIN} (${WEBHOOK_MODE})"
-  info "Secret: ${sec}"
-  info "请执行: $0 webhook setup"
+  _webhook_configure_site
 }
 
 cmd_webhook_disable() {

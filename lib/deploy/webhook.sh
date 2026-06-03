@@ -7,6 +7,18 @@ WEBHOOK_SYSTEMD_UNIT="/etc/systemd/system/lnmp-deploy-webhook.service"
 
 site_webhook_file() { printf '%s/%s.webhook' "$NGINX_CONF" "$1"; }
 
+# 静态站点 + webhook release：产物直接解压到站点根，不用 dist/子目录
+frontend_release_webhook_site() {
+  local domain="$1" mode
+  [[ -f "$(site_webhook_file "$domain")" ]] || return 1
+  mode="$(_webhook_read_kv "$(site_webhook_file "$domain")" mode)" || return 1
+  [[ "$mode" = "release" ]]
+}
+
+_adding_frontend_release_webhook() {
+  [[ "${SITE_TYPE:-}" = "frontend" && "${WEBHOOK_MODE:-}" = "release" && "${WEBHOOK_ENABLE:-0}" -eq 1 ]]
+}
+
 _webhook_history_file() { printf '%s/%s/history.tsv' "$WEBHOOK_HISTORY_DIR" "$1"; }
 _webhook_lock_file()    { printf '%s/%s/.deploy.lock' "$WEBHOOK_HISTORY_DIR" "$1"; }
 
@@ -66,18 +78,27 @@ _webhook_read_kv() {
 }
 
 _webhook_write_site_config() {
-  local domain="$1" mode="$2" git_repo="$3" release_name="${4:-}" secret="${5:-}" fe_root="${6:-}"
+  local domain="$1" mode="$2" git_repo="$3" release_name="${4:-}" secret="${5:-}"
   local f; f="$(site_webhook_file "$domain")"
   mkdir -p "$NGINX_CONF"
   [[ -n "$secret" ]] || secret="$(_webhook_gen_secret)"
-  cat > "$f" <<EOF
+  if [[ "$mode" = "release" ]]; then
+    cat > "$f" <<EOF
+enabled=1
+mode=release
+git_repo=${git_repo}
+release_name=${release_name}
+secret=${secret}
+EOF
+  else
+    cat > "$f" <<EOF
 enabled=1
 mode=${mode}
 git_repo=${git_repo}
 release_name=${release_name}
 secret=${secret}
-frontend_root=${fe_root}
 EOF
+  fi
   chmod 600 "$f"
   printf '%s' "$secret"
 }
@@ -196,10 +217,8 @@ _webhook_restore_backup() {
       || { rm -rf "${site_dir:?}/"* 2>/dev/null; cp -a "${backup_dir}/snapshot/." "${site_dir}/"; }
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "$site_dir" 2>/dev/null || true
     local fe=""
-    fe="$(_webhook_read_kv "$(site_webhook_file "$domain")" frontend_root)" || fe=""
-    [[ -z "$fe" ]] && fe="$(effective_frontend_subdir "$domain")"
-    gen_nginx_frontend "$domain" "$fe"
-    fix_site_readable_for_nginx "$domain" "frontend" "$fe"
+    gen_nginx_frontend "$domain" ""
+    fix_site_readable_for_nginx "$domain" "frontend" ""
     if container_ok "lnmp-nginx"; then
       docker exec lnmp-nginx nginx -t 2>&1 && docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
     fi
@@ -316,9 +335,8 @@ _webhook_pick_release_asset_url() {
 
 _webhook_deploy_release() {
   local domain="$1" body_file="$2" release_name="${3:-}" release_tag="${4:-}" download_url="${5:-}"
-  local site_dir="${WWW_ROOT}/${domain}" wf fe_root asset_hint token tmp arch ver
+  local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
   wf="$(site_webhook_file "$domain")"
-  fe_root="$(_webhook_read_kv "$wf" frontend_root)"
   asset_hint="$(_webhook_read_kv "$wf" asset_name)"
   token="${WEBHOOK_GITHUB_TOKEN:-${WEBHOOK_GITEE_TOKEN:-}}"
   ver="${release_tag:-$release_name}"
@@ -343,19 +361,13 @@ _webhook_deploy_release() {
 
   mkdir -p "$site_dir"
   _webhook_extract_archive "$arch" "${tmp}/extract"
-  if [[ -n "$fe_root" && -d "${tmp}/extract/${fe_root}" ]]; then
-    rsync -a --delete "${tmp}/extract/${fe_root}/" "$site_dir/" 2>/dev/null \
-      || cp -a "${tmp}/extract/${fe_root}/." "$site_dir/"
-  else
-    rsync -a --delete "${tmp}/extract/" "$site_dir/" 2>/dev/null \
-      || cp -a "${tmp}/extract/." "$site_dir/"
-  fi
+  rsync -a --delete "${tmp}/extract/" "$site_dir/" 2>/dev/null \
+    || cp -a "${tmp}/extract/." "$site_dir/"
   rm -rf "$tmp"
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "$site_dir" 2>/dev/null || true
 
-  fe_root="${fe_root:-$(effective_frontend_subdir "$domain")}"
-  gen_nginx_frontend "$domain" "$fe_root"
-  fix_site_readable_for_nginx "$domain" "frontend" "$fe_root"
+  gen_nginx_frontend "$domain" ""
+  fix_site_readable_for_nginx "$domain" "frontend" ""
   if container_ok "lnmp-nginx"; then
     docker exec lnmp-nginx nginx -t 2>&1 && docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
   fi

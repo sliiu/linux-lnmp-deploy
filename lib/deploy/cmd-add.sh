@@ -220,6 +220,7 @@ WEBHOOK_MODE="" WEBHOOK_RELEASE_NAME="" WEBHOOK_SECRET="" WEBHOOK_ENABLE=0
 ROLLBACK_TO="" ROLLBACK_INDEX=0
 WEBHOOK_BODY_FILE="" WEBHOOK_HEADERS_FILE="" WEBHOOK_EVENT=""
 WEBHOOK_GH_SIG="" WEBHOOK_GITEE_TOKEN=""
+WEBHOOK_ONLY=0
 YES=0
 STATUS_ALL=0
 SKIP_GIT=0
@@ -278,6 +279,7 @@ reset_menu_deploy_state() {
   WEBHOOK_EVENT=""
   WEBHOOK_GH_SIG=""
   WEBHOOK_GITEE_TOKEN=""
+  WEBHOOK_ONLY=0
   YES=0
   STATUS_ALL=0
   SKIP_GIT=0
@@ -373,6 +375,7 @@ parse_args() {
       --webhook-release-name)   shift; WEBHOOK_RELEASE_NAME="$1" ;;
       --webhook-secret=*) WEBHOOK_SECRET="${1#*=}" ;;
       --webhook-secret)   shift; WEBHOOK_SECRET="$1" ;;
+      --webhook-only)    WEBHOOK_ONLY=1; WEBHOOK_ENABLE=1 ;;
       --rollback-to=*)   ROLLBACK_TO="${1#*=}" ;;
       --rollback-to)     shift; ROLLBACK_TO="$1" ;;
       --rollback-index=*) ROLLBACK_INDEX="${1#*=}" ;;
@@ -573,6 +576,21 @@ _collect_queue_supervisor_interactive() {
   esac
 }
 
+# 前端：Git clone 构建产物 vs Webhook Release 直部署
+_collect_frontend_source_interactive() {
+  [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]] && return 0
+  local _i
+  _i=$(menu_select "前端部署方式" \
+    "Webhook Release（监听 Release 下载，不 clone 仓库）" \
+    "Git 仓库（clone 后使用 dist 等构建目录）")
+  if [[ "$_i" -eq 0 ]]; then
+    WEBHOOK_ENABLE=1
+    WEBHOOK_MODE=release
+    FRONTEND_ROOT=""
+    GIT_BRANCH=""
+  fi
+}
+
 collect_interactive() {
   # 1) 域名（决策性，最早问）
   [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
@@ -588,13 +606,26 @@ collect_interactive() {
   SITE_TYPE=${SITE_TYPE:-laravel}
   [[ "$SITE_TYPE" != "laravel" && "$SITE_TYPE" != "frontend" ]] && SITE_TYPE="laravel"
 
-  # 3) Git（已存在代码时智能提示跳过）
-  [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" "")
-  _offer_skip_git_if_code_present
-  if [[ -n "$GIT_REPO" ]]; then
-    [[ -z "$GIT_BRANCH" ]] && GIT_BRANCH=$(prompt "Git 分支（留空=仓库默认）" "")
-  else
+  if [[ "$SITE_TYPE" = "frontend" ]]; then
+    _collect_frontend_source_interactive
+  fi
+
+  # 3) Git / Webhook 仓库匹配
+  if [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
+    [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）")
+    [[ -n "$GIT_REPO" ]] || die "Webhook Release 需填写仓库地址（用于匹配推送来源）"
+    [[ -z "$WEBHOOK_RELEASE_NAME" ]] && WEBHOOK_RELEASE_NAME=$(prompt "Release 名称（与 Release name 或 tag 匹配）")
+    [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
     GIT_BRANCH=""
+    FRONTEND_ROOT=""
+  else
+    [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" "")
+    _offer_skip_git_if_code_present
+    if [[ -n "$GIT_REPO" ]]; then
+      [[ -z "$GIT_BRANCH" ]] && GIT_BRANCH=$(prompt "Git 分支（留空=仓库默认）" "")
+    else
+      GIT_BRANCH=""
+    fi
   fi
 
   if [[ "$SITE_TYPE" = "laravel" ]]; then
@@ -642,8 +673,9 @@ collect_interactive() {
       fi
     fi
   else
-    # frontend 分支：仅子目录
-    [[ -z "$FRONTEND_ROOT" ]] && FRONTEND_ROOT=$(prompt "前端子目录（相对站点目录，留空则：有 dist 目录→dist，否则→站点根）" "")
+    if [[ "${WEBHOOK_MODE:-}" != "release" ]]; then
+      [[ -z "$FRONTEND_ROOT" ]] && FRONTEND_ROOT=$(prompt "前端子目录（相对站点目录，留空则：有 dist 目录→dist，否则→站点根）" "")
+    fi
   fi
 
   # 9) SSL（最末尾，凭证一并校验）
@@ -686,7 +718,11 @@ cmd_add() {
     hr; info "配置确认"; hr
     printf "  %-18s %s\n" "域名"   "$DOMAIN"
     printf "  %-18s %s\n" "类型"   "$SITE_TYPE"
-    if [[ -n "$GIT_REPO" ]]; then
+    if [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
+      printf "  %-18s %s\n" "部署"   "Webhook Release（不 clone）"
+      printf "  %-18s %s\n" "仓库(匹配)" "${GIT_REPO}"
+      printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
+    elif [[ -n "$GIT_REPO" ]]; then
       printf "  %-18s %s\n" "Git" "${GIT_REPO}${GIT_BRANCH:+ (${GIT_BRANCH})}"
     else
       printf "  %-18s %s\n" "Git" "跳过（使用 ${WWW_ROOT}/${DOMAIN} 现有代码）"
@@ -704,7 +740,11 @@ cmd_add() {
       printf "  %-18s %s\n" "APP_NAME" "${APP_NAME:-Laravel}"
       [[ ${#CUSTOM_ENV[@]} -gt 0 ]] && printf "  %-18s %s\n" "自定义 ENV" "${#CUSTOM_ENV[@]} 项"
     else
-      printf "  %-18s %s\n" "前端子目录" "${FRONTEND_ROOT:-自动 (dist 优先)}"
+      if [[ "${WEBHOOK_MODE:-}" = "release" ]]; then
+        printf "  %-18s %s\n" "静态根" "${WWW_ROOT}/${DOMAIN}/（Release 产物直出）"
+      else
+        printf "  %-18s %s\n" "前端子目录" "${FRONTEND_ROOT:-自动 (dist 优先)}"
+      fi
     fi
     printf "  %-18s %s\n" "SSL" "${SSL_DNS:-webroot}${SSL_STAGING:+ (staging)}${FORCE_SSL:+ +force}"
     echo ""
@@ -729,17 +769,32 @@ cmd_add() {
     docker exec lnmp-nginx nginx -s reload
     ok "Nginx 配置已生成"
   else
-    info "前端站点：Nginx 在代码部署后生成（未指定子目录时：有 dist 用 dist，否则站点根）"
+    if _adding_frontend_release_webhook; then
+      info "前端站点：Webhook Release，Nginx 根目录 = 站点目录（待 Release 推送后写入产物）"
+    else
+      info "前端站点：Nginx 在代码部署后生成（未指定子目录时：有 dist 用 dist，否则站点根）"
+    fi
   fi
 
   echo ""
   hr; info "[2/6] 部署代码"; echo ""
-  deploy_code "$DOMAIN" "$GIT_REPO" "$GIT_BRANCH"
-  ok "代码部署完成"
+  local _fe_sub="" _release_wh=0
+  if _adding_frontend_release_webhook; then
+    _release_wh=1
+    _fe_sub=""
+    mkdir -p "${WWW_ROOT}/${DOMAIN}"
+    chown "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
+    chmod a+rx "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
+    fix_site_readable_for_nginx "$DOMAIN" "frontend" ""
+    info "Webhook Release：跳过 git clone"
+    warn "请发布匹配的 Release 触发 webhook，或手动上传静态文件到 ${WWW_ROOT}/${DOMAIN}/"
+  else
+    deploy_code "$DOMAIN" "$GIT_REPO" "$GIT_BRANCH"
+    ok "代码部署完成"
+  fi
 
-  local _fe_sub=""
   if [[ "$SITE_TYPE" = "frontend" ]]; then
-    _fe_sub=$(effective_frontend_subdir "$DOMAIN")
+    [[ "$_release_wh" -eq 0 ]] && _fe_sub=$(effective_frontend_subdir "$DOMAIN")
     gen_nginx_frontend "$DOMAIN" "$_fe_sub"
     wait_container_running "lnmp-nginx" 45
     docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
@@ -799,13 +854,18 @@ cmd_add() {
     echo ""
 
     local _fe_add _dist_add="${WWW_ROOT}/${DOMAIN}"
-    _fe_add=$(effective_frontend_subdir "$DOMAIN")
-    [[ -n "$_fe_add" ]] && _dist_add="${_dist_add}/${_fe_add}"
-    if [[ ! -d "$_dist_add" ]] || [[ -z "$(ls -A "$_dist_add" 2>/dev/null)" ]]; then
-      warn "构建目录 ${_dist_add} 不存在或为空"
-      info "请本地构建后推送或在服务器执行 npm run build"
+    if _adding_frontend_release_webhook || frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
+      warn "静态文件待 Release 推送后由 Webhook 写入 ${WWW_ROOT}/${DOMAIN}/"
+      info "请执行: $0 webhook setup（若尚未安装监听）"
     else
-      ok "构建产物已就绪"
+      _fe_add=$(effective_frontend_subdir "$DOMAIN")
+      [[ -n "$_fe_add" ]] && _dist_add="${_dist_add}/${_fe_add}"
+      if [[ ! -d "$_dist_add" ]] || [[ -z "$(ls -A "$_dist_add" 2>/dev/null)" ]]; then
+        warn "构建目录 ${_dist_add} 不存在或为空"
+        info "请本地构建后推送或在服务器执行 npm run build"
+      else
+        ok "构建产物已就绪"
+      fi
     fi
 
     echo ""
@@ -835,6 +895,20 @@ cmd_update() {
   echo ""
   hr; info "更新站点: ${DOMAIN} (${site_type})"; echo ""
 
+  if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
+    _webhook_configure_site
+    [[ "${WEBHOOK_ONLY:-0}" -eq 1 ]] && { ok "Webhook 配置完成（未执行代码更新）"; return 0; }
+  elif [[ ! -f "$(site_webhook_file "$DOMAIN")" ]]; then
+    if confirm "为该站点配置 Webhook 自动部署？" "n"; then
+      WEBHOOK_ENABLE=1
+      _webhook_configure_site
+      if confirm "仅配置 Webhook，跳过本次代码更新？" "n"; then
+        ok "Webhook 配置完成（未执行代码更新）"
+        return 0
+      fi
+    fi
+  fi
+
   ensure_php_fpm_slowlog_host_artifacts
   warn_php_fpm_slowlog_compose_missing
   ensure_php_fpm_wave_pool_host_artifacts
@@ -842,7 +916,9 @@ cmd_update() {
   ensure_mysql_low_memory_host_artifacts
   warn_mysql_low_memory_compose_missing
 
-  if [[ "${SKIP_GIT:-0}" -ne 1 && -d "${site_dir}/.git" ]]; then
+  if frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
+    warn "Webhook Release 站点：跳过 git 操作"
+  elif [[ "${SKIP_GIT:-0}" -ne 1 && -d "${site_dir}/.git" ]]; then
     if [[ -n "${GIT_REF:-}" ]]; then
       _git_fetch_checkout "${site_dir}" "${GIT_REF}"
     else
@@ -934,17 +1010,23 @@ cmd_update() {
       fi
     fi
   else
-    # 前端站点：检查构建产物并 reload nginx
-    local _feu _dist_u="${WWW_ROOT}/${DOMAIN}"
-    _feu=$(effective_frontend_subdir "$DOMAIN")
-    [[ -n "$_feu" ]] && _dist_u="${_dist_u}/${_feu}"
-    if [[ -d "$_dist_u" ]] && [[ -n "$(ls -A "$_dist_u" 2>/dev/null)" ]]; then
-      ok "构建产物就绪: ${_dist_u}"
+    if frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
+      warn "Webhook Release 站点：请通过 Release 推送更新（update 不拉代码）"
+      local _feu=""
+      gen_nginx_frontend "$DOMAIN" ""
+      fix_site_readable_for_nginx "$DOMAIN" "frontend" ""
     else
-      warn "构建目录 ${_dist_u} 不存在或为空，请手动执行构建后 reload"
+      local _feu _dist_u="${WWW_ROOT}/${DOMAIN}"
+      _feu=$(effective_frontend_subdir "$DOMAIN")
+      [[ -n "$_feu" ]] && _dist_u="${_dist_u}/${_feu}"
+      if [[ -d "$_dist_u" ]] && [[ -n "$(ls -A "$_dist_u" 2>/dev/null)" ]]; then
+        ok "构建产物就绪: ${_dist_u}"
+      else
+        warn "构建目录 ${_dist_u} 不存在或为空，请手动执行构建后 reload"
+      fi
+      gen_nginx_frontend "$DOMAIN" "$_feu"
+      fix_site_readable_for_nginx "$DOMAIN" "frontend" "$_feu"
     fi
-    gen_nginx_frontend "$DOMAIN" "$_feu"
-    fix_site_readable_for_nginx "$DOMAIN" "frontend" "$_feu"
     if container_ok "lnmp-nginx"; then
       if docker exec lnmp-nginx nginx -t 2>&1; then
         docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload" || warn "Nginx reload 失败"
