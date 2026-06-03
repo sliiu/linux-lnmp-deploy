@@ -104,11 +104,17 @@ _webhook_configure_site() {
   [[ -n "$GIT_REPO" ]] || die "Git 仓库地址不能为空"
 
   if [[ "$WEBHOOK_MODE" = "release" && -z "$WEBHOOK_RELEASE_NAME" ]]; then
-    prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt/v0.1.0）" "${old_rel:-}"
-    WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
+    while [[ -z "$WEBHOOK_RELEASE_NAME" ]]; do
+      prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt/v0.1.0）" "${old_rel:-}"
+      WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
+      if [[ -z "$WEBHOOK_RELEASE_NAME" ]]; then
+        interactive_tty_ok || die "Release 名称不能为空（请在本机终端交互运行，勿用管道）"
+        warn "Release 名称不能为空"
+      fi
+    done
   fi
   [[ "$WEBHOOK_MODE" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
-    || die "Release 名称不能为空"
+    || die "Release 名称不能为空（请在本机终端交互运行，勿用管道）"
 
   [[ "$WEBHOOK_MODE" = "release" ]] && _webhook_collect_site_release_opts "$wf_old"
 

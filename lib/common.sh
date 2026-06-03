@@ -35,18 +35,17 @@ confirm() {
 
 prompt() {
   local msg="$1" default="${2:-}" var=""
-  if interactive_tty_ok; then
-    if [[ -n "$default" ]]; then
-      read -rp "  ${msg} [${default}]: " var </dev/tty 2>/dev/null || var=""
-    else
-      read -rp "  ${msg}: " var </dev/tty 2>/dev/null || var=""
-    fi
+  echo ""
+  if [[ -n "$default" ]]; then
+    info "${msg}（回车 = ${default}）"
   else
-    if [[ -n "$default" ]]; then
-      read -rp "  ${msg} [${default}]: " var || var=""
-    else
-      read -rp "  ${msg}: " var || var=""
-    fi
+    info "${msg}"
+  fi
+  echo ""
+  if interactive_tty_ok; then
+    read -rp "  请输入: " var </dev/tty || var=""
+  else
+    read -rp "  请输入: " var || var=""
   fi
   PROMPT_RESULT="${var:-$default}"
   echo "$PROMPT_RESULT"
