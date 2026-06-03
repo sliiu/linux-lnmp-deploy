@@ -9,7 +9,16 @@ CYBERSEC_MARKER="/etc/cybersecurity-init.done"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/init.log"
-exec > >(tee -a "$LOG_FILE") 2>&1
+# stdout/stderr 进 tee 时变为管道，菜单与 read -p 易不刷到终端；同时写 log 与 /dev/tty
+if [[ -e /dev/tty ]] && [[ -w /dev/tty ]]; then
+  if command -v stdbuf &>/dev/null; then
+    exec > >(stdbuf -oL tee -a "$LOG_FILE" >/dev/tty) 2>&1
+  else
+    exec > >(tee -a "$LOG_FILE" >/dev/tty) 2>&1
+  fi
+else
+  exec > >(tee -a "$LOG_FILE") 2>&1
+fi
 echo "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="
 
 # ═══════════════════════════════════════════════

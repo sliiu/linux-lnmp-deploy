@@ -64,11 +64,22 @@ interactive_tty_ok() {
   [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null
 }
 
+# init.sh 等将 stdout 重定向到 tee 管道时，交互菜单须直接写终端
+_ui_tty() {
+  if interactive_tty_ok; then
+    printf '%s\n' "$@" >/dev/tty
+  else
+    printf '%s\n' "$@"
+  fi
+}
+
 confirm() {
   local msg="${1:-确认？}" default="${2:-y}" ans=""
   local prompt_str="[Y/n]"; [[ "$default" != "y" ]] && prompt_str="[y/N]"
   if interactive_tty_ok; then
-    read -rp "  ${msg} ${prompt_str}: " ans </dev/tty 2>/dev/null || ans=""
+    printf '  %s %s: ' "${msg}" "${prompt_str}" >/dev/tty
+    read -r ans </dev/tty 2>/dev/null || ans=""
+    printf '\n' >/dev/tty
   else
     read -rp "  ${msg} ${prompt_str}: " ans || ans=""
   fi
@@ -78,16 +89,25 @@ confirm() {
 
 prompt() {
   local msg="$1" default="${2:-}" var=""
-  echo ""
-  if [[ -n "$default" ]]; then
-    info "${msg}（回车 = ${default}）"
-  else
-    info "${msg}"
-  fi
-  echo ""
   if interactive_tty_ok; then
-    read -rp "  请输入: " var </dev/tty || var=""
+    _ui_tty ""
+    if [[ -n "$default" ]]; then
+      _ui_tty "  ${msg}（回车 = ${default}）"
+    else
+      _ui_tty "  ${msg}"
+    fi
+    _ui_tty ""
+    printf '  请输入: ' >/dev/tty
+    read -r var </dev/tty || var=""
+    printf '\n' >/dev/tty
   else
+    echo ""
+    if [[ -n "$default" ]]; then
+      info "${msg}（回车 = ${default}）"
+    else
+      info "${msg}"
+    fi
+    echo ""
     read -rp "  请输入: " var || var=""
   fi
   PROMPT_RESULT="${var:-$default}"
@@ -116,20 +136,30 @@ prompt_secret() {
 menu_select() {
   local title="$1"; shift
   local -a items=("$@")
-  echo ""
-  info "$title"
-  echo ""
-  local i
-  for i in "${!items[@]}"; do
-    info "    $((i + 1))) ${items[$i]}"
-  done
-  echo ""
-  info "回车或无效输入 = 第 1 项（推荐默认）"
-  echo ""
-  local choice raw
+  local choice raw i
   if interactive_tty_ok; then
-    read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw </dev/tty 2>/dev/null || raw=""
+    _ui_tty ""
+    _ui_tty "  ${title}"
+    _ui_tty ""
+    for i in "${!items[@]}"; do
+      _ui_tty "    $((i + 1))) ${items[$i]}"
+    done
+    _ui_tty ""
+    _ui_tty "  回车或无效输入 = 第 1 项（推荐默认）"
+    _ui_tty ""
+    printf '  选择 [1-%s] (回车=第1项): ' "${#items[@]}" >/dev/tty
+    read -r raw </dev/tty 2>/dev/null || raw=""
+    printf '\n' >/dev/tty
   else
+    echo ""
+    info "$title"
+    echo ""
+    for i in "${!items[@]}"; do
+      info "    $((i + 1))) ${items[$i]}"
+    done
+    echo ""
+    info "回车或无效输入 = 第 1 项（推荐默认）"
+    echo ""
     read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw || raw=""
   fi
   if [[ "$raw" =~ ^[0-9]+$ ]]; then
