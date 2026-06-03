@@ -217,6 +217,7 @@ ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
 AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" TENCENT_SECRET_ID="" TENCENT_SECRET_KEY=""
 CUSTOM_ENV=()
 WEBHOOK_MODE="" WEBHOOK_RELEASE_NAME="" WEBHOOK_SECRET="" WEBHOOK_ENABLE=0
+WEBHOOK_SITE_GITHUB_TOKEN="" WEBHOOK_SITE_GITEE_TOKEN="" WEBHOOK_ASSET_NAME=""
 ROLLBACK_TO="" ROLLBACK_INDEX=0
 WEBHOOK_BODY_FILE="" WEBHOOK_HEADERS_FILE="" WEBHOOK_EVENT=""
 WEBHOOK_GH_SIG="" WEBHOOK_GITEE_TOKEN=""
@@ -278,6 +279,9 @@ reset_menu_deploy_state() {
   WEBHOOK_RELEASE_NAME=""
   WEBHOOK_SECRET=""
   WEBHOOK_ENABLE=0
+  WEBHOOK_SITE_GITHUB_TOKEN=""
+  WEBHOOK_SITE_GITEE_TOKEN=""
+  WEBHOOK_ASSET_NAME=""
   ROLLBACK_TO=""
   ROLLBACK_INDEX=0
   WEBHOOK_BODY_FILE=""
@@ -387,6 +391,12 @@ parse_args() {
       --webhook-release-name)   shift; WEBHOOK_RELEASE_NAME="$1" ;;
       --webhook-secret=*) WEBHOOK_SECRET="${1#*=}" ;;
       --webhook-secret)   shift; WEBHOOK_SECRET="$1" ;;
+      --webhook-github-token=*) WEBHOOK_SITE_GITHUB_TOKEN="${1#*=}" ;;
+      --webhook-github-token)   shift; WEBHOOK_SITE_GITHUB_TOKEN="$1" ;;
+      --webhook-gitee-token=*) WEBHOOK_SITE_GITEE_TOKEN="${1#*=}" ;;
+      --webhook-gitee-token)   shift; WEBHOOK_SITE_GITEE_TOKEN="$1" ;;
+      --webhook-asset-name=*) WEBHOOK_ASSET_NAME="${1#*=}" ;;
+      --webhook-asset-name)   shift; WEBHOOK_ASSET_NAME="$1" ;;
       --webhook-only)    WEBHOOK_ONLY=1; WEBHOOK_ENABLE=1 ;;
       --webhook-bind=*)  WEBHOOK_BIND="${1#*=}"; WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_SETUP_CLI=1 ;;
       --webhook-bind)    shift; WEBHOOK_BIND="$1"; WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_SETUP_CLI=1 ;;
@@ -645,6 +655,7 @@ collect_interactive() {
     [[ -n "$GIT_REPO" ]] || die "Webhook Release 需填写仓库地址（用于匹配推送来源）"
     [[ -z "$WEBHOOK_RELEASE_NAME" ]] && WEBHOOK_RELEASE_NAME=$(prompt "Release 名称（与 Release name 或 tag 匹配）")
     [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
+    _webhook_collect_site_release_opts ""
     GIT_BRANCH=""
     FRONTEND_ROOT=""
   else

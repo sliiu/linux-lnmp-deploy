@@ -106,8 +106,23 @@ release_name=${release_name}
 secret=${secret}
 EOF
   fi
+  [[ -n "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]] && echo "github_token=${WEBHOOK_SITE_GITHUB_TOKEN}" >> "$f"
+  [[ -n "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]] && echo "gitee_token=${WEBHOOK_SITE_GITEE_TOKEN}" >> "$f"
+  [[ -n "${WEBHOOK_ASSET_NAME:-}" ]] && echo "asset_name=${WEBHOOK_ASSET_NAME}" >> "$f"
   chmod 600 "$f"
   printf '%s' "$secret"
+}
+
+# 站点级 token 优先，其次 listener.env 全局 token
+_webhook_site_download_token() {
+  local domain="$1" wf token=""
+  wf="$(site_webhook_file "$domain")"
+  token="$(_webhook_read_kv "$wf" github_token)" || true
+  [[ -n "$token" ]] && { printf '%s' "$token"; return 0; }
+  token="$(_webhook_read_kv "$wf" gitee_token)" || true
+  [[ -n "$token" ]] && { printf '%s' "$token"; return 0; }
+  _webhook_load_listener_env
+  printf '%s' "${WEBHOOK_GITHUB_TOKEN:-${WEBHOOK_GITEE_TOKEN:-}}"
 }
 
 _webhook_load_listener_env() {
@@ -290,8 +305,54 @@ _webhook_sites_for_repo() {
 _webhook_release_name_match() {
   local expected="${1:-}" actual_name="${2:-}" actual_tag="${3:-}"
   [[ -n "$expected" ]] || return 0
+  expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
+  actual_name="$(printf '%s' "$actual_name" | tr '[:upper:]' '[:lower:]')"
+  actual_tag="$(printf '%s' "$actual_tag" | tr '[:upper:]' '[:lower:]')"
   [[ "$expected" = "$actual_name" || "$expected" = "$actual_tag" ]] && return 0
+  # 前缀匹配：配置 slimppt → tag slimppt/v0.1.0、name "slimppt slimppt/v0.1.0"
+  [[ "$actual_tag" == "$expected/"* ]] && return 0
+  [[ "$actual_name" == "$expected "* || "$actual_name" == "$expected/"* ]] && return 0
   return 1
+}
+
+_webhook_release_action_ok() {
+  local action="${1:-}" event="${2:-}"
+  [[ "$event" = "Release Hook" ]] && return 0
+  case "$action" in
+    published|publish|released|prereleased|"") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# GitHub/Gitee release payload 含嵌套 JSON，grep 不可靠
+_webhook_parse_release_payload() {
+  local body_file="$1"
+  command -v python3 &>/dev/null || return 1
+  python3 - "$body_file" <<'PY' 2>/dev/null || return 1
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    d = json.load(f)
+rel = d.get("release") or {}
+repo = d.get("repository") or {}
+assets = rel.get("assets") or []
+asset_url = ""
+if assets:
+    asset_url = assets[0].get("browser_download_url") or ""
+out = {
+    "action": d.get("action") or "",
+    "rel_tag": rel.get("tag_name") or "",
+    "rel_name": rel.get("name") or "",
+    "repo_full": repo.get("full_name") or d.get("path_with_namespace") or "",
+    "clone_url": repo.get("clone_url") or d.get("git_ssh_url") or "",
+    "html_url": repo.get("html_url") or "",
+    "asset_url": asset_url,
+    "zipball_url": rel.get("zipball_url") or "",
+    "tarball_url": rel.get("tarball_url") or "",
+}
+for k, v in out.items():
+    if v:
+        print(f"{k}={v}")
+PY
 }
 
 _webhook_download_url() {
@@ -335,7 +396,33 @@ _webhook_extract_archive() {
 
 _webhook_pick_release_asset_url() {
   local body_file="$1" asset_hint="${2:-}"
-  local url name
+  local url name parsed line k v
+  parsed="$(_webhook_parse_release_payload "$body_file" 2>/dev/null || true)"
+  if [[ -n "$parsed" && -n "$asset_hint" ]]; then
+    url="$(python3 - "$body_file" "$asset_hint" <<'PY' 2>/dev/null || true
+import json, sys
+rel = json.load(open(sys.argv[1], encoding="utf-8")).get("release") or {}
+hint = sys.argv[2].lower()
+for a in rel.get("assets") or []:
+    name = (a.get("name") or "").lower()
+    url = a.get("browser_download_url") or ""
+    if url and hint in name:
+        print(url, end="")
+        break
+PY
+)"
+    [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  fi
+  if [[ -n "$parsed" ]]; then
+    while IFS= read -r line; do
+      [[ "$line" != *=* ]] && continue
+      k="${line%%=*}"; v="${line#*=}"
+      case "$k" in
+        asset_url) [[ -n "$v" ]] && url="$v" ;;
+      esac
+    done <<< "$parsed"
+    [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  fi
   if [[ -n "$asset_hint" ]]; then
     while IFS= read -r line; do
       name="$(printf '%s' "$line" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
@@ -345,6 +432,16 @@ _webhook_pick_release_asset_url() {
   fi
   url="$(_webhook_json_field "$body_file" '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
   [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  if [[ -n "$parsed" ]]; then
+    while IFS= read -r line; do
+      [[ "$line" != *=* ]] && continue
+      k="${line%%=*}"; v="${line#*=}"
+      case "$k" in
+        zipball_url|tarball_url) [[ -z "$url" && -n "$v" ]] && url="$v" ;;
+      esac
+    done <<< "$parsed"
+    [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
+  fi
   url="$(_webhook_json_field "$body_file" '"zipball_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
   [[ -n "$url" ]] && { printf '%s' "$url"; return 0; }
   url="$(_webhook_json_field "$body_file" '"tarball_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
@@ -356,7 +453,7 @@ _webhook_deploy_release() {
   local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
   wf="$(site_webhook_file "$domain")"
   asset_hint="$(_webhook_read_kv "$wf" asset_name)"
-  token="${WEBHOOK_GITHUB_TOKEN:-${WEBHOOK_GITEE_TOKEN:-}}"
+  token="$(_webhook_site_download_token "$domain")"
   ver="${release_tag:-$release_name}"
   [[ -n "$ver" ]] || ver="release"
 
@@ -413,20 +510,16 @@ _webhook_deploy_tag() {
 }
 
 _webhook_json_release_name() {
-  local body_file="$1"
-  local block name
-  block="$(grep -oE '"release"[[:space:]]*:[[:space:]]*\{[^}]+\}' "$body_file" 2>/dev/null | head -n1 || true)"
-  if [[ -n "$block" ]]; then
-    name="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$block" 2>/dev/null | head -n1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
-    [[ -n "$name" ]] && { printf '%s' "$name"; return 0; }
-  fi
+  local body_file="$1" name
+  name="$(_webhook_parse_release_payload "$body_file" 2>/dev/null | awk -F= '$1=="rel_name"{print substr($0,index($0,"=")+1); exit}')"
+  [[ -n "$name" ]] && { printf '%s' "$name"; return 0; }
   _webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"'
 }
 
 _webhook_process_payload() {
   local body_file="$1" event="${2:-}" gh_sig="${3:-}" gitee_token="${4:-}"
 
-  local action ref repo_full clone_url html_url norm provider
+  local action ref repo_full clone_url html_url norm provider parsed line k v
   action="$(_webhook_json_field "$body_file" '"action"[[:space:]]*:[[:space:]]*"[^"]+"')"
   ref="$(_webhook_json_field "$body_file" '"ref"[[:space:]]*:[[:space:]]*"[^"]+"')"
   repo_full="$(_webhook_json_field "$body_file" '"full_name"[[:space:]]*:[[:space:]]*"[^"]+"')"
@@ -435,6 +528,21 @@ _webhook_process_payload() {
   [[ -z "$clone_url" ]] && clone_url="$(_webhook_json_field "$body_file" '"git_ssh_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
   html_url="$(_webhook_json_field "$body_file" '"html_url"[[:space:]]*:[[:space:]]*"[^"]+"')"
   [[ -z "$html_url" ]] && html_url="$(_webhook_json_field "$body_file" '"url"[[:space:]]*:[[:space:]]*"https://gitee\.com[^"]+"')"
+
+  parsed="$(_webhook_parse_release_payload "$body_file" 2>/dev/null || true)"
+  if [[ -n "$parsed" ]]; then
+    while IFS= read -r line; do
+      [[ "$line" != *=* ]] && continue
+      k="${line%%=*}"; v="${line#*=}"
+      case "$k" in
+        action)    [[ -n "$v" ]] && action="$v" ;;
+        repo_full) [[ -n "$v" ]] && repo_full="$v" ;;
+        clone_url) [[ -n "$v" ]] && clone_url="$v" ;;
+        html_url)  [[ -n "$v" ]] && html_url="$v" ;;
+      esac
+    done <<< "$parsed"
+  fi
+
   norm=""
   [[ -n "$clone_url" ]] && norm="$(_webhook_normalize_repo "$clone_url")"
   [[ -z "$norm" && -n "$html_url" ]] && norm="$(_webhook_normalize_repo "$html_url")"
@@ -442,14 +550,26 @@ _webhook_process_payload() {
   [[ -n "$norm" ]] || { warn "无法解析仓库"; return 1; }
   provider="${norm%%:*}"
 
-  local rel_name rel_tag dl_url tag_name
+  local rel_name rel_tag dl_url tag_name matched=0 domain mode wf secret ok_verify=0 site_count=0
   rel_tag="$(_webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"')"
   rel_name="$(_webhook_json_release_name "$body_file")"
+  if [[ -n "$parsed" ]]; then
+    while IFS= read -r line; do
+      [[ "$line" != *=* ]] && continue
+      k="${line%%=*}"; v="${line#*=}"
+      case "$k" in
+        rel_tag)  [[ -n "$v" ]] && rel_tag="$v" ;;
+        rel_name) [[ -n "$v" ]] && rel_name="$v" ;;
+      esac
+    done <<< "$parsed"
+  fi
   tag_name="${rel_tag:-}"
 
-  local matched=0 line domain mode wf secret ok_verify=0
+  info "webhook 解析: event=${event} action=${action} tag=${rel_tag:-} name=${rel_name:-} repo=${norm}"
+
   while IFS= read -r line; do
     [[ -z "$line" ]] && continue
+    site_count=$((site_count + 1))
     domain="${line%%|*}"
     mode="${line#*|}"
     wf="$(site_webhook_file "$domain")"
@@ -467,16 +587,25 @@ _webhook_process_payload() {
     [[ "$ok_verify" -eq 1 ]] || { warn "站点 ${domain} webhook 签名校验失败，跳过"; continue; }
 
     if [[ "$mode" = "release" ]]; then
-      [[ "$event" = "release" || "$event" = "Release Hook" || -n "$rel_tag" ]] || continue
-      [[ "$action" = "published" || "$action" = "publish" || -z "$action" || "$event" = "Release Hook" ]] || continue
+      if [[ "$event" != "release" && "$event" != "Release Hook" && -z "$rel_tag" ]]; then
+        warn "站点 ${domain} 跳过: event=${event} 非 release"
+        continue
+      fi
+      if ! _webhook_release_action_ok "$action" "$event"; then
+        warn "站点 ${domain} 跳过: action=${action} 非发布事件"
+        continue
+      fi
       local expected="$(_webhook_read_kv "$wf" release_name)"
-      _webhook_release_name_match "$expected" "$rel_name" "$rel_tag" || continue
+      if ! _webhook_release_name_match "$expected" "$rel_name" "$rel_tag"; then
+        warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 name=${rel_name:-} tag=${rel_tag:-}）"
+        continue
+      fi
       _webhook_deploy_release "$domain" "$body_file" "$rel_name" "$rel_tag" "$dl_url"
       matched=1
     elif [[ "$mode" = "tag" ]]; then
       local tag="${ref#refs/tags/}"
-      [[ -n "$tag" && "$ref" == refs/tags/* ]] || continue
-      [[ "$event" = "push" || "$event" = "Push Hook" || "$event" = "Tag Push Hook" ]] || continue
+      [[ -n "$tag" && "$ref" == refs/tags/* ]] || { warn "站点 ${domain} 跳过: 无 tag ref"; continue; }
+      [[ "$event" = "push" || "$event" = "Push Hook" || "$event" = "Tag Push Hook" ]] || { warn "站点 ${domain} 跳过: event=${event}"; continue; }
       _webhook_deploy_tag "$domain" "$tag"
       matched=1
     fi
@@ -485,7 +614,11 @@ _webhook_process_payload() {
   if [[ "$matched" -eq 1 ]]; then
     return 0
   fi
-  info "无匹配站点（仓库 ${norm}）"
+  if [[ "$site_count" -eq 0 ]]; then
+    info "无已启用 webhook 站点匹配仓库 ${norm}（slug=$(_webhook_repo_slug "$norm")）"
+  else
+    info "仓库 ${norm} 有 ${site_count} 个站点，均未触发部署（见上方跳过原因）"
+  fi
   return 0
 }
 

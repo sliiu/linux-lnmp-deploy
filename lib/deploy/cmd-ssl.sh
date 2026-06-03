@@ -64,6 +64,9 @@ usage() {
   --webhook-public-mode=  setup：nginx | bind | local
   --webhook-release-name=  release 模式：匹配的 Release 名称或 tag
   --webhook-secret=     webhook 密钥（留空自动生成）
+  --webhook-github-token=  release 模式：站点 GitHub Token（私有仓下载）
+  --webhook-gitee-token=   release 模式：站点 Gitee Token（私有仓下载）
+  --webhook-asset-name=    release 模式：附件名关键字（如 slimppt-standalone.tar.gz）
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
   --rollback-index=N    rollback 序号（同 --rollback-to 数字形式）
   --type=laravel|frontend  站点类型 [默认: laravel]

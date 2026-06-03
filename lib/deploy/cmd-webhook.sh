@@ -25,6 +25,39 @@ _webhook_save_on_add() {
   info "  执行 webhook setup 安装 systemd 监听服务"
 }
 
+# release 模式：交互收集 token / asset（更新时留空保留原值）
+_webhook_collect_site_release_opts() {
+  local wf_old="${1:-}" old_gh="" old_ge="" old_asset="" repo_lc t
+  [[ -f "$wf_old" ]] && {
+    old_gh="$(_webhook_read_kv "$wf_old" github_token)" || true
+    old_ge="$(_webhook_read_kv "$wf_old" gitee_token)" || true
+    old_asset="$(_webhook_read_kv "$wf_old" asset_name)" || true
+  }
+  repo_lc="$(printf '%s' "${GIT_REPO:-}" | tr '[:upper:]' '[:lower:]')"
+
+  if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
+    t=$(prompt "Release 附件名关键字（留空=自动选第一个 asset）" "${old_asset:-}")
+    [[ -n "$t" ]] && WEBHOOK_ASSET_NAME="$t"
+    [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]] && WEBHOOK_ASSET_NAME="$old_asset"
+  fi
+
+  if [[ "$repo_lc" == *github.com* || "$repo_lc" == git@github.com:* ]]; then
+    if [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]]; then
+      [[ -n "$old_gh" ]] && info "已有 GitHub Token（${old_gh:0:8}...），留空保留"
+      t=$(prompt "GitHub Token（私有仓 release 下载，留空保留/跳过）" "")
+      [[ -n "$t" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$t"
+      [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" && -n "$old_gh" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$old_gh"
+    fi
+  elif [[ "$repo_lc" == *gitee.com* ]]; then
+    if [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]]; then
+      [[ -n "$old_ge" ]] && info "已有 Gitee Token（${old_ge:0:8}...），留空保留"
+      t=$(prompt "Gitee Token（私有仓 release 下载，留空保留/跳过）" "")
+      [[ -n "$t" ]] && WEBHOOK_SITE_GITEE_TOKEN="$t"
+      [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" && -n "$old_ge" ]] && WEBHOOK_SITE_GITEE_TOKEN="$old_ge"
+    fi
+  fi
+}
+
 # 为已有站点写入/恢复 ${NGINX_CONF}/<域名>.webhook（update / webhook enable 共用）
 _webhook_configure_site() {
   local site_dir="${WWW_ROOT}/${DOMAIN}"
@@ -72,6 +105,8 @@ _webhook_configure_site() {
   [[ "$WEBHOOK_MODE" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
     || die "release 模式需 --webhook-release-name="
 
+  [[ "$WEBHOOK_MODE" = "release" ]] && _webhook_collect_site_release_opts "$wf_old"
+
   local sec="${WEBHOOK_SECRET:-${old_secret:-}}"
   sec="$(_webhook_write_site_config "$DOMAIN" "$WEBHOOK_MODE" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "$sec")"
   WEBHOOK_ENABLE=1
@@ -87,6 +122,9 @@ _webhook_configure_site() {
     fi
   fi
   info "Secret: ${sec}"
+  [[ -n "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]] && info "GitHub Token: ${WEBHOOK_SITE_GITHUB_TOKEN:0:8}...（已写入站点配置）"
+  [[ -n "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]] && info "Gitee Token: ${WEBHOOK_SITE_GITEE_TOKEN:0:8}...（已写入站点配置）"
+  [[ -n "${WEBHOOK_ASSET_NAME:-}" ]] && info "Release 附件: ${WEBHOOK_ASSET_NAME}"
   info "回调 URL: $(_webhook_public_callback_url)"
   info "请执行: $0 webhook setup（若尚未安装监听）"
 }
@@ -205,7 +243,7 @@ cmd_webhook_disable() {
 cmd_webhook_list() {
   echo ""
   hr; info "Webhook 站点"; hr; echo ""
-  local conf found=0 domain mode repo rel secret
+  local conf found=0 domain mode repo rel secret gh_t asset
   for conf in "${NGINX_CONF}"/*.webhook; do
     [[ -f "$conf" ]] || continue
     found=1
@@ -214,9 +252,13 @@ cmd_webhook_list() {
     repo="$(_webhook_read_kv "$conf" git_repo)"
     rel="$(_webhook_read_kv "$conf" release_name)"
     secret="$(_webhook_read_kv "$conf" secret)"
+    gh_t="$(_webhook_read_kv "$conf" github_token)" || true
+    asset="$(_webhook_read_kv "$conf" asset_name)" || true
     printf "  %-28s mode:%-8s release:%-16s\n" "$domain" "$mode" "${rel:--}"
     printf "    repo: %s\n" "$repo"
     printf "    secret: %s...\n" "${secret:0:8}"
+    [[ -n "$gh_t" ]] && printf "    github_token: %s...\n" "${gh_t:0:8}"
+    [[ -n "$asset" ]] && printf "    asset_name: %s\n" "$asset"
   done
   [[ "$found" -eq 0 ]] && info "暂无"
   _webhook_load_listener_env
