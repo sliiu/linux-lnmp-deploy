@@ -102,12 +102,10 @@ _collect_webhook_setup_interactive() {
   fi
 
   local _i
-  info "请选择 Webhook 公网访问方式（回车 = 第 1 项）："
-  menu_select "Webhook 公网访问方式" \
+  _i=$(menu_select "Webhook 公网访问方式" \
     "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
     "直接绑定 0.0.0.0（外网直连端口）" \
-    "仅本机 127.0.0.1（默认）"
-  _i=${MENU_SELECT_IDX:-0}
+    "仅本机 127.0.0.1（默认）")
   case "$_i" in
     0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
     1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
@@ -122,9 +120,7 @@ _collect_webhook_setup_interactive() {
     while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
     if [[ ${#doms[@]} -gt 0 ]]; then
       local _items=("${doms[@]}" "手动输入域名...")
-      info "请选择反代域名（回车 = 第 1 项）："
-      menu_select "反代到哪个域名" "${_items[@]}"
-      _i=${MENU_SELECT_IDX:-0}
+      _i=$(menu_select "反代到哪个域名" "${_items[@]}")
       if [[ "$_i" -lt ${#doms[@]} ]]; then
         WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
       else

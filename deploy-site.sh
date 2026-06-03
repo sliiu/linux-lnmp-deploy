@@ -15,27 +15,8 @@ LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/deploy-site.log"
-# 用命名管道替代进程替换，避免 set -euo pipefail 下 tee 子进程退出触发意外 exit
-_LOG_PIPE="${DATA_DIR}/logs/.deploy-site-$$.pipe"
-mkfifo "$_LOG_PIPE" 2>/dev/null || true
-if command -v stdbuf &>/dev/null; then
-  stdbuf -oL -eL tee -a "$LOG_FILE" < "$_LOG_PIPE" &
-else
-  tee -a "$LOG_FILE" < "$_LOG_PIPE" &
-fi
-_TEE_PID=$!
-exec > "$_LOG_PIPE" 2>&1
-# 交互菜单额外写 fd 3（/dev/tty），避免 stdout 重定向到管道后终端看不到菜单
-if [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null; then
-  exec 3>/dev/tty
-  export DEPLOY_HAS_UI_TTY=1
-else
-  exec 3>&2
-  export DEPLOY_HAS_UI_TTY=0
-fi
-# 脚本退出时清理管道和 tee 进程
-trap 'exec >/dev/null 2>&1; rm -f "$_LOG_PIPE"; wait "$_TEE_PID" 2>/dev/null || true' EXIT
-echo "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="
+export LOG_FILE
+export DEPLOY_LOG_VIA_FUNCTIONS=1
 
 # 与 docker-compose 中 lnmp-nginx user 101:101 一致
 readonly NGINX_C_UID=101
@@ -87,6 +68,9 @@ _source_lib lib/deploy/cmd-remove.sh
 _source_lib lib/deploy/cmd-list.sh
 _source_lib lib/deploy/cmd-ssl.sh
 _source_lib lib/deploy/cmd-webhook.sh
+
+printf '===== %s START %s %s pid=%s =====\n' \
+  "$(date '+%Y-%m-%d %H:%M:%S')" "$0" "$*" "$$" | tee -a "$LOG_FILE"
 
 # ═══════════════════════════════════════════════
 #  主入口
