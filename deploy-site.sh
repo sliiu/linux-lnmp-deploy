@@ -40,7 +40,7 @@ readonly PHP_C_GID=82
 #  lib 加载（本地优先，缺失时从 Gitee 自动下载）
 # ═══════════════════════════════════════════════
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_LIB_RAW_BASE="${_LIB_RAW_BASE:-https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main}"
+_LIB_RAW_BASE="${_LIB_RAW_BASE:-https://gitee.com/sliiu/alibaba-cloud-ecs-deployment/raw/main}"
 _LIB_TMPDIR=""
 
 _source_lib() {

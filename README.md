@@ -17,10 +17,10 @@
 
 ```bash
 # 首次环境初始化
-curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | sudo bash -s init.sh
+curl -fsSL https://gitee.com/sliiu/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | sudo bash -s init.sh
 
 # 站点部署（参数原样透传给 deploy-site.sh）
-curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh \
+curl -fsSL https://gitee.com/sliiu/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh \
   | sudo bash -s deploy-site.sh add --domain=example.com --type=laravel --git=git@github.com:user/repo.git
 ```
 
@@ -32,7 +32,7 @@ curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootst
 ### 方式 2：git clone 后执行
 
 ```bash
-sudo git clone --depth=1 https://gitee.com/qing-u/alibaba-cloud-ecs-deployment.git /opt/alibaba-cloud-ecs-deployment
+sudo git clone --depth=1 https://gitee.com/sliiu/alibaba-cloud-ecs-deployment.git /opt/alibaba-cloud-ecs-deployment
 cd /opt/alibaba-cloud-ecs-deployment
 
 sudo bash init.sh

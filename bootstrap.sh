@@ -1,11 +1,11 @@
 #!/bin/bash
 # 一键引导：克隆/更新仓库后执行 init.sh 或 deploy-site.sh
 # 使用：
-#   curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | bash -s init.sh
-#   curl -fsSL https://gitee.com/qing-u/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | bash -s deploy-site.sh add --domain=example.com ...
+#   curl -fsSL https://gitee.com/sliiu/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | bash -s init.sh
+#   curl -fsSL https://gitee.com/sliiu/alibaba-cloud-ecs-deployment/raw/main/bootstrap.sh | bash -s deploy-site.sh add --domain=example.com ...
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://gitee.com/qing-u/alibaba-cloud-ecs-deployment.git}"
+REPO_URL="${REPO_URL:-https://gitee.com/sliiu/alibaba-cloud-ecs-deployment.git}"
 REPO_BRANCH="${REPO_BRANCH:-main}"
 INSTALL_DIR="${INSTALL_DIR:-/opt/alibaba-cloud-ecs-deployment}"
 

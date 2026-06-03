@@ -43,7 +43,7 @@ install_saferm() {
 ## saferm.sh
 ## A script to safely remove files by moving them to GNOME/KDE trash instead of direct deletion.
 ## Created by Lucas Zhang
-## Contact: <lucas@qing-u.com>
+## Contact: <lucas@sliiu.com>
 ##
 ## Created on  Mon Feb 17 10:10:18 2025 Lucas Zhang
 ## Last modified Mon Feb 17 12:49:26 2025 Lucas Zhang
