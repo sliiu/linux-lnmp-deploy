@@ -348,7 +348,9 @@ repo = d.get("repository") or {}
 assets = rel.get("assets") or []
 asset_url = ""
 if assets:
-    asset_url = assets[0].get("browser_download_url") or ""
+    a0 = assets[0]
+    # 私有仓须用 API url + token；browser_download_url 对 CLI 常 404
+    asset_url = a0.get("url") or a0.get("browser_download_url") or ""
 out = {
     "action": d.get("action") or "",
     "rel_tag": rel.get("tag_name") or "",
@@ -368,12 +370,27 @@ PY
 
 _webhook_download_url() {
   local url="$1" dest="$2" token="${3:-}"
-  local auth=()
-  [[ -n "$token" ]] && auth=(-H "Authorization: Bearer ${token}")
+  local hdr=() err rc
+  [[ -n "$token" ]] && hdr+=(-H "Authorization: Bearer ${token}")
+  if [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]]; then
+    hdr+=(-H "Accept: application/octet-stream")
+  fi
   if command -v curl &>/dev/null; then
-    curl -fsSL "${auth[@]}" -o "$dest" "$url" || return 1
+    err="$(curl -fsSL "${hdr[@]}" -o "$dest" "$url" 2>&1)" || rc=$?
+    if [[ "${rc:-0}" -ne 0 ]]; then
+      warn "${err:-curl 下载失败}"
+      if [[ -z "$token" && "$url" == *"github.com/"*"/releases/download/"* ]]; then
+        warn "提示: 私有仓库需在站点 webhook 配置 github_token（classic PAT 需 repo 权限）"
+      fi
+      return 1
+    fi
+    return 0
   elif command -v wget &>/dev/null; then
-    [[ -n "$token" ]] && wget -q --header="Authorization: Bearer ${token}" -O "$dest" "$url" || wget -q -O "$dest" "$url" || return 1
+    local wget_hdr=()
+    [[ -n "$token" ]] && wget_hdr+=(--header="Authorization: Bearer ${token}")
+    [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]] \
+      && wget_hdr+=(--header="Accept: application/octet-stream")
+    wget -q "${wget_hdr[@]}" -O "$dest" "$url" || return 1
   else
     die "缺少 curl/wget"
   fi
@@ -416,7 +433,7 @@ rel = json.load(open(sys.argv[1], encoding="utf-8")).get("release") or {}
 hint = sys.argv[2].lower()
 for a in rel.get("assets") or []:
     name = (a.get("name") or "").lower()
-    url = a.get("browser_download_url") or ""
+    url = a.get("url") or a.get("browser_download_url") or ""
     if url and hint in name:
         print(url, end="")
         break
