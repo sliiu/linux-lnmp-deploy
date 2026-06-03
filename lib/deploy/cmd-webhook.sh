@@ -112,7 +112,7 @@ _webhook_configure_site() {
 
   if [[ "$WEBHOOK_MODE" = "release" && -z "$WEBHOOK_RELEASE_NAME" ]]; then
     while [[ -z "$WEBHOOK_RELEASE_NAME" ]]; do
-      prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt/v0.1.0）" "${old_rel:-}"
+      prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt-v0.1.0）" "${old_rel:-}"
       WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
       if [[ -z "$WEBHOOK_RELEASE_NAME" ]]; then
         interactive_tty_ok || die "Release 名称不能为空（请在本机终端交互运行，勿用管道）"

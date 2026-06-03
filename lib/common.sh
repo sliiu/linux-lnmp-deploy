@@ -11,18 +11,18 @@ _deploy_log_safe_slug() {
   printf '%s' "$s"
 }
 
-# 日志：${DATA_DIR}/logs/<域名>/<域名>-YYYY-MM-DD-HH-MM-SS.log；无域名时用 _global/
+# 日志：${DATA_DIR}/logs/<域名>/YYYY-MM-DD.log；无域名时用 _global/YYYY-MM-DD.log
 deploy_log_init() {
-  local domain="${1:-}" slug base="${DATA_DIR:-/data/docker-lnmp}/logs" ts
-  ts="$(date '+%Y-%m-%d-%H-%M-%S')"
+  local domain="${1:-}" slug base="${DATA_DIR:-/data/docker-lnmp}/logs" day
+  day="$(date '+%Y-%m-%d')"
   if [[ -n "$domain" ]]; then
     slug="$(_deploy_log_safe_slug "$domain")"
     mkdir -p "${base}/${slug}"
-    LOG_FILE="${base}/${slug}/${slug}-${ts}.log"
+    LOG_FILE="${base}/${slug}/${day}.log"
     _deploy_log_bound_domain="$domain"
   else
     mkdir -p "${base}/_global"
-    LOG_FILE="${base}/_global/deploy-site-${ts}.log"
+    LOG_FILE="${base}/_global/${day}.log"
     _deploy_log_bound_domain=""
   fi
   export LOG_FILE
@@ -43,14 +43,14 @@ deploy_log_session_start() {
 
 _deploy_log_out() {
   if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
-    printf '%s\n' "$1" >> "$LOG_FILE"
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOG_FILE"
   fi
   printf '%s\n' "$1"
 }
 
 die() {
   if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
-    printf '✗ %s\n' "$*" >> "$LOG_FILE"
+    printf '[%s] ✗ %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
   fi
   printf '✗ %s\n' "$*" >&2
   exit 1

@@ -344,8 +344,8 @@ sudo /usr/local/bin/deploy-site.sh add \
 
 ### 日志路径（deploy-site.sh）
 
-- 按域名分目录：`/data/docker-lnmp/logs/<域名>/<域名>-YYYY-MM-DD-HH-MM-SS.log`
-- 无站点上下文（主菜单、`list` 等）：`/data/docker-lnmp/logs/_global/deploy-site-YYYY-MM-DD-HH-MM-SS.log`
+- 按域名分目录、按天一个文件：`/data/docker-lnmp/logs/<域名>/YYYY-MM-DD.log`（行首带时间戳）
+- 无站点上下文（主菜单、`list` 等）：`/data/docker-lnmp/logs/_global/YYYY-MM-DD.log`
 
 ### 注意事项（deploy-site.sh）
 

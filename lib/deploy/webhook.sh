@@ -320,9 +320,9 @@ _webhook_release_name_match() {
   actual_name="$(printf '%s' "$actual_name" | tr '[:upper:]' '[:lower:]')"
   actual_tag="$(printf '%s' "$actual_tag" | tr '[:upper:]' '[:lower:]')"
   [[ "$expected" = "$actual_name" || "$expected" = "$actual_tag" ]] && return 0
-  # 前缀匹配：配置 slimppt → tag slimppt/v0.1.0、name "slimppt slimppt/v0.1.0"
-  [[ "$actual_tag" == "$expected/"* ]] && return 0
-  [[ "$actual_name" == "$expected "* || "$actual_name" == "$expected/"* ]] && return 0
+  # 前缀匹配：配置 slimppt → tag slimppt-v0.1.0、name "slimppt slimppt-v0.1.0"
+  [[ "$actual_tag" == "$expected-"* ]] && return 0
+  [[ "$actual_name" == "$expected "* || "$actual_name" == "$expected-"* ]] && return 0
   return 1
 }
 
