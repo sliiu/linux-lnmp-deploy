@@ -104,13 +104,22 @@ EOF
 }
 
 _webhook_load_listener_env() {
+  local _pm="${WEBHOOK_PUBLIC_MODE:-}" _bind="${WEBHOOK_BIND:-}" _port="${WEBHOOK_PORT:-}" \
+        _path="${WEBHOOK_PATH:-}" _proxy="${WEBHOOK_PROXY_DOMAIN:-}"
   WEBHOOK_PORT="${WEBHOOK_PORT:-9080}"
   WEBHOOK_BIND="${WEBHOOK_BIND:-127.0.0.1}"
   WEBHOOK_PATH="${WEBHOOK_PATH:-/hooks}"
+  WEBHOOK_PUBLIC_MODE="${WEBHOOK_PUBLIC_MODE:-local}"
+  WEBHOOK_PROXY_DOMAIN="${WEBHOOK_PROXY_DOMAIN:-}"
   if [[ -f "$WEBHOOK_LISTENER_ENV" ]]; then
     # shellcheck disable=SC1090
     source "$WEBHOOK_LISTENER_ENV"
   fi
+  [[ -n "$_pm" ]] && WEBHOOK_PUBLIC_MODE="$_pm"
+  [[ -n "$_bind" ]] && WEBHOOK_BIND="$_bind"
+  [[ -n "$_port" ]] && WEBHOOK_PORT="$_port"
+  [[ -n "$_path" ]] && WEBHOOK_PATH="$_path"
+  [[ -n "$_proxy" ]] && WEBHOOK_PROXY_DOMAIN="$_proxy"
 }
 
 _webhook_acquire_lock() {
@@ -474,11 +483,157 @@ _webhook_write_listener_env() {
 WEBHOOK_PORT=${WEBHOOK_PORT:-9080}
 WEBHOOK_BIND=${WEBHOOK_BIND:-127.0.0.1}
 WEBHOOK_PATH=${WEBHOOK_PATH:-/hooks}
+WEBHOOK_PUBLIC_MODE=${WEBHOOK_PUBLIC_MODE:-local}
+WEBHOOK_PROXY_DOMAIN=${WEBHOOK_PROXY_DOMAIN:-}
 # 私有仓库 release 下载（可选）
 # WEBHOOK_GITHUB_TOKEN=
 # WEBHOOK_GITEE_TOKEN=
 EOF
   chmod 600 "$WEBHOOK_LISTENER_ENV"
+}
+
+_webhook_public_callback_url() {
+  _webhook_load_listener_env
+  local path="${WEBHOOK_PATH:-/hooks}"
+  case "${WEBHOOK_PUBLIC_MODE:-local}" in
+    nginx)
+      [[ -n "${WEBHOOK_PROXY_DOMAIN:-}" ]] && printf 'https://%s%s' "${WEBHOOK_PROXY_DOMAIN}" "$path"
+      ;;
+    bind)
+      if [[ "${WEBHOOK_BIND:-127.0.0.1}" = "0.0.0.0" || "${WEBHOOK_BIND}" = "::" ]]; then
+        printf 'http://<服务器公网IP>:%s%s' "${WEBHOOK_PORT:-9080}" "$path"
+      else
+        printf 'http://%s:%s%s' "${WEBHOOK_BIND}" "${WEBHOOK_PORT:-9080}" "$path"
+      fi
+      ;;
+    *)
+      printf 'http://127.0.0.1:%s%s（仅本机）' "${WEBHOOK_PORT:-9080}" "$path"
+      ;;
+  esac
+}
+
+_nginx_strip_webhook_proxy() {
+  local conf="$1"
+  [[ -f "$conf" ]] || return 0
+  sed -i '/# deploy-site webhook-proxy BEGIN/,/# deploy-site webhook-proxy END/d' "$conf"
+}
+
+_nginx_webhook_proxy_block() {
+  local hook_path="$1" port="$2"
+  cat <<NGX
+    # deploy-site webhook-proxy BEGIN
+    location ^~ ${hook_path} {
+        proxy_pass http://127.0.0.1:${port};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        client_max_body_size 5m;
+    }
+    # deploy-site webhook-proxy END
+NGX
+}
+
+_nginx_merge_webhook_proxy() {
+  local conf="$1" hook_path="$2" port="$3"
+  local block_file tmp line inserted=0
+  _nginx_strip_webhook_proxy "$conf"
+  block_file="$(mktemp)"
+  tmp="$(mktemp)"
+  _nginx_webhook_proxy_block "$hook_path" "$port" > "$block_file"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$inserted" -eq 0 && "$line" =~ location\ ~\ /\. ]]; then
+      cat "$block_file"
+      inserted=1
+    fi
+    printf '%s\n' "$line"
+  done < "$conf" > "$tmp"
+  [[ "$inserted" -eq 1 ]] || cat "$block_file" >> "$tmp"
+  mv "$tmp" "$conf"
+  rm -f "$block_file"
+  fix_nginx_conf_d_file "$conf"
+}
+
+_webhook_gen_standalone_nginx() {
+  local domain="$1" hook_path="$2" port="$3"
+  local conf="${NGINX_CONF}/${domain}.conf"
+  local block
+  block="$(_nginx_webhook_proxy_block "$hook_path" "$port")"
+  ensure_placeholder_cert "$domain"
+  cat > "$conf" <<NGINX
+server {
+    listen 80;
+    server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CONTAINER_WWW}/${domain};
+        allow all;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+${block}
+
+    location / { return 404; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
+
+    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
+    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CONTAINER_WWW}/${domain};
+        allow all;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+${block}
+
+    location / { return 404; }
+}
+NGINX
+  fix_nginx_conf_d_file "$conf"
+}
+
+_webhook_apply_nginx_proxy() {
+  local domain="$1"
+  local hook_path="${WEBHOOK_PATH:-/hooks}"
+  local port="${WEBHOOK_PORT:-9080}"
+  local conf="${NGINX_CONF}/${domain}.conf"
+  mkdir -p "${WWW_ROOT}/${domain}/.well-known/acme-challenge"
+  chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${domain}" 2>/dev/null || true
+  if [[ -f "$conf" ]]; then
+    info "在已有 Nginx 配置 ${conf} 中注入 Webhook 反代"
+    _nginx_merge_webhook_proxy "$conf" "$hook_path" "$port"
+  else
+    info "生成 Webhook 专用 Nginx 配置 ${conf}"
+    _webhook_gen_standalone_nginx "$domain" "$hook_path" "$port"
+    warn "新域名请执行: $0 ssl --domain=${domain} 签发证书"
+  fi
+  normalize_nginx_conf_d
+  if container_ok "lnmp-nginx"; then
+    docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
+    docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
+  fi
+}
+
+_webhook_remove_nginx_proxy() {
+  local domain="${WEBHOOK_PROXY_DOMAIN:-}"
+  [[ -n "$domain" ]] || return 0
+  local conf="${NGINX_CONF}/${domain}.conf"
+  [[ -f "$conf" ]] || return 0
+  _nginx_strip_webhook_proxy "$conf"
+  fix_nginx_conf_d_file "$conf"
+  normalize_nginx_conf_d
+  container_ok "lnmp-nginx" && docker exec lnmp-nginx nginx -s reload 2>/dev/null || true
 }
 
 _webhook_write_systemd_unit() {

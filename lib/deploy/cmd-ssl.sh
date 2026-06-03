@@ -57,6 +57,11 @@ usage() {
   --git-ref=名称        update 时 checkout 指定 tag/commit（不 pull）
   --webhook=release|tag  add/update 启用或恢复 webhook（静态=release，Laravel=tag）
   --webhook-only        与 update --webhook 联用：仅写 webhook 配置，不 pull/composer
+  --webhook-bind=地址   setup：监听地址（0.0.0.0）；默认 127.0.0.1
+  --webhook-port=端口     setup：监听端口 [9080]
+  --webhook-path=路径     setup：路径 [/hooks]
+  --webhook-proxy-domain= setup：Nginx 反代域名（mode=nginx，本机仍 127.0.0.1）
+  --webhook-public-mode=  setup：nginx | bind | local
   --webhook-release-name=  release 模式：匹配的 Release 名称或 tag
   --webhook-secret=     webhook 密钥（留空自动生成）
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
@@ -98,6 +103,8 @@ usage() {
   $0 update --domain=www.example.com --webhook=release --webhook-release-name=production --git=git@github.com:org/repo.git --webhook-only
   $0 webhook enable --domain=www.example.com --webhook=release --webhook-release-name=production --git=git@github.com:org/repo.git
   $0 webhook setup
+  $0 webhook setup --webhook-proxy-domain=hook.example.com
+  $0 webhook setup --webhook-bind=0.0.0.0 --webhook-port=9080
   $0 rollback --domain=www.example.com --rollback-to=1
   $0 remove --domain=api.example.com
   $0 list

@@ -20,7 +20,7 @@ _webhook_save_on_add() {
   if [[ "$mode" = "release" ]]; then
     info "  静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
   fi
-  info "  回调 URL: http://<服务器>:$(_webhook_load_listener_env; echo "${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}")"
+  info "  回调 URL: $(_webhook_public_callback_url)"
   info "  Secret: ${sec}（写入 $(site_webhook_file "$DOMAIN")）"
   info "  执行 webhook setup 安装 systemd 监听服务"
 }
@@ -86,7 +86,57 @@ _webhook_configure_site() {
     fi
   fi
   info "Secret: ${sec}"
+  info "回调 URL: $(_webhook_public_callback_url)"
   info "请执行: $0 webhook setup（若尚未安装监听）"
+}
+
+_collect_webhook_setup_interactive() {
+  _webhook_load_listener_env
+
+  local need_mode=0 need_domain=0
+  [[ -z "${WEBHOOK_PUBLIC_MODE:-}" ]] && need_mode=1
+  [[ "${WEBHOOK_PUBLIC_MODE:-}" = "nginx" && -z "${WEBHOOK_PROXY_DOMAIN:-}" ]] && need_domain=1
+  [[ "$need_mode" -eq 0 && "$need_domain" -eq 0 ]] && return 0
+
+  local _i
+  if [[ "$need_mode" -eq 1 ]]; then
+    _i=$(menu_select "Webhook 公网访问方式" \
+      "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
+      "直接绑定 0.0.0.0（外网直连端口）" \
+      "仅本机 127.0.0.1（默认）")
+    case "$_i" in
+      0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
+      1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
+      2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
+    esac
+  fi
+
+  if [[ -z "${WEBHOOK_PATH:-}" ]]; then
+    WEBHOOK_PATH=$(prompt "Webhook 路径" "/hooks")
+  fi
+  [[ "$WEBHOOK_PATH" == /* ]] || die "WEBHOOK_PATH 须以 / 开头"
+
+  if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" && -z "${WEBHOOK_PROXY_DOMAIN:-}" ]]; then
+    local -a doms=()
+    while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
+    if [[ ${#doms[@]} -gt 0 ]]; then
+      local _items=("${doms[@]}" "手动输入域名...")
+      _i=$(menu_select "反代到哪个域名" "${_items[@]}")
+      if [[ "$_i" -lt ${#doms[@]} ]]; then
+        WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
+      else
+        WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名")
+      fi
+    else
+      WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名")
+    fi
+    [[ -n "$WEBHOOK_PROXY_DOMAIN" ]] || die "反代域名不能为空"
+  elif [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]]; then
+    if [[ -z "${WEBHOOK_BIND:-}" || "$WEBHOOK_BIND" = "127.0.0.1" ]]; then
+      WEBHOOK_BIND=$(prompt "监听地址（0.0.0.0 = 全部网卡）" "0.0.0.0")
+    fi
+    WEBHOOK_PORT=$(prompt "监听端口" "${WEBHOOK_PORT:-9080}")
+  fi
 }
 
 cmd_webhook() {
@@ -94,7 +144,7 @@ cmd_webhook() {
   case "$sub" in
     enable)  shift; parse_args "$@"; cmd_webhook_enable ;;
     disable) shift; parse_args "$@"; cmd_webhook_disable ;;
-    setup)   cmd_webhook_setup ;;
+    setup)   shift; parse_args "$@"; cmd_webhook_setup ;;
     serve)   cmd_webhook_serve ;;
     handle)  shift; parse_args "$@"; cmd_webhook_handle ;;
     list)    shift; parse_args "$@"; cmd_webhook_list ;;
@@ -158,27 +208,68 @@ cmd_webhook_list() {
   [[ "$found" -eq 0 ]] && info "暂无"
   _webhook_load_listener_env
   echo ""
-  info "监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}"
+  info "监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}（mode=${WEBHOOK_PUBLIC_MODE:-local}）"
+  info "回调 URL: $(_webhook_public_callback_url)"
   systemctl is-active lnmp-deploy-webhook &>/dev/null && ok "systemd: lnmp-deploy-webhook 运行中" \
     || warn "systemd: lnmp-deploy-webhook 未运行（执行 webhook setup）"
   echo ""
 }
 
 cmd_webhook_setup() {
-  local script_path
+  local script_path old_mode old_domain new_proxy
   script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy-site.sh"
   [[ -x "$script_path" ]] || script_path="${SCRIPT_DIR}/deploy-site.sh"
+
+  _webhook_load_listener_env
+  old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
+  old_domain="${WEBHOOK_PROXY_DOMAIN:-}"
+
+  _collect_webhook_setup_interactive
+
+  case "${WEBHOOK_PUBLIC_MODE:-local}" in
+    nginx|bind|local) ;;
+    *) die "无效 WEBHOOK_PUBLIC_MODE: ${WEBHOOK_PUBLIC_MODE}（nginx | bind | local）" ;;
+  esac
+
+  new_proxy="${WEBHOOK_PROXY_DOMAIN:-}"
+
+  if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
+    WEBHOOK_BIND=127.0.0.1
+    [[ -n "$new_proxy" ]] || die "Nginx 反代需指定 --webhook-proxy-domain="
+    if [[ "$old_mode" = "nginx" && -n "$old_domain" && "$old_domain" != "$new_proxy" ]]; then
+      WEBHOOK_PROXY_DOMAIN="$old_domain"
+      _webhook_remove_nginx_proxy
+    fi
+    WEBHOOK_PROXY_DOMAIN="$new_proxy"
+  else
+    if [[ "$old_mode" = "nginx" && -n "$old_domain" ]]; then
+      WEBHOOK_PROXY_DOMAIN="$old_domain"
+      _webhook_remove_nginx_proxy
+    fi
+    WEBHOOK_PROXY_DOMAIN=""
+    if [[ "$WEBHOOK_PUBLIC_MODE" = "local" ]]; then
+      WEBHOOK_BIND=127.0.0.1
+    fi
+    [[ -n "$WEBHOOK_BIND" ]] || WEBHOOK_BIND=127.0.0.1
+  fi
+
   _webhook_write_listener_env
   _webhook_write_systemd_unit "$script_path"
+
+  if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
+    _webhook_apply_nginx_proxy "$WEBHOOK_PROXY_DOMAIN"
+  fi
+
   systemctl daemon-reload
   systemctl enable lnmp-deploy-webhook
   systemctl restart lnmp-deploy-webhook
   ok "Webhook 监听服务已安装"
   _webhook_load_listener_env
-  info "POST ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}"
+  info "本机监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}"
+  info "回调 URL: $(_webhook_public_callback_url)"
   info "GitHub: 事件 release / 签名 X-Hub-Signature-256"
   info "Gitee:  事件 Release Hook / Push Hook(tag) / Header X-Gitee-Token=secret"
-  info "公网访问请在 nginx/firewall 反代或放行端口"
+  [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]] && info "请确保防火墙/安全组已放行 ${WEBHOOK_PORT}/tcp"
 }
 
 cmd_webhook_serve() {
