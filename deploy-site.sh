@@ -15,8 +15,7 @@ LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/deploy-site.log"
-exec > >(tee -a "$LOG_FILE") 2>&1
-echo "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="
+export LOG_FILE DEPLOY_LOG_TEE=1
 readonly NGINX_C_UID=101
 readonly NGINX_C_GID=101
 # PHP-FPM 容器内 uid（与 init.sh docker-compose 中 php 镜像默认 www-data 82 一致）
@@ -66,6 +65,8 @@ _source_lib lib/deploy/cmd-remove.sh
 _source_lib lib/deploy/cmd-list.sh
 _source_lib lib/deploy/cmd-ssl.sh
 _source_lib lib/deploy/cmd-webhook.sh
+
+info "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="
 
 # ═══════════════════════════════════════════════
 #  主入口

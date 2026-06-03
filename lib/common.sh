@@ -2,11 +2,20 @@
 # init.sh / deploy-site.sh 共用工具函数
 # 此文件由两个入口脚本通过 source 引入，脚本独立运行时请使用 bootstrap.sh
 
-die()  { echo "✗ $*" >&2; exit 1; }
-info() { echo "  $*"; }
-ok()   { echo "  ✓ $*"; }
-warn() { echo "  ! $*"; }
-hr()   { echo "══════════════════════════════════════════════"; }
+if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
+  # deploy-site：不重定向 stdout/stderr（避免 tee 子进程 SIGPIPE + 交互异常），输出函数写日志
+  die()  { printf '✗ %s\n' "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
+  info() { printf '  %s\n' "$*" | tee -a "$LOG_FILE"; }
+  ok()   { printf '  ✓ %s\n' "$*" | tee -a "$LOG_FILE"; }
+  warn() { printf '  ! %s\n' "$*" | tee -a "$LOG_FILE"; }
+  hr()   { printf '%s\n' "══════════════════════════════════════════════" | tee -a "$LOG_FILE"; }
+else
+  die()  { echo "✗ $*" >&2; exit 1; }
+  info() { echo "  $*"; }
+  ok()   { echo "  ✓ $*"; }
+  warn() { echo "  ! $*"; }
+  hr()   { echo "══════════════════════════════════════════════"; }
+fi
 
 interactive_tty_ok() {
   [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null
@@ -43,7 +52,7 @@ prompt() {
   echo "$PROMPT_RESULT"
 }
 
-# 禁止用 $(menu_select)：stdout 会被命令替换捕获导致菜单不可见。调用后读 MENU_SELECT_RESULT。
+# 禁止 $(menu_select)；调用后读 MENU_SELECT_RESULT
 menu_select() {
   local title="$1"; shift
   local -a items=("$@")

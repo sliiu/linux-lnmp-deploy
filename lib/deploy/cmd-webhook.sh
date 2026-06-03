@@ -95,6 +95,12 @@ _collect_webhook_setup_interactive() {
   local cli_only="${1:-0}"
   _webhook_load_listener_env
 
+  if [[ -f "$WEBHOOK_LISTENER_ENV" ]]; then
+    info "已有 listener.env：mode=${WEBHOOK_PUBLIC_MODE:-local} ${WEBHOOK_BIND:-127.0.0.1}:${WEBHOOK_PORT:-9080}${WEBHOOK_PATH:-/hooks}"
+    [[ -n "${WEBHOOK_PROXY_DOMAIN:-}" ]] && info "  反代域名: ${WEBHOOK_PROXY_DOMAIN}"
+    info "可重新选择以下选项更新配置"
+  fi
+
   if [[ "$cli_only" -eq 1 ]]; then
     local need_mode=0 need_domain=0
     [[ -z "${WEBHOOK_PUBLIC_MODE:-}" ]] && need_mode=1
