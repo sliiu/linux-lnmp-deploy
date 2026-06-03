@@ -11,20 +11,22 @@ hr()   { echo "═════════════════════�
 # deploy-site 将 stdout/stderr 重定向到日志管道后，[[ -t 0 ]] 常为假。
 # 交互优先 /dev/tty；不可用时回退 stdout/stdin，避免 set -e 因 >/dev/tty 失败而静默退出。
 interactive_tty_ok() {
-  [[ -r /dev/tty && -w /dev/tty ]]
+  [[ -e /dev/tty ]] && ( : >/dev/tty ) 2>/dev/null
 }
 
 _ui_out() {
   if interactive_tty_ok; then
-    cat > /dev/tty || cat
+    cat > /dev/tty 2>/dev/null || cat >&2
   else
-    cat
+    cat >&2
   fi
 }
 
 _ui_read() {
   if interactive_tty_ok; then
-    read -r "$@" </dev/tty 2>/dev/tty || true
+    read -r "$@" </dev/tty 2>/dev/null || true
+  elif [[ -t 0 ]]; then
+    read -r "$@" || true
   else
     read -r "$@" || true
   fi
