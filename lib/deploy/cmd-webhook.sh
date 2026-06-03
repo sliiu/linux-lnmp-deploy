@@ -91,32 +91,31 @@ _webhook_configure_site() {
 }
 
 _collect_webhook_setup_interactive() {
+  local cli_only="${1:-0}"
   _webhook_load_listener_env
 
-  local need_mode=0 need_domain=0
-  [[ -z "${WEBHOOK_PUBLIC_MODE:-}" ]] && need_mode=1
-  [[ "${WEBHOOK_PUBLIC_MODE:-}" = "nginx" && -z "${WEBHOOK_PROXY_DOMAIN:-}" ]] && need_domain=1
-  [[ "$need_mode" -eq 0 && "$need_domain" -eq 0 ]] && return 0
+  if [[ "$cli_only" -eq 1 ]]; then
+    local need_mode=0 need_domain=0
+    [[ -z "${WEBHOOK_PUBLIC_MODE:-}" ]] && need_mode=1
+    [[ "${WEBHOOK_PUBLIC_MODE:-}" = "nginx" && -z "${WEBHOOK_PROXY_DOMAIN:-}" ]] && need_domain=1
+    [[ "$need_mode" -eq 0 && "$need_domain" -eq 0 ]] && return 0
+  fi
 
   local _i
-  if [[ "$need_mode" -eq 1 ]]; then
-    _i=$(menu_select "Webhook 公网访问方式" \
-      "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
-      "直接绑定 0.0.0.0（外网直连端口）" \
-      "仅本机 127.0.0.1（默认）")
-    case "$_i" in
-      0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
-      1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
-      2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
-    esac
-  fi
+  _i=$(menu_select "Webhook 公网访问方式" \
+    "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
+    "直接绑定 0.0.0.0（外网直连端口）" \
+    "仅本机 127.0.0.1（默认）")
+  case "$_i" in
+    0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
+    1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
+    2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
+  esac
 
-  if [[ -z "${WEBHOOK_PATH:-}" ]]; then
-    WEBHOOK_PATH=$(prompt "Webhook 路径" "/hooks")
-  fi
+  WEBHOOK_PATH=$(prompt "Webhook 路径" "${WEBHOOK_PATH:-/hooks}")
   [[ "$WEBHOOK_PATH" == /* ]] || die "WEBHOOK_PATH 须以 / 开头"
 
-  if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" && -z "${WEBHOOK_PROXY_DOMAIN:-}" ]]; then
+  if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
     local -a doms=()
     while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
     if [[ ${#doms[@]} -gt 0 ]]; then
@@ -125,16 +124,14 @@ _collect_webhook_setup_interactive() {
       if [[ "$_i" -lt ${#doms[@]} ]]; then
         WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
       else
-        WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名")
+        WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}")
       fi
     else
-      WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名")
+      WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}")
     fi
     [[ -n "$WEBHOOK_PROXY_DOMAIN" ]] || die "反代域名不能为空"
   elif [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]]; then
-    if [[ -z "${WEBHOOK_BIND:-}" || "$WEBHOOK_BIND" = "127.0.0.1" ]]; then
-      WEBHOOK_BIND=$(prompt "监听地址（0.0.0.0 = 全部网卡）" "0.0.0.0")
-    fi
+    WEBHOOK_BIND=$(prompt "监听地址（0.0.0.0 = 全部网卡）" "${WEBHOOK_BIND:-0.0.0.0}")
     WEBHOOK_PORT=$(prompt "监听端口" "${WEBHOOK_PORT:-9080}")
   fi
 }
@@ -223,22 +220,11 @@ cmd_webhook_setup() {
   [[ -n "${WEBHOOK_PUBLIC_MODE:-}" || -n "${WEBHOOK_PROXY_DOMAIN:-}" \
      || -n "${WEBHOOK_BIND:-}" || -n "${WEBHOOK_PORT:-}" || -n "${WEBHOOK_PATH:-}" ]] && cli_reconfig=1
 
-  if [[ "$cli_reconfig" -eq 0 ]] && _webhook_is_installed; then
-    _webhook_load_listener_env
-    ok "Webhook 监听服务已安装，跳过"
-    info "本机监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}（mode=${WEBHOOK_PUBLIC_MODE:-local}）"
-    info "回调 URL: $(_webhook_public_callback_url)"
-    systemctl is-active lnmp-deploy-webhook &>/dev/null && ok "systemd: 运行中" \
-      || warn "systemd: 未运行（systemctl restart lnmp-deploy-webhook）"
-    info "重新配置: $0 webhook setup --webhook-proxy-domain=域名 或 --webhook-bind=0.0.0.0"
-    return 0
-  fi
-
   _webhook_load_listener_env
   old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
   old_domain="${WEBHOOK_PROXY_DOMAIN:-}"
 
-  _collect_webhook_setup_interactive
+  _collect_webhook_setup_interactive "$cli_reconfig"
 
   case "${WEBHOOK_PUBLIC_MODE:-local}" in
     nginx|bind|local) ;;

@@ -7,10 +7,6 @@ WEBHOOK_SYSTEMD_UNIT="/etc/systemd/system/lnmp-deploy-webhook.service"
 
 site_webhook_file() { printf '%s/%s.webhook' "$NGINX_CONF" "$1"; }
 
-_webhook_is_installed() {
-  [[ -f "$WEBHOOK_LISTENER_ENV" && -f "$WEBHOOK_SYSTEMD_UNIT" ]]
-}
-
 # 静态站点 + webhook release：产物直接解压到站点根，不用 dist/子目录
 frontend_release_webhook_site() {
   local domain="$1" mode
