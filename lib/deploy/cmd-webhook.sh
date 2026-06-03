@@ -102,17 +102,19 @@ _collect_webhook_setup_interactive() {
   fi
 
   local _i
-  _i=$(menu_select "Webhook 公网访问方式" \
+  menu_select "Webhook 公网访问方式" \
     "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
     "直接绑定 0.0.0.0（外网直连端口）" \
-    "仅本机 127.0.0.1（默认）")
+    "仅本机 127.0.0.1（默认）"
+  _i=$MENU_SELECT_RESULT
   case "$_i" in
     0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
     1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
     2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
   esac
 
-  WEBHOOK_PATH=$(prompt "Webhook 路径" "${WEBHOOK_PATH:-/hooks}")
+  prompt "Webhook 路径" "${WEBHOOK_PATH:-/hooks}"
+  WEBHOOK_PATH=$PROMPT_RESULT
   [[ "$WEBHOOK_PATH" == /* ]] || die "WEBHOOK_PATH 须以 / 开头"
 
   if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
@@ -120,19 +122,24 @@ _collect_webhook_setup_interactive() {
     while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
     if [[ ${#doms[@]} -gt 0 ]]; then
       local _items=("${doms[@]}" "手动输入域名...")
-      _i=$(menu_select "反代到哪个域名" "${_items[@]}")
+      menu_select "反代到哪个域名" "${_items[@]}"
+      _i=$MENU_SELECT_RESULT
       if [[ "$_i" -lt ${#doms[@]} ]]; then
         WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
       else
-        WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}")
+        prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}"
+        WEBHOOK_PROXY_DOMAIN=$PROMPT_RESULT
       fi
     else
-      WEBHOOK_PROXY_DOMAIN=$(prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}")
+      prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}"
+      WEBHOOK_PROXY_DOMAIN=$PROMPT_RESULT
     fi
     [[ -n "$WEBHOOK_PROXY_DOMAIN" ]] || die "反代域名不能为空"
   elif [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]]; then
-    WEBHOOK_BIND=$(prompt "监听地址（0.0.0.0 = 全部网卡）" "${WEBHOOK_BIND:-0.0.0.0}")
-    WEBHOOK_PORT=$(prompt "监听端口" "${WEBHOOK_PORT:-9080}")
+    prompt "监听地址（0.0.0.0 = 全部网卡）" "${WEBHOOK_BIND:-0.0.0.0}"
+    WEBHOOK_BIND=$PROMPT_RESULT
+    prompt "监听端口" "${WEBHOOK_PORT:-9080}"
+    WEBHOOK_PORT=$PROMPT_RESULT
   fi
 }
 
