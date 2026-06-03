@@ -33,7 +33,6 @@ cmd_webhook() {
     handle)  shift; parse_args "$@"; cmd_webhook_handle ;;
     list)    shift; parse_args "$@"; cmd_webhook_list ;;
     "")
-      [[ -t 0 ]] || die "用法: $0 webhook <enable|disable|setup|serve|handle|list>"
       while true; do
         hr
         info "Webhook 管理"
@@ -47,8 +46,8 @@ cmd_webhook() {
           "返回")
         echo ""
         case "$_i" in
-          0) cmd_webhook_enable ;;
-          1) cmd_webhook_disable ;;
+          0) DOMAIN=""; cmd_webhook_enable ;;
+          1) DOMAIN=""; cmd_webhook_disable ;;
           2) cmd_webhook_setup ;;
           3) cmd_webhook_list ;;
           4) return 0 ;;
@@ -71,15 +70,11 @@ cmd_webhook_enable() {
   [[ -f "${site_dir}/artisan" ]] || st="frontend"
 
   if [[ -z "$WEBHOOK_MODE" ]]; then
-    if [[ -t 0 ]]; then
-      if [[ "$st" = "frontend" ]]; then
-        WEBHOOK_MODE="release"
-      else
-        local _i; _i=$(menu_select "Webhook 模式" "tag（监听 Git tag 推送）" "release（监听 Release 发版）")
-        [[ "$_i" -eq 1 ]] && WEBHOOK_MODE="release" || WEBHOOK_MODE="tag"
-      fi
+    if [[ "$st" = "frontend" ]]; then
+      WEBHOOK_MODE="release"
     else
-      WEBHOOK_MODE="$([[ "$st" = "frontend" ]] && echo release || echo tag)"
+      local _i; _i=$(menu_select "Webhook 模式" "tag（监听 Git tag 推送）" "release（监听 Release 发版）")
+      [[ "$_i" -eq 1 ]] && WEBHOOK_MODE="release" || WEBHOOK_MODE="tag"
     fi
   fi
 
@@ -188,7 +183,7 @@ cmd_rollback() {
     fi
   elif [[ "$ROLLBACK_INDEX" -gt 0 ]]; then
     entry="$(_webhook_history_entry "$DOMAIN" "$ROLLBACK_INDEX")" || die "无效序号"
-  elif [[ -t 0 && "${YES:-0}" -ne 1 ]]; then
+  elif [[ "${YES:-0}" -ne 1 ]]; then
     idx=$(prompt "回退到序号（见上表）" "1")
     entry="$(_webhook_history_entry "$DOMAIN" "$idx")" || die "无效序号"
   else

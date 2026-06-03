@@ -72,7 +72,7 @@ _status_print_hints() {
 }
 
 cmd_status() {
-  if [[ "${STATUS_ALL:-0}" -ne 1 && -z "${DOMAIN:-}" && -t 0 ]]; then
+  if [[ "${STATUS_ALL:-0}" -ne 1 && -z "${DOMAIN:-}" ]]; then
     local -a _doms=()
     while IFS= read -r d; do _doms+=("$d"); done < <(_list_deployed_domains)
     if [[ ${#_doms[@]} -eq 0 ]]; then

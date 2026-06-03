@@ -382,6 +382,17 @@ _webhook_deploy_tag() {
   ok "站点 ${domain} 已更新到 tag ${tag}"
 }
 
+_webhook_json_release_name() {
+  local body_file="$1"
+  local block name
+  block="$(grep -oE '"release"[[:space:]]*:[[:space:]]*\{[^}]+\}' "$body_file" 2>/dev/null | head -n1)"
+  if [[ -n "$block" ]]; then
+    name="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$block" 2>/dev/null | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
+    [[ -n "$name" ]] && { printf '%s' "$name"; return 0; }
+  fi
+  _webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"'
+}
+
 _webhook_process_payload() {
   local body_file="$1" event="${2:-}" gh_sig="${3:-}" gitee_token="${4:-}"
 
@@ -401,8 +412,8 @@ _webhook_process_payload() {
   provider="${norm%%:*}"
 
   local rel_name rel_tag dl_url tag_name
-  rel_name="$(_webhook_json_field "$body_file" '"name"[[:space:]]*:[[:space:]]*"[^"]+"')"
   rel_tag="$(_webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"')"
+  rel_name="$(_webhook_json_release_name "$body_file")"
   tag_name="${rel_tag:-}"
 
   local matched=0 line domain mode wf secret ok_verify=0

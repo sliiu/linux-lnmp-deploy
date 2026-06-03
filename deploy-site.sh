@@ -116,13 +116,13 @@ main() {
         echo ""
         case "$_idx" in
           0) cmd_list ;;
-          1) cmd_add ;;
-          2) cmd_update ;;
-          3) cmd_webhook ;;
-          4) cmd_rollback ;;
-          5) STATUS_ALL=0; DOMAIN=""; cmd_status ;;
-          6) cmd_ssl ;;
-          7) cmd_remove ;;
+          1) reset_menu_deploy_state; cmd_add ;;
+          2) reset_menu_deploy_state; cmd_update ;;
+          3) reset_menu_deploy_state; cmd_webhook ;;
+          4) reset_menu_deploy_state; cmd_rollback ;;
+          5) reset_menu_deploy_state; STATUS_ALL=0; cmd_status ;;
+          6) reset_menu_deploy_state; cmd_ssl ;;
+          7) reset_menu_deploy_state; cmd_remove ;;
           8) ok "再见"; exit 0 ;;
         esac
         echo ""

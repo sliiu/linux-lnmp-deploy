@@ -8,6 +8,12 @@ ok()   { echo "  ✓ $*"; }
 warn() { echo "  ! $*"; }
 hr()   { echo "══════════════════════════════════════════════"; }
 
+# deploy-site 将 stdout/stderr 重定向到日志管道后，[[ -t 0 ]] 常为假。
+# 交互一律走 /dev/tty（见 prompt/menu_select/confirm）；勿用本函数拦截菜单。
+interactive_tty_ok() {
+  [[ -r /dev/tty && -w /dev/tty ]]
+}
+
 confirm() {
   local msg="${1:-确认？}" default="${2:-y}" ans=""
   local prompt_str="[Y/n]"; [[ "$default" != "y" ]] && prompt_str="[y/N]"

@@ -113,7 +113,6 @@ apply_site_sse_prefixes_cli() {
 # update：展示当前 SSE 规则并可选修改（未传 --sse-prefixes 且 stdin 为 TTY 且未 --yes 时）
 interactive_sse_prefixes_maybe_for_update() {
   local domain="$1"
-  [[ -t 0 ]] || return 0
   [[ "${YES:-0}" -eq 1 ]] && return 0
   [[ "${SITE_SSE_PREFIXES_CLI:-0}" -eq 1 ]] && return 0
 

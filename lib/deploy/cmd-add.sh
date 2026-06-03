@@ -203,7 +203,7 @@ HORIZON
 # ═══════════════════════════════════════════════
 #  子命令: add
 # ═══════════════════════════════════════════════
-DOMAIN="" GIT_REPO="" GIT_BRANCH="" GIT_REF="" SITE_TYPE=""
+DOMAIN="" GIT_REPO="" GIT_BRANCH="" GIT_REF="" SITE_TYPE="" SITE_TYPE_CLI=0
 SITE_PHP_VERSION="" SITE_PHP_VERSION_CLI=0
 SITE_SSE_PREFIXES="" SITE_SSE_PREFIXES_CLI=0
 APP_NAME="" REDIS_HOST="" REDIS_PORT="" REDIS_PASSWORD=""
@@ -223,6 +223,65 @@ WEBHOOK_GH_SIG="" WEBHOOK_GITEE_TOKEN=""
 YES=0
 STATUS_ALL=0
 SKIP_GIT=0
+
+# 主菜单每次操作前调用，避免 DOMAIN / SITE_TYPE 等残留导致跳过交互
+reset_menu_deploy_state() {
+  DOMAIN=""
+  GIT_REPO=""
+  GIT_BRANCH=""
+  GIT_REF=""
+  SITE_TYPE=""
+  SITE_TYPE_CLI=0
+  SITE_PHP_VERSION=""
+  SITE_PHP_VERSION_CLI=0
+  SITE_SSE_PREFIXES=""
+  SITE_SSE_PREFIXES_CLI=0
+  APP_NAME=""
+  REDIS_HOST=""
+  REDIS_PORT=""
+  REDIS_PASSWORD=""
+  REDIS_PASSWORD_FROM_CLI=0
+  NEED_DB=""
+  DB_HOST=""
+  DB_NAME=""
+  DB_PWD=""
+  DB_PWD_FROM_CLI=0
+  CREATE_DB=""
+  RUN_MIGRATE=""
+  RUN_SEED=""
+  ADD_CRONTAB=""
+  NEED_HORIZON=""
+  FRONTEND_ROOT=""
+  SSL_DNS=""
+  CF_TOKEN=""
+  FORCE_SSL=""
+  SSL_STAGING=0
+  ALI_KEY=""
+  ALI_SECRET=""
+  DP_ID=""
+  DP_KEY=""
+  GD_KEY=""
+  GD_SECRET=""
+  AWS_ACCESS_KEY_ID=""
+  AWS_SECRET_ACCESS_KEY=""
+  TENCENT_SECRET_ID=""
+  TENCENT_SECRET_KEY=""
+  CUSTOM_ENV=()
+  WEBHOOK_MODE=""
+  WEBHOOK_RELEASE_NAME=""
+  WEBHOOK_SECRET=""
+  WEBHOOK_ENABLE=0
+  ROLLBACK_TO=""
+  ROLLBACK_INDEX=0
+  WEBHOOK_BODY_FILE=""
+  WEBHOOK_HEADERS_FILE=""
+  WEBHOOK_EVENT=""
+  WEBHOOK_GH_SIG=""
+  WEBHOOK_GITEE_TOKEN=""
+  YES=0
+  STATUS_ALL=0
+  SKIP_GIT=0
+}
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
@@ -247,8 +306,8 @@ parse_args() {
       --git-ref)         shift; GIT_REF="$1" ;;
       --git-tag=*)       GIT_REF="${1#*=}" ;;
       --git-tag)         shift; GIT_REF="$1" ;;
-      --type=*)          SITE_TYPE="${1#*=}" ;;
-      --type)            shift; SITE_TYPE="$1" ;;
+      --type=*)          SITE_TYPE="${1#*=}"; SITE_TYPE_CLI=1 ;;
+      --type)            shift; SITE_TYPE="$1"; SITE_TYPE_CLI=1 ;;
       --php-version=*)   SITE_PHP_VERSION="${1#*=}"; SITE_PHP_VERSION_CLI=1 ;;
       --php-version)
         SITE_PHP_VERSION_CLI=1
@@ -378,7 +437,6 @@ _list_deployed_domains() {
 # DOMAIN 为空 + TTY 时弹菜单选择已部署站点；prefer_action=update/remove/ssl/status 仅用于标题
 prompt_pick_domain() {
   [[ -n "$DOMAIN" ]] && return 0
-  [[ -t 0 ]] || die "缺少 --domain"
   local -a doms=()
   while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
   if [[ ${#doms[@]} -eq 0 ]]; then
@@ -397,7 +455,6 @@ prompt_pick_domain() {
 # PHP 版本菜单：基于在线 lnmp-php / lnmp-phpNN 容器
 _collect_site_php_version_interactive() {
   [[ "${SITE_PHP_VERSION_CLI:-0}" -eq 1 ]] && return 0
-  [[ -t 0 ]] || return 0
   local -a vers=("默认（lnmp-php = ${PHP_VERSION:-未知}）")
   local cur n v dv; dv="$(_default_php_ver)"
   while IFS= read -r n; do
@@ -426,7 +483,6 @@ _collect_site_php_version_interactive() {
 # SSL 校验方式菜单
 _collect_ssl_dns_interactive() {
   [[ -n "$SSL_DNS" ]] && return 0
-  [[ -t 0 ]] || { SSL_DNS="${ACME_SSL_DNS_DEFAULT:-webroot}"; return 0; }
   local _i; _i=$(menu_select "SSL 证书校验方式（默认 webroot；DNS 模式可签泛域名）" \
     "webroot   (HTTP-01；最常见，需域名解析到本机)" \
     "dns_cf    (Cloudflare API Token)" \
@@ -449,7 +505,6 @@ _collect_ssl_dns_interactive() {
 # 站点目录已存在且非空（且没有 .git）→ 提示是否仍 clone（默认否，避免误覆盖）
 _offer_skip_git_if_code_present() {
   [[ -z "$GIT_REPO" ]] && return 0
-  [[ -t 0 ]] || return 0
   local d="${WWW_ROOT}/${DOMAIN}"
   [[ -d "$d/.git" ]] && return 0
   [[ -d "$d" ]] || return 0
@@ -463,7 +518,6 @@ _offer_skip_git_if_code_present() {
 # DB 三件事（建库/迁移/seed）合并为一次决策
 _collect_db_actions_interactive() {
   [[ "$NEED_DB" != "y" ]] && return 0
-  [[ -t 0 ]] || return 0
   # CLI 任一已显式给值 → 用 CLI 决策，跳过菜单
   if [[ -n "${CREATE_DB}${RUN_MIGRATE}${RUN_SEED}" ]]; then
     CREATE_DB="${CREATE_DB:-y}"
@@ -496,7 +550,6 @@ _collect_db_actions_interactive() {
 
 # 队列后台（cron / Horizon）合并为一次决策；据 PHP 版本作可行性提示
 _collect_queue_supervisor_interactive() {
-  [[ -t 0 ]] || return 0
   if [[ -n "${ADD_CRONTAB}${NEED_HORIZON}" ]]; then
     ADD_CRONTAB="${ADD_CRONTAB:-y}"
     NEED_HORIZON="${NEED_HORIZON:-y}"
@@ -525,14 +578,12 @@ collect_interactive() {
   [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
 
-  # 2) 站点类型（决定后续走 laravel/frontend 分叉）
-  if [[ -z "$SITE_TYPE" ]]; then
-    if [[ -t 0 ]]; then
-      local _i; _i=$(menu_select "站点类型" "laravel (PHP 后端)" "frontend (静态/SPA)")
-      [[ "$_i" -eq 1 ]] && SITE_TYPE="frontend" || SITE_TYPE="laravel"
-    else
-      SITE_TYPE="laravel"
-    fi
+  # 2) 站点类型（与主菜单相同：直接 menu_select，勿预判 tty；误判时会静默默认 laravel）
+  if [[ "${SITE_TYPE_CLI:-0}" -ne 1 ]]; then
+    SITE_TYPE=""
+    local _st_i
+    _st_i=$(menu_select "站点类型" "laravel (PHP 后端)" "frontend (静态/SPA)")
+    [[ "$_st_i" -eq 1 ]] && SITE_TYPE="frontend" || SITE_TYPE="laravel"
   fi
   SITE_TYPE=${SITE_TYPE:-laravel}
   [[ "$SITE_TYPE" != "laravel" && "$SITE_TYPE" != "frontend" ]] && SITE_TYPE="laravel"
@@ -574,7 +625,7 @@ collect_interactive() {
     # 8) 应用名 + 自定义 ENV（最低优先级，放最后；轻打扰）
     APP_NAME=${APP_NAME:-$(prompt "APP_NAME" "Laravel")}
 
-    if [[ ${#CUSTOM_ENV[@]} -eq 0 && -t 0 ]]; then
+    if [[ ${#CUSTOM_ENV[@]} -eq 0 ]]; then
       echo ""
       info "自定义 ENV（一行 CSV：KEY=V[,KEY2=V2]，留空跳过；含逗号/空格的值改用 --env 多次传入）"
       local _envline
@@ -630,7 +681,7 @@ cmd_add() {
   fi
 
   # 执行前的「配置确认」（仅 TTY 且未 --yes 时弹出，顺序与提问顺序一致）
-  if [[ "${YES:-0}" -ne 1 && -t 0 ]]; then
+  if [[ "${YES:-0}" -ne 1 ]]; then
     echo ""
     hr; info "配置确认"; hr
     printf "  %-18s %s\n" "域名"   "$DOMAIN"
