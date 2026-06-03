@@ -261,7 +261,7 @@ _webhook_verify_gitee_token() {
 
 _webhook_json_field() {
   local file="$1" pattern="$2"
-  grep -oE "$pattern" "$file" 2>/dev/null | head -n1 | sed 's/^[^:]*://; s/^"//; s/"$//; s/\\"/"/g'
+  { grep -oE "$pattern" "$file" 2>/dev/null | head -n1 | sed 's/^[^:]*://; s/^"//; s/"$//; s/\\"/"/g'; } || true
 }
 
 _webhook_sites_for_repo() {
@@ -406,9 +406,9 @@ _webhook_deploy_tag() {
 _webhook_json_release_name() {
   local body_file="$1"
   local block name
-  block="$(grep -oE '"release"[[:space:]]*:[[:space:]]*\{[^}]+\}' "$body_file" 2>/dev/null | head -n1)"
+  block="$(grep -oE '"release"[[:space:]]*:[[:space:]]*\{[^}]+\}' "$body_file" 2>/dev/null | head -n1 || true)"
   if [[ -n "$block" ]]; then
-    name="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$block" 2>/dev/null | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
+    name="$(grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' <<< "$block" 2>/dev/null | head -n1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
     [[ -n "$name" ]] && { printf '%s' "$name"; return 0; }
   fi
   _webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"'
@@ -472,7 +472,9 @@ _webhook_process_payload() {
     fi
   done < <(_webhook_sites_for_repo "$norm")
 
-  [[ "$matched" -eq 1 ]] && return 0
+  if [[ "$matched" -eq 1 ]]; then
+    return 0
+  fi
   info "无匹配站点（仓库 ${norm}）"
   return 0
 }

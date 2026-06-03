@@ -294,7 +294,10 @@ cmd_webhook_serve() {
 
 cmd_webhook_handle() {
   [[ -n "$WEBHOOK_BODY_FILE" && -f "$WEBHOOK_BODY_FILE" ]] || die "缺少 --body-file"
-  _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}"
+  if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}"; then
+    warn "webhook payload 处理失败"
+    return 1
+  fi
 }
 
 cmd_rollback() {
