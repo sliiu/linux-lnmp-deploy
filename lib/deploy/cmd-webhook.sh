@@ -36,7 +36,7 @@ _webhook_collect_site_release_opts() {
   repo_lc="$(printf '%s' "${GIT_REPO:-}" | tr '[:upper:]' '[:lower:]')"
 
   if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
-    prompt "Release 附件名关键字（留空=自动选第一个 asset）" "${old_asset:-}"
+    prompt "Release 附件名关键字（子串匹配，不含版本号，如 slimppt-standalone；留空=第一个 asset）" "${old_asset:-}"
     [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_ASSET_NAME="$PROMPT_RESULT"
     if [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]]; then
       WEBHOOK_ASSET_NAME="$old_asset"
