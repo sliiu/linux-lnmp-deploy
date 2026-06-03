@@ -51,6 +51,22 @@ prompt() {
   echo "$PROMPT_RESULT"
 }
 
+# 敏感输入：不回显到 stdout（禁止 $(prompt_secret)）
+prompt_secret() {
+  local msg="$1" var=""
+  echo ""
+  info "${msg}"
+  echo ""
+  if interactive_tty_ok; then
+    read -rsp "  请输入: " var </dev/tty || var=""
+    echo "" >/dev/tty 2>/dev/null || echo ""
+  else
+    read -rsp "  请输入: " var || var=""
+    echo ""
+  fi
+  PROMPT_RESULT="$var"
+}
+
 # 禁止 $(prompt)；调用后读 PROMPT_RESULT
 
 # 禁止 $(menu_select)；调用后读 MENU_SELECT_RESULT

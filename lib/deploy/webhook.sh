@@ -106,9 +106,9 @@ release_name=${release_name}
 secret=${secret}
 EOF
   fi
-  [[ -n "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]] && echo "github_token=${WEBHOOK_SITE_GITHUB_TOKEN}" >> "$f"
-  [[ -n "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]] && echo "gitee_token=${WEBHOOK_SITE_GITEE_TOKEN}" >> "$f"
-  [[ -n "${WEBHOOK_ASSET_NAME:-}" ]] && echo "asset_name=${WEBHOOK_ASSET_NAME}" >> "$f"
+  [[ -n "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]] && printf 'github_token=%s\n' "$WEBHOOK_SITE_GITHUB_TOKEN" >> "$f"
+  [[ -n "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]] && printf 'gitee_token=%s\n' "$WEBHOOK_SITE_GITEE_TOKEN" >> "$f"
+  [[ -n "${WEBHOOK_ASSET_NAME:-}" ]] && printf 'asset_name=%s\n' "$WEBHOOK_ASSET_NAME" >> "$f"
   chmod 600 "$f"
   printf '%s' "$secret"
 }
@@ -642,7 +642,9 @@ _webhook_public_callback_url() {
   local path="${WEBHOOK_PATH:-/hooks}"
   case "${WEBHOOK_PUBLIC_MODE:-local}" in
     nginx)
-      [[ -n "${WEBHOOK_PROXY_DOMAIN:-}" ]] && printf 'https://%s%s' "${WEBHOOK_PROXY_DOMAIN}" "$path"
+      if [[ -n "${WEBHOOK_PROXY_DOMAIN:-}" ]]; then
+        printf 'https://%s%s' "${WEBHOOK_PROXY_DOMAIN}" "$path"
+      fi
       ;;
     bind)
       if [[ "${WEBHOOK_BIND:-127.0.0.1}" = "0.0.0.0" || "${WEBHOOK_BIND}" = "::" ]]; then
@@ -655,6 +657,7 @@ _webhook_public_callback_url() {
       printf 'http://127.0.0.1:%s%s（仅本机）' "${WEBHOOK_PORT:-9080}" "$path"
       ;;
   esac
+  return 0
 }
 
 _nginx_strip_webhook_proxy() {

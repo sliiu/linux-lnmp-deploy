@@ -38,24 +38,31 @@ _webhook_collect_site_release_opts() {
   if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
     prompt "Release 附件名关键字（留空=自动选第一个 asset）" "${old_asset:-}"
     [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_ASSET_NAME="$PROMPT_RESULT"
-    [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]] && WEBHOOK_ASSET_NAME="$old_asset"
+    if [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]]; then
+      WEBHOOK_ASSET_NAME="$old_asset"
+    fi
   fi
 
   if [[ "$repo_lc" == *github.com* || "$repo_lc" == git@github.com:* ]]; then
     if [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]]; then
       [[ -n "$old_gh" ]] && info "已有 GitHub Token（${old_gh:0:8}...），留空保留"
-      prompt "GitHub Token（私有仓 release 下载，留空保留/跳过）" ""
+      prompt_secret "GitHub Token（私有仓 release 下载，留空保留/跳过）"
       [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$PROMPT_RESULT"
-      [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" && -n "$old_gh" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$old_gh"
+      if [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" && -n "$old_gh" ]]; then
+        WEBHOOK_SITE_GITHUB_TOKEN="$old_gh"
+      fi
     fi
   elif [[ "$repo_lc" == *gitee.com* ]]; then
     if [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]]; then
       [[ -n "$old_ge" ]] && info "已有 Gitee Token（${old_ge:0:8}...），留空保留"
-      prompt "Gitee Token（私有仓 release 下载，留空保留/跳过）" ""
+      prompt_secret "Gitee Token（私有仓 release 下载，留空保留/跳过）"
       [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_SITE_GITEE_TOKEN="$PROMPT_RESULT"
-      [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" && -n "$old_ge" ]] && WEBHOOK_SITE_GITEE_TOKEN="$old_ge"
+      if [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" && -n "$old_ge" ]]; then
+        WEBHOOK_SITE_GITEE_TOKEN="$old_ge"
+      fi
     fi
   fi
+  return 0
 }
 
 # 为已有站点写入/恢复 ${NGINX_CONF}/<域名>.webhook（update / webhook enable 共用）
@@ -125,10 +132,13 @@ _webhook_configure_site() {
   if [[ "$WEBHOOK_MODE" = "release" ]]; then
     info "静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
     if [[ "$st" = "frontend" ]] && container_ok "lnmp-nginx"; then
-      gen_nginx_frontend "$DOMAIN" ""
-      fix_site_readable_for_nginx "$DOMAIN" "frontend" ""
+      gen_nginx_frontend "$DOMAIN" "" || warn "Nginx 配置写入失败"
+      fix_site_readable_for_nginx "$DOMAIN" "frontend" "" || true
       if docker exec lnmp-nginx nginx -t 2>&1; then
-        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已切换为站点根目录"
+        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已切换为站点根目录" \
+          || warn "Nginx reload 失败"
+      else
+        warn "Nginx 配置测试失败，请检查 ${NGINX_CONF}/${DOMAIN}.conf"
       fi
     fi
   fi
