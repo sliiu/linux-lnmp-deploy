@@ -3,18 +3,20 @@ collect_github_proxy() {
   echo ""
   info "当前: ${GH_PROXY:-<官方直连>}"
   local idx
-  idx=$(menu_select "GitHub 加速代理" \
+  menu_select "GitHub 加速代理" \
     "保持当前不变" \
     "官方源（直连）" \
     "ghfast.top（推荐国内）" \
-    "自定义")
+    "自定义"
+  idx=$MENU_SELECT_RESULT
   case "$idx" in
     0) return 0 ;;
     1) GH_PROXY="" ;;
     2) GH_PROXY="https://ghfast.top" ;;
     3)
       while true; do
-        GH_PROXY=$(prompt "GitHub 代理地址 (如 https://ghfast.top；- 清空)")
+        prompt "GitHub 代理地址 (如 https://ghfast.top；- 清空)"
+        GH_PROXY=$PROMPT_RESULT
         if [[ "$GH_PROXY" = "-" ]]; then GH_PROXY=""; return 0; fi
         if [[ "$GH_PROXY" =~ ^https?://[^[:space:]]+$ ]]; then
           GH_PROXY="${GH_PROXY%/}"; return 0
@@ -27,7 +29,8 @@ collect_github_proxy() {
 
 collect_docker_mirrors() {
   local sel
-  sel=$(menu_multi "Docker 镜像源" "官方" "DaoCloud" "阿里云" "腾讯云" "自定义")
+  menu_multi "Docker 镜像源" "官方" "DaoCloud" "阿里云" "腾讯云" "自定义"
+  sel=$MENU_MULTI_RESULT
   DOCKER_MIRRORS_STR=""
   for idx in $sel; do
     case "$idx" in
@@ -37,7 +40,8 @@ collect_docker_mirrors() {
       3) DOCKER_MIRRORS_STR+="${DOCKER_MIRRORS_STR:+,}https://ccr.ccs.tencentyun.com" ;;
       4)
         local m
-        m=$(prompt "Docker 镜像源地址")
+        prompt "Docker 镜像源地址"
+        m=$PROMPT_RESULT
         if [[ -n "$m" ]]; then DOCKER_MIRRORS_STR+="${DOCKER_MIRRORS_STR:+,}${m}"; fi
         ;;
     esac
@@ -46,7 +50,8 @@ collect_docker_mirrors() {
 
 collect_alpine_mirror() {
   local idx
-  idx=$(menu_select "PHP Alpine 源" "官方" "清华" "阿里云")
+  menu_select "PHP Alpine 源" "官方" "清华" "阿里云"
+  idx=$MENU_SELECT_RESULT
   case "$idx" in
     0) ALPINE_MIRROR="" ;;
     1) ALPINE_MIRROR="mirrors.tuna.tsinghua.edu.cn" ;;
@@ -56,9 +61,10 @@ collect_alpine_mirror() {
 
 collect_php_version() {
   local idx
-  idx=$(menu_select "PHP 版本（镜像 php:主版本-fpm-alpine）" \
+  menu_select "PHP 版本（镜像 php:主版本-fpm-alpine）" \
     "8.1" "8.2 (Laravel 12 最低)" "8.3 (推荐)" "8.4" "8.5" \
-    "自定义主版本（如 8.3）")
+    "自定义主版本（如 8.3）"
+  idx=$MENU_SELECT_RESULT
   case "$idx" in
     0) PHP_VERSION="8.1" ;;
     1) PHP_VERSION="8.2" ;;
@@ -67,7 +73,8 @@ collect_php_version() {
     4) PHP_VERSION="8.5" ;;
     5)
       while true; do
-        PHP_VERSION=$(prompt "主版本号 (X.Y)" "${PHP_VERSION:-8.3}")
+        prompt "主版本号 (X.Y)" "${PHP_VERSION:-8.3}"
+        PHP_VERSION=$PROMPT_RESULT
         [[ -z "$PHP_VERSION" ]] && PHP_VERSION="8.3"
         [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] && break
         warn "无效的 PHP 版本格式：${PHP_VERSION}（应为 8.3 / 7.4 形式），请重新输入"
@@ -91,7 +98,9 @@ collect_extra_php_versions() {
   done
   _items+=("不启用 / 清空" "保持当前不变" "手动输入 CSV...")
 
-  local sel; sel=$(menu_multi "勾选要启用的额外 PHP 版本（同时选「保持当前」会忽略其他勾选）" "${_items[@]}")
+  local sel
+  menu_multi "勾选要启用的额外 PHP 版本（同时选「保持当前」会忽略其他勾选）" "${_items[@]}"
+  sel=$MENU_MULTI_RESULT
 
   local _last1=$(( ${#_items[@]} - 1 ))
   local _last2=$(( ${#_items[@]} - 2 ))
@@ -117,7 +126,8 @@ collect_extra_php_versions() {
     if [[ "$_i" -eq "$_last1" ]]; then
       while true; do
         local v
-        v=$(prompt "EXTRA_PHP_VERSIONS（CSV，例 7.4,8.2；- 清空）" "${EXTRA_PHP_VERSIONS:-}")
+        prompt "EXTRA_PHP_VERSIONS（CSV，例 7.4,8.2；- 清空）" "${EXTRA_PHP_VERSIONS:-}"
+        v=$PROMPT_RESULT
         if [[ "$v" = "-" ]]; then EXTRA_PHP_VERSIONS=""; return 0; fi
         v="${v//[[:space:]]/}"
         local out="" one bad=0
@@ -155,7 +165,8 @@ collect_php_extensions() {
   echo ""
   info "当前已选: ${PHP_EXTENSIONS:-<空，默认全选>}"
   local sel
-  sel=$(menu_multi "PHP 扩展（回车=全选；空选=保留当前不变）" "${all_exts[@]}")
+  menu_multi "PHP 扩展（回车=全选；空选=保留当前不变）" "${all_exts[@]}"
+  sel=$MENU_MULTI_RESULT
   # menu_multi 返回为空 → 仅可能是 items 全部不可解析；按"全选"语义已在内部默认；
   # 这里再做一次防御：用户若手动输入了非数字（如 -），保留当前值
   local out=""
@@ -179,7 +190,8 @@ collect_mysql_password() {
 
 collect_acme_email() {
   while true; do
-    ACME_EMAIL=$(prompt "ACME 证书邮箱（用于 Let's Encrypt 注册）" "${ACME_EMAIL:-}")
+    prompt "ACME 证书邮箱（用于 Let's Encrypt 注册）" "${ACME_EMAIL:-}"
+    ACME_EMAIL=$PROMPT_RESULT
     [[ "$ACME_EMAIL" =~ ^[^@]+@[^@]+\.[^@]+$ ]] && break
     warn "邮箱格式无效：${ACME_EMAIL:-<空>}，请重新输入"
   done
@@ -188,14 +200,15 @@ collect_acme_email() {
 collect_acme_ssl_dns_default() {
   info "deploy-site.sh 交互时未指定 --dns 的默认值（仅模式名，不含各云密钥）"
   local _i
-  _i=$(menu_select "默认 SSL 校验方式" \
+  menu_select "默认 SSL 校验方式" \
     "webroot   (HTTP-01；最常见)" \
     "dns_cf    (Cloudflare API Token)" \
     "dns_ali   (阿里云 DNS Ali_Key/Secret)" \
     "dns_dp    (DNSPod DP_Id/DP_Key)" \
     "dns_gd    (GoDaddy)" \
     "dns_aws   (Route53)" \
-    "dns_tencent (腾讯云 DNSPod API)")
+    "dns_tencent (腾讯云 DNSPod API)"
+  _i=$MENU_SELECT_RESULT
   case "$_i" in
     0) ACME_SSL_DNS_DEFAULT="webroot" ;;
     1) ACME_SSL_DNS_DEFAULT="dns_cf" ;;
@@ -209,16 +222,19 @@ collect_acme_ssl_dns_default() {
 
 collect_ssh_config() {
   local idx
-  idx=$(menu_select "SSH root 登录策略" "禁止 root 登录（推荐）" "root 仅密钥登录")
+  menu_select "SSH root 登录策略" "禁止 root 登录（推荐）" "root 仅密钥登录"
+  idx=$MENU_SELECT_RESULT
   case "$idx" in
     0) ROOT_LOGIN="no" ;;
     1) ROOT_LOGIN="prohibit-password" ;;
   esac
 
-  idx=$(menu_select "SSH 端口" "默认 22" "自定义")
+  menu_select "SSH 端口" "默认 22" "自定义"
+  idx=$MENU_SELECT_RESULT
   if [[ "$idx" = "1" ]]; then
     while true; do
-      SSH_PORT=$(prompt "SSH 端口 (1024-65535)" "${SSH_PORT:-22022}")
+      prompt "SSH 端口 (1024-65535)" "${SSH_PORT:-22022}"
+      SSH_PORT=$PROMPT_RESULT
       if [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( SSH_PORT >= 1024 && SSH_PORT <= 65535 )); then
         break
       fi
@@ -231,7 +247,8 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  sel=$(menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "redis" "acme.sh" "phpMyAdmin")
+  menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "redis" "acme.sh" "phpMyAdmin"
+  sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
   local -a names=(nginx php mysql redis acme phpmyadmin)
   for idx in $sel; do
@@ -261,11 +278,13 @@ _collect_image() {
   local _last=$(( ${#_options[@]} - 1 ))
   local _keep=$(( ${#_options[@]} - 2 ))
   local _idx _val
-  _idx=$(menu_select "${_title}（当前: ${_cur}）" "${_options[@]}")
+  menu_select "${_title}（当前: ${_cur}）" "${_options[@]}"
+  _idx=$MENU_SELECT_RESULT
   if [[ "$_idx" -eq "$_keep" ]]; then
     return 0
   elif [[ "$_idx" -eq "$_last" ]]; then
-    _val=$(prompt "镜像:TAG" "$_cur")
+    prompt "镜像:TAG" "$_cur"
+    _val=$PROMPT_RESULT
     [[ -n "$_val" ]] || _val="$_default"
     printf -v "$_varname" '%s' "$_val"
   else
@@ -305,19 +324,22 @@ collect_phpmyadmin_listen() {
   echo ""
   info "当前: ${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}"
   local _i
-  _i=$(menu_select "phpMyAdmin 监听地址（建议仅本机+SSH 隧道，避免直接暴露公网）" \
+  menu_select "phpMyAdmin 监听地址（建议仅本机+SSH 隧道，避免直接暴露公网）" \
     "127.0.0.1:8080（仅本机/SSH 隧道，推荐）" \
     "0.0.0.0:8080（公网可达；务必用防火墙限制源 IP）" \
     "保持当前不变" \
-    "自定义")
+    "自定义"
+  _i=$MENU_SELECT_RESULT
   case "$_i" in
     0) PHPMYADMIN_BIND="127.0.0.1"; PHPMYADMIN_PORT="8080" ;;
     1) PHPMYADMIN_BIND="0.0.0.0";   PHPMYADMIN_PORT="8080" ;;
     2) return 0 ;;
     3)
-      PHPMYADMIN_BIND=$(prompt "监听地址" "${PHPMYADMIN_BIND:-127.0.0.1}")
+      prompt "监听地址" "${PHPMYADMIN_BIND:-127.0.0.1}"
+      PHPMYADMIN_BIND=$PROMPT_RESULT
       while true; do
-        PHPMYADMIN_PORT=$(prompt "监听端口 (1-65535)" "${PHPMYADMIN_PORT:-8080}")
+        prompt "监听端口 (1-65535)" "${PHPMYADMIN_PORT:-8080}"
+        PHPMYADMIN_PORT=$PROMPT_RESULT
         if [[ "$PHPMYADMIN_PORT" =~ ^[0-9]+$ ]] && (( PHPMYADMIN_PORT > 0 && PHPMYADMIN_PORT < 65536 )); then break; fi
         warn "无效端口"
       done
@@ -350,7 +372,7 @@ interactive_setup() {
 
   while true; do
     local _i
-    _i=$(menu_select "请选择操作" \
+    menu_select "请选择操作" \
       "查看状态" \
       "全新安装（完整向导）" \
       "一键重装 LNMP（沿用上次配置，跳过所有问询）" \
@@ -358,7 +380,8 @@ interactive_setup() {
       "安装单个组件" \
       "账户管理（用户/组/密码/SSH 公钥/AllowUsers）" \
       "卸载单个组件" \
-      "退出")
+      "退出"
+    _i=$MENU_SELECT_RESULT
     case "$_i" in
       0) show_status ;;
       1) _interactive_full_install ;;
@@ -405,7 +428,7 @@ _interactive_full_install() {
   hr; info "完整安装向导"; hr; echo ""
 
   local sel
-  sel=$(menu_multi "选择要安装的模块（推荐最少：Docker + LNMP；按高频排序）" \
+  menu_multi "选择要安装的模块（推荐最少：Docker + LNMP；按高频排序）" \
     "等保加固 (cyber 三权用户)" \
     "Docker (LNMP 前置)" \
     "LNMP (nginx + php + mysql + redis + acme)" \
@@ -414,7 +437,8 @@ _interactive_full_install() {
     "BBR (TCP 拥塞)" \
     "Oh-My-Zsh" \
     "Wheel 管理员" \
-    "saferm 安全删除")
+    "saferm 安全删除"
+  sel=$MENU_MULTI_RESULT
 
   local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
@@ -437,8 +461,12 @@ _interactive_full_install() {
   if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
 
   # 1) 账号优先（LNMP 安装时 chown 需要 DEVOPS_USER 已确定）
-  DEVOPS_USER=$(prompt "devops 部署用户名" "${DEVOPS_USER:-devops}")
-  if [[ $sel_wheel -eq 1 ]]; then WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); fi
+  prompt "devops 部署用户名" "${DEVOPS_USER:-devops}"
+  DEVOPS_USER=$PROMPT_RESULT
+  if [[ $sel_wheel -eq 1 ]]; then
+    prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"
+    WHEEL_USER=$PROMPT_RESULT
+  fi
 
   # 2) 仅当真用得到 GitHub 时才问代理（zsh / lnmp 需要 acme.sh 等）
   if [[ $sel_zsh -eq 1 || $sel_lnmp -eq 1 || $sel_saferm -eq 1 ]]; then
@@ -515,7 +543,7 @@ _interactive_full_install() {
 
 _interactive_install_one() {
   local idx
-  idx=$(menu_select "选择要安装的组件（按高频排序）" \
+  menu_select "选择要安装的组件（按高频排序）" \
     "LNMP (全部，推荐)" \
     "LNMP - php" \
     "LNMP - mysql" \
@@ -531,11 +559,13 @@ _interactive_install_one() {
     "BBR" \
     "Oh-My-Zsh" \
     "saferm 安全删除" \
-    "等保加固")
+    "等保加固"
+  idx=$MENU_SELECT_RESULT
 
   case "$idx" in
     0)
-      DEVOPS_USER=$(prompt "devops 部署用户名（LNMP chown 需要）" "${DEVOPS_USER:-devops}")
+      prompt "devops 部署用户名（LNMP chown 需要）" "${DEVOPS_USER:-devops}"
+      DEVOPS_USER=$PROMPT_RESULT
       collect_lnmp_services
       collect_lnmp_stack_images
       if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
@@ -551,8 +581,8 @@ _interactive_install_one() {
     5)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
     6)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
     7)  collect_docker_mirrors; install_docker ;;
-    8)  DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
-    9)  WHEEL_USER=$(prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"); setup_wheel_user ;;
+    8)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+    9)  prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
     10) collect_ssh_config; install_ssh ;;
     11) install_firewall ;;
     12) install_bbr ;;
@@ -565,10 +595,11 @@ _interactive_install_one() {
 
 _interactive_uninstall_one() {
   local idx
-  idx=$(menu_select "选择要卸载的组件（高危操作前会二次确认）" \
+  menu_select "选择要卸载的组件（高危操作前会二次确认）" \
     "LNMP - php"   "LNMP - mysql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin" \
     "LNMP (全部)" "Docker" \
-    "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm")
+    "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
+  idx=$MENU_SELECT_RESULT
 
   # 高危项：标题→需要二次确认
   local _danger_msg=""
@@ -608,7 +639,7 @@ _interactive_uninstall_one() {
 
 _interactive_config() {
   local idx
-  idx=$(menu_select "选择要更新的配置（按高频排序）" \
+  menu_select "选择要更新的配置（按高频排序）" \
     "PHP 版本（额外，多版本共存）" \
     "PHP 扩展" \
     "PHP 版本（默认）" \
@@ -619,7 +650,8 @@ _interactive_config() {
     "SSH 配置" \
     "ACME 邮箱" \
     "ACME SSL 默认 (deploy-site)" \
-    "Devops 用户")
+    "Devops 用户"
+  idx=$MENU_SELECT_RESULT
 
   case "$idx" in
     0) collect_extra_php_versions
@@ -656,7 +688,7 @@ _interactive_config() {
        fi
        ;;
     9) collect_acme_ssl_dns_default ;;
-    10) DEVOPS_USER=$(prompt "devops 用户名" "${DEVOPS_USER:-devops}"); setup_devops_user ;;
+    10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
   esac
   conf_save
   ok "配置已更新"

@@ -116,14 +116,17 @@ account_allowusers_resync_from_conf() {
 account_user_add_interactive() {
   hr; info "新建用户"; echo ""
   local name shell exg pwd
-  name=$(prompt "登录名 (字母开头)")
+  prompt "登录名 (字母开头)"
+  name=$PROMPT_RESULT
   _account_valid_login "$name" || die "登录名格式无效"
   id "$name" &>/dev/null && die "用户已存在"
 
-  shell=$(prompt "Shell" "/bin/bash")
+  prompt "Shell" "/bin/bash"
+  shell=$PROMPT_RESULT
   [[ -x "$shell" ]] || warn "Shell 可能不存在: ${shell}"
 
-  exg=$(prompt "附加组，逗号分隔（如 devops,wheel，留空无）" "")
+  prompt "附加组，逗号分隔（如 devops,wheel，留空无）" ""
+  exg=$PROMPT_RESULT
   exg=$(echo -n "$exg" | tr -d ' ')
 
   prompt_secret_confirm_into "${name} 登录密码" pwd
@@ -156,7 +159,8 @@ account_user_add_interactive() {
 account_user_delete_interactive() {
   hr; info "删除用户"; echo ""
   local name rh
-  name=$(prompt "要删除的登录名")
+  prompt "要删除的登录名"
+  name=$PROMPT_RESULT
   id "$name" &>/dev/null || die "用户不存在"
   _account_refuse_system_user "$name"
 
@@ -180,7 +184,8 @@ account_user_delete_interactive() {
 account_user_passwd_interactive() {
   hr; info "修改密码"; echo ""
   local name pwd
-  name=$(prompt "登录名")
+  prompt "登录名"
+  name=$PROMPT_RESULT
   id "$name" &>/dev/null || die "用户不存在"
   _account_refuse_system_user "$name"
   prompt_secret_confirm_into "${name} 新密码" pwd
@@ -191,7 +196,8 @@ account_user_passwd_interactive() {
 account_group_add_interactive() {
   hr; info "新建用户组"; echo ""
   local g
-  g=$(prompt "组名")
+  prompt "组名"
+  g=$PROMPT_RESULT
   [[ "$g" =~ ^[a-zA-Z_][a-zA-Z0-9_-]{0,31}$ ]] || die "组名无效"
   getent group "$g" &>/dev/null && die "组已存在"
   groupadd "$g" || die "groupadd 失败"
@@ -201,7 +207,8 @@ account_group_add_interactive() {
 account_group_delete_interactive() {
   hr; info "删除用户组"; echo ""
   local g
-  g=$(prompt "组名")
+  prompt "组名"
+  g=$PROMPT_RESULT
   getent group "$g" &>/dev/null || die "组不存在"
   [[ "$g" = "root" || "$g" = "wheel" || "$g" = "devops" ]] && die "拒绝删除系统关键组"
   if ! confirm "确认删除组 ${g}？" "n"; then return 0; fi
@@ -212,8 +219,10 @@ account_group_delete_interactive() {
 account_user_addgroup_interactive() {
   hr; info "将用户加入组"; echo ""
   local u g
-  u=$(prompt "用户名")
-  g=$(prompt "组名")
+  prompt "用户名"
+  u=$PROMPT_RESULT
+  prompt "组名"
+  g=$PROMPT_RESULT
   id "$u" &>/dev/null || die "用户不存在"
   getent group "$g" &>/dev/null || die "组不存在"
   usermod -aG "$g" "$u" || die "usermod 失败"
@@ -223,8 +232,10 @@ account_user_addgroup_interactive() {
 account_user_delgroup_interactive() {
   hr; info "将用户移出组"; echo ""
   local u g
-  u=$(prompt "用户名")
-  g=$(prompt "组名")
+  prompt "用户名"
+  u=$PROMPT_RESULT
+  prompt "组名"
+  g=$PROMPT_RESULT
   id "$u" &>/dev/null || die "用户不存在"
   getent group "$g" &>/dev/null || die "组不存在"
   gpasswd -d "$u" "$g" &>/dev/null || { warn "gpasswd 失败（可能不是附加组成员）"; return 1; }
@@ -255,21 +266,24 @@ _user_ssh_append_pubkey_line() {
 account_sshkey_menu_interactive() {
   hr; info "SSH 公钥管理"; echo ""
   local name
-  name=$(prompt "目标用户名")
+  prompt "目标用户名"
+  name=$PROMPT_RESULT
   id "$name" &>/dev/null || die "用户不存在"
   local home ak
   home="$(_account_user_home "$name")"
   ak="${home}/.ssh/authorized_keys"
 
   local act
-  act=$(menu_select "操作" "查看 authorized_keys" "追加一行公钥" "用 root 的 authorized_keys 覆盖" "清空 authorized_keys" "返回")
+  menu_select "操作" "查看 authorized_keys" "追加一行公钥" "用 root 的 authorized_keys 覆盖" "清空 authorized_keys" "返回"
+  act=$MENU_SELECT_RESULT
   case "$act" in
     0)
       if [[ -s "$ak" ]]; then nl -ba "$ak"; else info "(空)"; fi
       ;;
     1)
       local pk fp
-      fp=$(prompt "或公钥文件路径（留空则手动粘贴）" "")
+      prompt "或公钥文件路径（留空则手动粘贴）" ""
+      fp=$PROMPT_RESULT
       if [[ -n "$fp" && -f "$fp" ]]; then
         while IFS= read -r pk || [[ -n "$pk" ]]; do
           [[ -z "$pk" || "$pk" =~ ^# ]] && continue
@@ -304,7 +318,7 @@ account_sshkey_menu_interactive() {
 _interactive_account_mgmt() {
   while true; do
     local _i
-    _i=$(menu_select "账户管理" \
+    menu_select "账户管理" \
       "用户列表" \
       "新建用户" \
       "修改密码" \
@@ -317,7 +331,8 @@ _interactive_account_mgmt() {
       "用户移出组" \
       "删除用户" \
       "删除用户组" \
-      "返回主菜单")
+      "返回主菜单"
+    _i=$MENU_SELECT_RESULT
     case "$_i" in
       0)  account_user_list_display ;;
       1)  account_user_add_interactive ;;

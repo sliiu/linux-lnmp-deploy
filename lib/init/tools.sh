@@ -12,23 +12,37 @@ prompt_secret_confirm_into() {
   done
 }
 
+# 禁止 $(menu_multi)；调用后读 MENU_MULTI_RESULT（空格分隔的下标）
 menu_multi() {
   local title="$1"; shift
   local -a items=("$@")
-  {
+  local input
+  if interactive_tty_ok; then
+    _ui_tty ""
+    _ui_tty "  ${title} (逗号分隔, 如 1,3,5 | all=全选 | 回车=默认全选)"
+    _ui_tty ""
+    local i
+    for i in "${!items[@]}"; do
+      _ui_tty "    $((i + 1))) ${items[$i]}"
+    done
+    _ui_tty ""
+    printf '  选择: ' >/dev/tty
+    read -r input </dev/tty 2>/dev/null || input=""
+    printf '\n' >/dev/tty
+  else
     echo ""
     info "$title (逗号分隔, 如 1,3,5 | all=全选 | 回车=默认全选)"
     echo ""
+    local i
     for i in "${!items[@]}"; do
-      printf "    %d) %s\n" $((i + 1)) "${items[$i]}"
+      info "    $((i + 1))) ${items[$i]}"
     done
     echo ""
-  } >/dev/tty
-  local input
-  read -rp "  选择: " input </dev/tty >/dev/tty
+    read -rp "  选择: " input || input=""
+  fi
   input=$(echo "$input" | tr -d ' ')
   if [[ -z "$input" || "$input" = "all" ]]; then
-    seq 0 $((${#items[@]} - 1)) | tr '\n' ' '
+    MENU_MULTI_RESULT=$(seq 0 $((${#items[@]} - 1)) | tr '\n' ' ')
   else
     local -a result=()
     IFS=',' read -ra parts <<< "$input"
@@ -36,7 +50,7 @@ menu_multi() {
       local idx=$((p - 1))
       if [[ $idx -ge 0 && $idx -lt ${#items[@]} ]]; then result+=("$idx"); fi
     done
-    echo "${result[*]}"
+    MENU_MULTI_RESULT="${result[*]}"
   fi
 }
 
