@@ -368,15 +368,35 @@ PY
 
 _webhook_download_url() {
   local url="$1" dest="$2" token="${3:-}"
-  local auth=()
-  [[ -n "$token" ]] && auth=(-H "Authorization: Bearer ${token}")
+  local errf err
+  errf="$(mktemp)"
   if command -v curl &>/dev/null; then
-    curl -fsSL "${auth[@]}" -o "$dest" "$url" || return 1
+    local -a args=(-fsSL --connect-timeout 30 --max-time 900 -A "lnmp-deploy-site")
+    [[ -n "$token" ]] && args+=(-H "Authorization: Bearer ${token}")
+    args+=(-o "$dest" "$url")
+    if curl "${args[@]}" 2>"$errf" && [[ -s "$dest" ]]; then
+      rm -f "$errf"
+      return 0
+    fi
   elif command -v wget &>/dev/null; then
-    [[ -n "$token" ]] && wget -q --header="Authorization: Bearer ${token}" -O "$dest" "$url" || wget -q -O "$dest" "$url" || return 1
+    local -a args=(-q -O "$dest" --timeout=900)
+    [[ -n "$token" ]] && args=(--header="Authorization: Bearer ${token}" "${args[@]}")
+    args+=("$url")
+    if wget "${args[@]}" 2>"$errf" && [[ -s "$dest" ]]; then
+      rm -f "$errf"
+      return 0
+    fi
   else
     die "缺少 curl/wget"
   fi
+  err="$(tr '\n' ' ' < "$errf" 2>/dev/null | sed 's/  */ /g; s/^ //; s/ $//')"
+  rm -f "$errf"
+  warn "HTTP 下载失败${err:+: ${err}}"
+  if [[ -z "$token" && "$url" == *github.com/* ]]; then
+    warn "若为私有仓库 release，请在站点 webhook 配置 github_token（add/update 时 --webhook-github-token）"
+  fi
+  rm -f "$dest" 2>/dev/null || true
+  return 1
 }
 
 _webhook_extract_archive() {
@@ -476,7 +496,10 @@ _webhook_deploy_release() {
   _webhook_backup_site "$domain" "$ver" "release" >/dev/null
 
   [[ -n "$download_url" ]] || download_url="$(_webhook_pick_release_asset_url "$body_file" "$asset_hint")"
-  [[ -n "$download_url" ]] || die "未找到 release 下载地址"
+  if [[ -z "$download_url" ]]; then
+    warn "未找到 release 下载地址"
+    return 1
+  fi
 
   tmp="$(mktemp -d)"
   arch="${tmp}/pkg"
@@ -485,7 +508,10 @@ _webhook_deploy_release() {
     *) arch="${arch}.tar.gz" ;;
   esac
   info "下载 release: ${download_url}"
-  _webhook_download_url "$download_url" "$arch" "$token" || die "下载失败"
+  if ! _webhook_download_url "$download_url" "$arch" "$token"; then
+    rm -rf "$tmp"
+    return 1
+  fi
 
   mkdir -p "$site_dir"
   _webhook_extract_archive "$arch" "${tmp}/extract"
@@ -566,7 +592,7 @@ _webhook_process_payload() {
   [[ -n "$norm" ]] || { warn "无法解析仓库"; return 1; }
   provider="${norm%%:*}"
 
-  local rel_name rel_tag tag_name matched=0 domain mode wf secret ok_verify=0 site_count=0
+  local rel_name rel_tag tag_name matched=0 domain mode wf secret ok_verify=0 site_count=0 deploy_failed=0
   rel_tag="$(_webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"')"
   rel_name="$(_webhook_json_release_name "$body_file")"
   if [[ -n "$parsed" ]]; then
@@ -620,7 +646,7 @@ _webhook_process_payload() {
       if _webhook_deploy_release "$domain" "$body_file" "$rel_name" "$rel_tag" ""; then
         matched=1
       else
-        warn "站点 ${domain} release 部署未执行（见上方原因）"
+        deploy_failed=1
       fi
     elif [[ "$mode" = "tag" ]]; then
       local tag="${ref#refs/tags/}"
@@ -629,7 +655,7 @@ _webhook_process_payload() {
       if _webhook_deploy_tag "$domain" "$tag"; then
         matched=1
       else
-        warn "站点 ${domain} tag 部署未执行（见上方原因）"
+        deploy_failed=1
       fi
     fi
   done < <(_webhook_sites_for_repo "$norm")
@@ -637,6 +663,10 @@ _webhook_process_payload() {
   if [[ "$matched" -eq 1 ]]; then
     info "webhook 处理完成: 已触发部署"
     return 0
+  fi
+  if [[ "$deploy_failed" -eq 1 ]]; then
+    info "webhook 处理完成: 部署失败（见上方错误）"
+    return 1
   fi
   if [[ "$site_count" -eq 0 ]]; then
     info "webhook 处理完成: 无已启用 webhook 站点匹配仓库 ${norm}（slug=$(_webhook_repo_slug "$norm")）"
