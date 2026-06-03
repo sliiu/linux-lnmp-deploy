@@ -469,7 +469,8 @@ prompt_pick_domain() {
     return 0
   fi
   local _items=("${doms[@]}" "手动输入...")
-  local _i; _i=$(menu_select "${1:-选择站点}" "${_items[@]}")
+  local _i; menu_select "${1:-选择站点}" "${_items[@]}"
+  _i=$MENU_SELECT_RESULT
   if [[ "$_i" -lt ${#doms[@]} ]]; then
     DOMAIN="${doms[$_i]}"
   else
@@ -492,7 +493,8 @@ _collect_site_php_version_interactive() {
   # 仅 1 项即只有默认容器，无需打扰
   if [[ ${#vers[@]} -le 1 ]]; then return 0; fi
   vers+=("自定义...")
-  local _i; _i=$(menu_select "选择 PHP 版本" "${vers[@]}")
+  local _i; menu_select "选择 PHP 版本" "${vers[@]}"
+  _i=$MENU_SELECT_RESULT
   if [[ "$_i" -eq 0 ]]; then
     SITE_PHP_VERSION=""; SITE_PHP_VERSION_CLI=1
   elif [[ "$_i" -eq $((${#vers[@]} - 1)) ]]; then
@@ -508,14 +510,15 @@ _collect_site_php_version_interactive() {
 # SSL 校验方式菜单
 _collect_ssl_dns_interactive() {
   [[ -n "$SSL_DNS" ]] && return 0
-  local _i; _i=$(menu_select "SSL 证书校验方式（默认 webroot；DNS 模式可签泛域名）" \
+  local _i; menu_select "SSL 证书校验方式（默认 webroot；DNS 模式可签泛域名）" \
     "webroot   (HTTP-01；最常见，需域名解析到本机)" \
     "dns_cf    (Cloudflare API Token)" \
     "dns_ali   (阿里云 DNS Ali_Key/Secret)" \
     "dns_dp    (DNSPod DP_Id/DP_Key)" \
     "dns_gd    (GoDaddy)" \
     "dns_aws   (Route53)" \
-    "dns_tencent (腾讯云 DNSPod API)")
+    "dns_tencent (腾讯云 DNSPod API)"
+  _i=$MENU_SELECT_RESULT
   case "$_i" in
     0) SSL_DNS="webroot" ;;
     1) SSL_DNS="dns_cf" ;;
@@ -550,12 +553,13 @@ _collect_db_actions_interactive() {
     RUN_SEED="${RUN_SEED:-y}"
     return 0
   fi
-  local _i; _i=$(menu_select "数据库自动化（建库 / migrate / seed）" \
+  local _i; menu_select "数据库自动化（建库 / migrate / seed）" \
     "建库 + migrate + seed（全自动，推荐）" \
     "建库 + migrate（不跑 seed）" \
     "仅建库（不 migrate、不 seed）" \
     "什么都不做（仅写 .env，留待手动）" \
-    "自定义（逐项询问）")
+    "自定义（逐项询问）"
+  _i=$MENU_SELECT_RESULT
   case "$_i" in
     0) CREATE_DB=y; RUN_MIGRATE=y; RUN_SEED=y ;;
     1) CREATE_DB=y; RUN_MIGRATE=y; RUN_SEED=n ;;
@@ -585,11 +589,12 @@ _collect_queue_supervisor_interactive() {
   if [[ -n "$_phpv" ]] && ! _lv_ge "$_phpv" "7.2"; then
     _hint="（注：当前 PHP ${_phpv} < 7.2，Horizon 不可用，将自动禁用）"
   fi
-  local _i; _i=$(menu_select "队列后台 / 定时任务${_hint}" \
+  local _i; menu_select "队列后台 / 定时任务${_hint}" \
     "cron + Horizon（推荐：调度 + Redis 队列守护）" \
     "仅 cron（无队列守护，sync/database 队列）" \
     "仅 Horizon（无 schedule:run）" \
-    "都不要")
+    "都不要"
+  _i=$MENU_SELECT_RESULT
   case "$_i" in
     0) ADD_CRONTAB=y; NEED_HORIZON=y ;;
     1) ADD_CRONTAB=y; NEED_HORIZON=n ;;
@@ -602,9 +607,10 @@ _collect_queue_supervisor_interactive() {
 _collect_frontend_source_interactive() {
   [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]] && return 0
   local _i
-  _i=$(menu_select "前端部署方式" \
+  menu_select "前端部署方式" \
     "Webhook Release（监听 Release 下载，不 clone 仓库）" \
-    "Git 仓库（clone 后使用 dist 等构建目录）")
+    "Git 仓库（clone 后使用 dist 等构建目录）"
+  _i=$MENU_SELECT_RESULT
   if [[ "$_i" -eq 0 ]]; then
     WEBHOOK_ENABLE=1
     WEBHOOK_MODE=release
@@ -622,7 +628,8 @@ collect_interactive() {
   if [[ "${SITE_TYPE_CLI:-0}" -ne 1 ]]; then
     SITE_TYPE=""
     local _st_i
-    _st_i=$(menu_select "站点类型" "laravel (PHP 后端)" "frontend (静态/SPA)")
+    menu_select "站点类型" "laravel (PHP 后端)" "frontend (静态/SPA)"
+    _st_i=$MENU_SELECT_RESULT
     [[ "$_st_i" -eq 1 ]] && SITE_TYPE="frontend" || SITE_TYPE="laravel"
   fi
   SITE_TYPE=${SITE_TYPE:-laravel}

@@ -2,20 +2,11 @@
 # init.sh / deploy-site.sh 共用工具函数
 # 此文件由两个入口脚本通过 source 引入，脚本独立运行时请使用 bootstrap.sh
 
-if [[ "${DEPLOY_LOG_VIA_FUNCTIONS:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
-  # 走 stderr：终端可见，且不被 $(menu_select) 等命令替换捕获
-  die()  { printf '✗ %s\n' "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
-  info() { printf '  %s\n' "$*" | tee -a "$LOG_FILE" >&2; }
-  ok()   { printf '  ✓ %s\n' "$*" | tee -a "$LOG_FILE" >&2; }
-  warn() { printf '  ! %s\n' "$*" | tee -a "$LOG_FILE" >&2; }
-  hr()   { printf '%s\n' "══════════════════════════════════════════════" | tee -a "$LOG_FILE" >&2; }
-else
-  die()  { echo "✗ $*" >&2; exit 1; }
-  info() { echo "  $*"; }
-  ok()   { echo "  ✓ $*"; }
-  warn() { echo "  ! $*"; }
-  hr()   { echo "══════════════════════════════════════════════"; }
-fi
+die()  { echo "✗ $*" >&2; exit 1; }
+info() { echo "  $*"; }
+ok()   { echo "  ✓ $*"; }
+warn() { echo "  ! $*"; }
+hr()   { echo "══════════════════════════════════════════════"; }
 
 interactive_tty_ok() {
   [[ -e /dev/tty ]] && { : >/dev/tty; } 2>/dev/null
@@ -49,22 +40,23 @@ prompt() {
     fi
   fi
   PROMPT_RESULT="${var:-$default}"
-  printf '%s' "$PROMPT_RESULT"
+  echo "$PROMPT_RESULT"
 }
 
+# 禁止用 $(menu_select)：stdout 会被命令替换捕获导致菜单不可见。调用后读 MENU_SELECT_RESULT。
 menu_select() {
   local title="$1"; shift
   local -a items=("$@")
-  echo "" >&2
+  echo ""
   info "$title"
-  echo "" >&2
+  echo ""
   local i
   for i in "${!items[@]}"; do
     info "    $((i + 1))) ${items[$i]}"
   done
-  echo "" >&2
+  echo ""
   info "回车或无效输入 = 第 1 项（推荐默认）"
-  echo "" >&2
+  echo ""
   local choice raw
   if interactive_tty_ok; then
     read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw </dev/tty 2>/dev/null || raw=""
@@ -78,7 +70,6 @@ menu_select() {
   fi
   [[ $choice -ge 0 && $choice -lt ${#items[@]} ]] || choice=0
   MENU_SELECT_RESULT=$choice
-  printf '%s' "$choice"
 }
 
 # 主.次版本号比较：_lv_ge "5.7" "5.6" → 0

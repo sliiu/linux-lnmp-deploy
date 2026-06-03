@@ -45,7 +45,8 @@ _webhook_configure_site() {
     if [[ "$st" = "frontend" ]]; then
       WEBHOOK_MODE="release"
     else
-      local _i; _i=$(menu_select "Webhook 模式" "tag（监听 Git tag 推送）" "release（监听 Release 发版）")
+      local _i; menu_select "Webhook 模式" "tag（监听 Git tag 推送）" "release（监听 Release 发版）"
+      _i=$MENU_SELECT_RESULT
       [[ "$_i" -eq 1 ]] && WEBHOOK_MODE="release" || WEBHOOK_MODE="tag"
     fi
   fi
@@ -159,12 +160,13 @@ cmd_webhook() {
         info "Webhook 管理"
         hr
         local _i
-        _i=$(menu_select "请选择" \
+        menu_select "请选择" \
           "为站点启用 webhook" \
           "禁用站点 webhook" \
           "安装/更新监听服务 (systemd)" \
           "查看已启用 webhook 的站点" \
-          "返回")
+          "返回"
+        _i=$MENU_SELECT_RESULT
         echo ""
         case "$_i" in
           0) DOMAIN=""; cmd_webhook_enable ;;
@@ -223,8 +225,7 @@ cmd_webhook_list() {
 cmd_webhook_setup() {
   local script_path old_mode old_domain new_proxy cli_reconfig=0
   info "配置 Webhook 监听服务..."
-  script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy-site.sh"
-  [[ -x "$script_path" ]] || script_path="${SCRIPT_DIR}/deploy-site.sh"
+  script_path="${SCRIPT_DIR}/deploy-site.sh"
 
   cli_reconfig=${WEBHOOK_SETUP_CLI:-0}
 

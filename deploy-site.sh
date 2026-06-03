@@ -15,10 +15,8 @@ LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/deploy-site.log"
-export LOG_FILE
-export DEPLOY_LOG_VIA_FUNCTIONS=1
-
-# 与 docker-compose 中 lnmp-nginx user 101:101 一致
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo "===== $(date '+%Y-%m-%d %H:%M:%S') START $0 $* pid=$$ ====="
 readonly NGINX_C_UID=101
 readonly NGINX_C_GID=101
 # PHP-FPM 容器内 uid（与 init.sh docker-compose 中 php 镜像默认 www-data 82 一致）
@@ -69,9 +67,6 @@ _source_lib lib/deploy/cmd-list.sh
 _source_lib lib/deploy/cmd-ssl.sh
 _source_lib lib/deploy/cmd-webhook.sh
 
-printf '===== %s START %s %s pid=%s =====\n' \
-  "$(date '+%Y-%m-%d %H:%M:%S')" "$0" "$*" "$$" | tee -a "$LOG_FILE"
-
 # ═══════════════════════════════════════════════
 #  主入口
 # ═══════════════════════════════════════════════
@@ -95,7 +90,7 @@ main() {
         printf "  多站点部署管理 v%s\n" "${VERSION}"
         hr
         local _idx
-        _idx=$(menu_select "请选择操作" \
+        menu_select "请选择操作" \
           "查看站点列表（推荐先看一眼）" \
           "部署新站点" \
           "更新站点" \
@@ -104,7 +99,8 @@ main() {
           "站点运行状态（含证书 / FPM / nginx 日志）" \
           "SSL 证书签发/续期" \
           "移除站点" \
-          "退出")
+          "退出"
+        _idx=$MENU_SELECT_RESULT
         echo ""
         case "$_idx" in
           0) cmd_list ;;

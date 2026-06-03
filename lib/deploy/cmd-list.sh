@@ -79,7 +79,8 @@ cmd_status() {
       STATUS_ALL=1
     else
       local _items=("全部站点（简略概览）" "${_doms[@]}")
-      local _i; _i=$(menu_select "选择要查看状态的站点" "${_items[@]}")
+      local _i; menu_select "选择要查看状态的站点" "${_items[@]}"
+      _i=$MENU_SELECT_RESULT
       if [[ "$_i" -eq 0 ]]; then
         STATUS_ALL=1; DOMAIN=""
       else
