@@ -141,7 +141,8 @@ _collect_webhook_setup_interactive() {
 }
 
 cmd_webhook() {
-  local sub="${1:-}"; shift || true
+  local sub="${1:-}"
+  (( $# > 0 )) && shift
   case "$sub" in
     enable)  parse_args "$@"; cmd_webhook_enable ;;
     disable) parse_args "$@"; cmd_webhook_disable ;;
@@ -218,6 +219,7 @@ cmd_webhook_list() {
 
 cmd_webhook_setup() {
   local script_path old_mode old_domain new_proxy cli_reconfig=0
+  info "配置 Webhook 监听服务..."
   script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/deploy-site.sh"
   [[ -x "$script_path" ]] || script_path="${SCRIPT_DIR}/deploy-site.sh"
 
@@ -235,8 +237,6 @@ cmd_webhook_setup() {
   _webhook_load_listener_env
   old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
   old_domain="${WEBHOOK_PROXY_DOMAIN:-}"
-
-  info "配置 Webhook 监听服务..."
 
   _collect_webhook_setup_interactive "$cli_reconfig"
 
