@@ -115,11 +115,11 @@ _webhook_load_listener_env() {
     # shellcheck disable=SC1090
     source "$WEBHOOK_LISTENER_ENV"
   fi
-  [[ -n "$_pm" ]] && WEBHOOK_PUBLIC_MODE="$_pm"
-  [[ -n "$_bind" ]] && WEBHOOK_BIND="$_bind"
-  [[ -n "$_port" ]] && WEBHOOK_PORT="$_port"
-  [[ -n "$_path" ]] && WEBHOOK_PATH="$_path"
-  [[ -n "$_proxy" ]] && WEBHOOK_PROXY_DOMAIN="$_proxy"
+  [[ -n "$_pm" ]]    && WEBHOOK_PUBLIC_MODE="$_pm"
+  [[ -n "$_bind" ]]  && WEBHOOK_BIND="$_bind"
+  [[ -n "$_port" ]]  && WEBHOOK_PORT="$_port"
+  [[ -n "$_path" ]]  && WEBHOOK_PATH="$_path"
+  if [[ -n "$_proxy" ]]; then WEBHOOK_PROXY_DOMAIN="$_proxy"; fi
 }
 
 _webhook_acquire_lock() {

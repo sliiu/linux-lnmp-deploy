@@ -3,12 +3,12 @@
 # 此文件由两个入口脚本通过 source 引入，脚本独立运行时请使用 bootstrap.sh
 
 if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
-  # deploy-site：不重定向 stdout/stderr（避免 tee 子进程 SIGPIPE + 交互异常），输出函数写日志
-  die()  { printf '✗ %s\n' "$*" | tee -a "$LOG_FILE" >&2; exit 1; }
-  info() { printf '  %s\n' "$*" | tee -a "$LOG_FILE"; }
-  ok()   { printf '  ✓ %s\n' "$*" | tee -a "$LOG_FILE"; }
-  warn() { printf '  ! %s\n' "$*" | tee -a "$LOG_FILE"; }
-  hr()   { printf '%s\n' "══════════════════════════════════════════════" | tee -a "$LOG_FILE"; }
+  _deploy_log() { printf '%s\n' "$1" >> "$LOG_FILE"; printf '%s\n' "$1"; }
+  die()  { printf '✗ %s\n' "$*" >> "$LOG_FILE"; printf '✗ %s\n' "$*" >&2; exit 1; }
+  info() { _deploy_log "  $*"; }
+  ok()   { _deploy_log "  ✓ $*"; }
+  warn() { _deploy_log "  ! $*"; }
+  hr()   { _deploy_log "══════════════════════════════════════════════"; }
 else
   die()  { echo "✗ $*" >&2; exit 1; }
   info() { echo "  $*"; }
