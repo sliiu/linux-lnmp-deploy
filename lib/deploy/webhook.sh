@@ -550,7 +550,7 @@ _webhook_process_payload() {
   [[ -n "$norm" ]] || { warn "无法解析仓库"; return 1; }
   provider="${norm%%:*}"
 
-  local rel_name rel_tag dl_url tag_name matched=0 domain mode wf secret ok_verify=0 site_count=0
+  local rel_name rel_tag tag_name matched=0 domain mode wf secret ok_verify=0 site_count=0
   rel_tag="$(_webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"')"
   rel_name="$(_webhook_json_release_name "$body_file")"
   if [[ -n "$parsed" ]]; then
@@ -600,7 +600,7 @@ _webhook_process_payload() {
         warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 name=${rel_name:-} tag=${rel_tag:-}）"
         continue
       fi
-      _webhook_deploy_release "$domain" "$body_file" "$rel_name" "$rel_tag" "$dl_url"
+      _webhook_deploy_release "$domain" "$body_file" "$rel_name" "$rel_tag" ""
       matched=1
     elif [[ "$mode" = "tag" ]]; then
       local tag="${ref#refs/tags/}"
