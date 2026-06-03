@@ -36,23 +36,23 @@ _webhook_collect_site_release_opts() {
   repo_lc="$(printf '%s' "${GIT_REPO:-}" | tr '[:upper:]' '[:lower:]')"
 
   if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
-    t=$(prompt "Release 附件名关键字（留空=自动选第一个 asset）" "${old_asset:-}")
-    [[ -n "$t" ]] && WEBHOOK_ASSET_NAME="$t"
+    prompt "Release 附件名关键字（留空=自动选第一个 asset）" "${old_asset:-}"
+    [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_ASSET_NAME="$PROMPT_RESULT"
     [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]] && WEBHOOK_ASSET_NAME="$old_asset"
   fi
 
   if [[ "$repo_lc" == *github.com* || "$repo_lc" == git@github.com:* ]]; then
     if [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]]; then
       [[ -n "$old_gh" ]] && info "已有 GitHub Token（${old_gh:0:8}...），留空保留"
-      t=$(prompt "GitHub Token（私有仓 release 下载，留空保留/跳过）" "")
-      [[ -n "$t" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$t"
+      prompt "GitHub Token（私有仓 release 下载，留空保留/跳过）" ""
+      [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$PROMPT_RESULT"
       [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" && -n "$old_gh" ]] && WEBHOOK_SITE_GITHUB_TOKEN="$old_gh"
     fi
   elif [[ "$repo_lc" == *gitee.com* ]]; then
     if [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]]; then
       [[ -n "$old_ge" ]] && info "已有 Gitee Token（${old_ge:0:8}...），留空保留"
-      t=$(prompt "Gitee Token（私有仓 release 下载，留空保留/跳过）" "")
-      [[ -n "$t" ]] && WEBHOOK_SITE_GITEE_TOKEN="$t"
+      prompt "Gitee Token（私有仓 release 下载，留空保留/跳过）" ""
+      [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_SITE_GITEE_TOKEN="$PROMPT_RESULT"
       [[ -z "${WEBHOOK_SITE_GITEE_TOKEN:-}" && -n "$old_ge" ]] && WEBHOOK_SITE_GITEE_TOKEN="$old_ge"
     fi
   fi
@@ -74,6 +74,9 @@ _webhook_configure_site() {
     info "检测到已有 Webhook 配置，将更新（未指定 --webhook-secret 时保留原 Secret）"
   fi
 
+  echo ""
+  hr; info "配置 Webhook: ${DOMAIN}"; hr; echo ""
+
   if [[ -z "$WEBHOOK_MODE" ]]; then
     if [[ "$st" = "frontend" ]]; then
       WEBHOOK_MODE="release"
@@ -94,16 +97,18 @@ _webhook_configure_site() {
     elif [[ -f "$wf_old" ]]; then
       GIT_REPO="$(_webhook_read_kv "$wf_old" git_repo)"
     else
-      GIT_REPO=$(prompt "Git 仓库地址（release 仅匹配用；tag 模式需可 pull）")
+      prompt "Git 仓库地址（release 仅匹配用；tag 模式需可 pull）"
+      GIT_REPO=$PROMPT_RESULT
     fi
   }
   [[ -n "$GIT_REPO" ]] || die "Git 仓库地址不能为空"
 
   if [[ "$WEBHOOK_MODE" = "release" && -z "$WEBHOOK_RELEASE_NAME" ]]; then
-    WEBHOOK_RELEASE_NAME=$(prompt "Release 名称（与 Release name 或 tag 匹配）" "${old_rel:-}")
+    prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt/v0.1.0）" "${old_rel:-}"
+    WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
   fi
   [[ "$WEBHOOK_MODE" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
-    || die "release 模式需 --webhook-release-name="
+    || die "Release 名称不能为空"
 
   [[ "$WEBHOOK_MODE" = "release" ]] && _webhook_collect_site_release_opts "$wf_old"
 
@@ -213,7 +218,7 @@ cmd_webhook() {
         _i=$MENU_SELECT_RESULT
         echo ""
         case "$_i" in
-          0) DOMAIN=""; cmd_webhook_enable ;;
+          0) _webhook_reset_configure_state; DOMAIN=""; cmd_webhook_enable ;;
           1) DOMAIN=""; cmd_webhook_disable ;;
           2) cmd_webhook_setup ;;
           3) cmd_webhook_list ;;
@@ -227,7 +232,18 @@ cmd_webhook() {
   esac
 }
 
+_webhook_reset_configure_state() {
+  WEBHOOK_MODE=""
+  WEBHOOK_RELEASE_NAME=""
+  WEBHOOK_SECRET=""
+  WEBHOOK_SITE_GITHUB_TOKEN=""
+  WEBHOOK_SITE_GITEE_TOKEN=""
+  WEBHOOK_ASSET_NAME=""
+  GIT_REPO=""
+}
+
 cmd_webhook_enable() {
+  _webhook_reset_configure_state
   prompt_pick_domain "选择站点"
   [[ -z "$DOMAIN" ]] && die "域名不能为空"
   _webhook_configure_site
@@ -367,7 +383,8 @@ cmd_rollback() {
   elif [[ "$ROLLBACK_INDEX" -gt 0 ]]; then
     entry="$(_webhook_history_entry "$DOMAIN" "$ROLLBACK_INDEX")" || die "无效序号"
   elif [[ "${YES:-0}" -ne 1 ]]; then
-    idx=$(prompt "回退到序号（见上表）" "1")
+    prompt "回退到序号（见上表）" "1"
+    idx=$PROMPT_RESULT
     entry="$(_webhook_history_entry "$DOMAIN" "$idx")" || die "无效序号"
   else
     entry="$(_webhook_history_entry "$DOMAIN" "1")" || die "无历史记录"

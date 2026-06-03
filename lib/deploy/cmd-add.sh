@@ -653,7 +653,10 @@ collect_interactive() {
   if [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
     [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）")
     [[ -n "$GIT_REPO" ]] || die "Webhook Release 需填写仓库地址（用于匹配推送来源）"
-    [[ -z "$WEBHOOK_RELEASE_NAME" ]] && WEBHOOK_RELEASE_NAME=$(prompt "Release 名称（与 Release name 或 tag 匹配）")
+    [[ -z "$WEBHOOK_RELEASE_NAME" ]] && {
+      prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt/v0.1.0）"
+      WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
+    }
     [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
     _webhook_collect_site_release_opts ""
     GIT_BRANCH=""

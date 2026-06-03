@@ -52,6 +52,8 @@ prompt() {
   echo "$PROMPT_RESULT"
 }
 
+# 禁止 $(prompt)；调用后读 PROMPT_RESULT
+
 # 禁止 $(menu_select)；调用后读 MENU_SELECT_RESULT
 menu_select() {
   local title="$1"; shift
