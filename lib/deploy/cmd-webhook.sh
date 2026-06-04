@@ -25,14 +25,16 @@ _webhook_save_on_add() {
   info "  执行 webhook setup 安装 systemd 监听服务"
 }
 
-# release 模式：交互收集 token / asset（更新时留空保留原值）
+# release 模式：交互收集 token / asset / 增量开关（更新时留空保留原值）
 _webhook_collect_site_release_opts() {
-  local wf_old="${1:-}" old_gh="" old_ge="" old_asset="" repo_lc t
+  local wf_old="${1:-}" old_gh="" old_ge="" old_asset="" old_inc="0" repo_lc t _mi
   [[ -f "$wf_old" ]] && {
     old_gh="$(_webhook_read_kv "$wf_old" github_token)" || true
     old_ge="$(_webhook_read_kv "$wf_old" gitee_token)" || true
     old_asset="$(_webhook_read_kv "$wf_old" asset_name)" || true
+    old_inc="$(_webhook_read_kv "$wf_old" incremental)" || old_inc="0"
   }
+  old_inc="$(_webhook_normalize_incremental "$old_inc")"
   repo_lc="$(printf '%s' "${GIT_REPO:-}" | tr '[:upper:]' '[:lower:]')"
 
   if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
@@ -61,6 +63,26 @@ _webhook_collect_site_release_opts() {
         WEBHOOK_SITE_GITEE_TOKEN="$old_ge"
       fi
     fi
+  fi
+
+  if [[ -z "${WEBHOOK_INCREMENTAL:-}" ]]; then
+    if [[ "$old_inc" = "1" ]]; then
+      menu_select "Release 部署方式" \
+        "增量覆盖（下载后保留旧文件，仅覆盖同名）" \
+        "全量替换（下载后清空站点再写入）"
+    else
+      menu_select "Release 部署方式" \
+        "全量替换（下载后清空站点再写入）" \
+        "增量覆盖（下载后保留旧文件，仅覆盖同名）"
+    fi
+    _mi=$MENU_SELECT_RESULT
+    if [[ "$old_inc" = "1" ]]; then
+      [[ "$_mi" -eq 0 ]] && WEBHOOK_INCREMENTAL=1 || WEBHOOK_INCREMENTAL=0
+    else
+      [[ "$_mi" -eq 0 ]] && WEBHOOK_INCREMENTAL=0 || WEBHOOK_INCREMENTAL=1
+    fi
+  else
+    WEBHOOK_INCREMENTAL="$(_webhook_normalize_incremental "$WEBHOOK_INCREMENTAL")"
   fi
   return 0
 }
@@ -146,6 +168,14 @@ _webhook_configure_site() {
   [[ -n "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]] && info "GitHub Token: ${WEBHOOK_SITE_GITHUB_TOKEN:0:8}...（已写入站点配置）"
   [[ -n "${WEBHOOK_SITE_GITEE_TOKEN:-}" ]] && info "Gitee Token: ${WEBHOOK_SITE_GITEE_TOKEN:0:8}...（已写入站点配置）"
   [[ -n "${WEBHOOK_ASSET_NAME:-}" ]] && info "Release 附件: ${WEBHOOK_ASSET_NAME}"
+  if [[ "$WEBHOOK_MODE" = "release" ]]; then
+    local _inc; _inc="$(_webhook_read_kv "$(site_webhook_file "$DOMAIN")" incremental)" || _inc="0"
+    if [[ "$(_webhook_normalize_incremental "$_inc")" = "1" ]]; then
+      info "部署方式: 增量覆盖"
+    else
+      info "部署方式: 全量替换（下载后清空站点）"
+    fi
+  fi
   info "回调 URL: $(_webhook_public_callback_url)"
   info "请执行: $0 webhook setup（若尚未安装监听）"
 }
@@ -255,6 +285,7 @@ _webhook_reset_configure_state() {
   WEBHOOK_SITE_GITHUB_TOKEN=""
   WEBHOOK_SITE_GITEE_TOKEN=""
   WEBHOOK_ASSET_NAME=""
+  WEBHOOK_INCREMENTAL=""
   GIT_REPO=""
 }
 
@@ -286,11 +317,14 @@ cmd_webhook_list() {
     secret="$(_webhook_read_kv "$conf" secret)"
     gh_t="$(_webhook_read_kv "$conf" github_token)" || true
     asset="$(_webhook_read_kv "$conf" asset_name)" || true
+    local inc="$(_webhook_read_kv "$conf" incremental)" || inc="0"
+    inc="$(_webhook_normalize_incremental "$inc")"
     printf "  %-28s mode:%-8s release:%-16s\n" "$domain" "$mode" "${rel:--}"
     printf "    repo: %s\n" "$repo"
     printf "    secret: %s...\n" "${secret:0:8}"
     [[ -n "$gh_t" ]] && printf "    github_token: %s...\n" "${gh_t:0:8}"
     [[ -n "$asset" ]] && printf "    asset_name: %s\n" "$asset"
+    [[ "$mode" = "release" ]] && printf "    incremental: %s\n" "$([[ "$inc" = 1 ]] && echo yes || echo no)"
   done
   [[ "$found" -eq 0 ]] && info "暂无"
   _webhook_load_listener_env

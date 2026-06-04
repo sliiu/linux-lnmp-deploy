@@ -84,18 +84,52 @@ _webhook_read_kv() {
   return 1
 }
 
+# 1=增量覆盖；0=全量（下载完成后清空站点再写入）
+_webhook_normalize_incremental() {
+  case "${1,,}" in
+    1|y|yes|true|on) printf '1' ;;
+    *) printf '0' ;;
+  esac
+}
+
+_webhook_site_incremental() {
+  local wf="$1" v=""
+  [[ -n "$wf" && -f "$wf" ]] && v="$(_webhook_read_kv "$wf" incremental)" || true
+  _webhook_normalize_incremental "${v:-0}"
+}
+
+# 全量部署前清空站点（保留 .well-known 供 ACME）
+_webhook_clear_site_dir() {
+  local site_dir="$1" name base
+  [[ -d "$site_dir" ]] || return 0
+  shopt -s dotglob nullglob
+  for name in "$site_dir"/*; do
+    [[ -e "$name" ]] || continue
+    base="$(basename "$name")"
+    [[ "$base" = ".well-known" ]] && continue
+    rm -rf "$name"
+  done
+  shopt -u dotglob nullglob
+}
+
 _webhook_write_site_config() {
   local domain="$1" mode="$2" git_repo="$3" release_name="${4:-}" secret="${5:-}"
-  local f; f="$(site_webhook_file "$domain")"
+  local f inc; f="$(site_webhook_file "$domain")"
   mkdir -p "$NGINX_CONF"
   [[ -n "$secret" ]] || secret="$(_webhook_gen_secret)"
   if [[ "$mode" = "release" ]]; then
+    inc="${WEBHOOK_INCREMENTAL:-}"
+    if [[ -z "$inc" && -f "$f" ]]; then
+      inc="$(_webhook_read_kv "$f" incremental)" || true
+    fi
+    inc="$(_webhook_normalize_incremental "${inc:-0}")"
     cat > "$f" <<EOF
 enabled=1
 mode=release
 git_repo=${git_repo}
 release_name=${release_name}
 secret=${secret}
+incremental=${inc}
 EOF
   else
     cat > "$f" <<EOF
@@ -673,10 +707,20 @@ _webhook_deploy_release() {
   esac
   _webhook_download_try_urls "$arch" "$token" 60 "${dl_urls[@]}" || die "下载失败"
 
-  mkdir -p "$site_dir"
+  local incremental
+  incremental="$(_webhook_site_incremental "$wf")"
   _webhook_extract_archive "$arch" "${tmp}/extract"
-  rsync -a --delete "${tmp}/extract/" "$site_dir/" 2>/dev/null \
-    || cp -a "${tmp}/extract/." "$site_dir/"
+  mkdir -p "$site_dir"
+  if [[ "$incremental" = "1" ]]; then
+    info "增量部署：覆盖同名文件，保留站点内其余文件"
+    rsync -a "${tmp}/extract/" "$site_dir/" 2>/dev/null \
+      || cp -a "${tmp}/extract/." "$site_dir/"
+  else
+    info "全量部署：下载完成，清空站点目录后替换"
+    _webhook_clear_site_dir "$site_dir"
+    rsync -a "${tmp}/extract/" "$site_dir/" 2>/dev/null \
+      || cp -a "${tmp}/extract/." "$site_dir/"
+  fi
   rm -rf "$tmp"
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "$site_dir" 2>/dev/null || true
 

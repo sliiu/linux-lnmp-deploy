@@ -217,7 +217,7 @@ ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
 AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" TENCENT_SECRET_ID="" TENCENT_SECRET_KEY=""
 CUSTOM_ENV=()
 WEBHOOK_MODE="" WEBHOOK_RELEASE_NAME="" WEBHOOK_SECRET="" WEBHOOK_ENABLE=0
-WEBHOOK_SITE_GITHUB_TOKEN="" WEBHOOK_SITE_GITEE_TOKEN="" WEBHOOK_ASSET_NAME=""
+WEBHOOK_SITE_GITHUB_TOKEN="" WEBHOOK_SITE_GITEE_TOKEN="" WEBHOOK_ASSET_NAME="" WEBHOOK_INCREMENTAL=""
 ROLLBACK_TO="" ROLLBACK_INDEX=0
 WEBHOOK_BODY_FILE="" WEBHOOK_HEADERS_FILE="" WEBHOOK_EVENT=""
 WEBHOOK_GH_SIG="" WEBHOOK_GITEE_TOKEN=""
@@ -397,6 +397,9 @@ parse_args() {
       --webhook-gitee-token)   shift; WEBHOOK_SITE_GITEE_TOKEN="$1" ;;
       --webhook-asset-name=*) WEBHOOK_ASSET_NAME="${1#*=}" ;;
       --webhook-asset-name)   shift; WEBHOOK_ASSET_NAME="$1" ;;
+      --webhook-incremental=*) WEBHOOK_INCREMENTAL="${1#*=}" ;;
+      --webhook-incremental)   shift; WEBHOOK_INCREMENTAL="$1" ;;
+      --webhook-no-incremental) WEBHOOK_INCREMENTAL=0 ;;
       --webhook-only)    WEBHOOK_ONLY=1; WEBHOOK_ENABLE=1 ;;
       --webhook-bind=*)  WEBHOOK_BIND="${1#*=}"; WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_SETUP_CLI=1 ;;
       --webhook-bind)    shift; WEBHOOK_BIND="$1"; WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_SETUP_CLI=1 ;;
@@ -768,6 +771,8 @@ cmd_add() {
       printf "  %-18s %s\n" "部署"   "Webhook Release（不 clone）"
       printf "  %-18s %s\n" "仓库(匹配)" "${GIT_REPO}"
       printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
+      printf "  %-18s %s\n" "增量部署" \
+        "$([[ "$(_webhook_normalize_incremental "${WEBHOOK_INCREMENTAL:-0}")" = 1 ]] && echo 是 || echo 否)"
     elif [[ -n "$GIT_REPO" ]]; then
       printf "  %-18s %s\n" "Git" "${GIT_REPO}${GIT_BRANCH:+ (${GIT_BRANCH})}"
     else

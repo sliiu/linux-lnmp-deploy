@@ -67,6 +67,8 @@ usage() {
   --webhook-github-token=  release 模式：站点 GitHub Token（私有仓下载）
   --webhook-gitee-token=   release 模式：站点 Gitee Token（私有仓下载）
   --webhook-asset-name=    release 模式：附件名关键字（如 slimppt-standalone.tar.gz）
+  --webhook-incremental=y|n  release：增量覆盖（n=下载后清空站点再全量写入，默认 n）
+  --webhook-no-incremental  同 --webhook-incremental=n
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
   --rollback-index=N    rollback 序号（同 --rollback-to 数字形式）
   --type=laravel|frontend  站点类型 [默认: laravel]
