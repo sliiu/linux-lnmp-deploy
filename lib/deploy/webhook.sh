@@ -419,7 +419,7 @@ _webhook_download_progress_monitor() {
   local dest="$1" stop_file="$2"
   # stop_file 须为尚不存在的路径（勿用 mktemp 直接创建的文件）
   while [[ ! -f "$stop_file" ]]; do
-    info "下载中: 已下载 $(_webhook_file_size "$dest") 字节"
+    info "已下载 $(_webhook_file_size "$dest") 字节"
     sleep 10
     [[ -f "$stop_file" ]] && break
   done
@@ -440,27 +440,6 @@ _webhook_expand_mirror_url() {
   u="${u//\{tag\}/$tag}"
   u="${u//\{asset\}/$asset}"
   printf '%s' "$u"
-}
-
-# 与 init/docker.sh、lib/init/zsh.sh 相同：${GH_PROXY}/https://...
-_webhook_apply_download_proxy() {
-  local raw="$1" prefix="${WEBHOOK_DOWNLOAD_PROXY:-${GH_PROXY:-}}"
-  [[ -n "$prefix" && "$raw" == https://* ]] || { printf '%s' "$raw"; return 0; }
-  prefix="${prefix%/}"
-  case "$raw" in
-    "${prefix}"/*) printf '%s' "$raw" ;;
-    *) printf '%s/%s' "$prefix" "$raw" ;;
-  esac
-}
-
-_webhook_github_release_page_url() {
-  local git_repo="$1" tag="$2" asset="$3" slug owner repo
-  [[ -n "$git_repo" && -n "$tag" && -n "$asset" ]] || return 1
-  slug="$(_webhook_repo_slug "$(_webhook_normalize_repo "$git_repo")")"
-  owner="${slug%%/*}"
-  repo="${slug#*/}"
-  [[ -n "$owner" && -n "$repo" ]] || return 1
-  printf 'https://github.com/%s/%s/releases/download/%s/%s' "$owner" "$repo" "$tag" "$asset"
 }
 
 _webhook_pick_release_asset_name() {
@@ -568,7 +547,7 @@ _webhook_download_try_urls() {
     fi
     [[ "$i" -lt "$n" ]] && warn "当前地址失败，尝试下一地址"
   done
-  warn "全部下载地址均失败。release-assets CDN 在国内 ECS 常卡死；可在 ${NGINX_CONF}/<域名>.webhook 设置 asset_mirror_url（OSS），或在 ${WEBHOOK_LISTENER_ENV} 设置 WEBHOOK_HTTP_PROXY"
+  warn "全部下载地址均失败；可在 ${NGINX_CONF}/<域名>.webhook 设置 asset_mirror_url（OSS），或在 ${WEBHOOK_LISTENER_ENV} 设置 WEBHOOK_HTTP_PROXY"
   return 1
 }
 
@@ -660,7 +639,7 @@ PY
 _webhook_deploy_release() {
   local domain="$1" body_file="$2" release_name="${3:-}" release_tag="${4:-}" download_url="${5:-}"
   local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
-  local mirror git_repo asset_file page proxied dl_urls=()
+  local mirror asset_file dl_urls=()
   wf="$(site_webhook_file "$domain")"
   asset_hint="$(_webhook_read_kv "$wf" asset_name)"
   token="$(_webhook_site_download_token "$domain")"
@@ -676,26 +655,10 @@ _webhook_deploy_release() {
   [[ -n "$download_url" ]] || die "未找到 release 下载地址"
 
   mirror="$(_webhook_read_kv "$wf" asset_mirror_url)" || true
-  git_repo="$(_webhook_read_kv "$wf" git_repo)" || true
   asset_file="$(_webhook_pick_release_asset_name "$body_file" "$asset_hint")" || true
   _webhook_load_listener_env
   if [[ -n "$mirror" ]]; then
     dl_urls+=("$(_webhook_expand_mirror_url "$mirror" "$ver" "$asset_file")")
-  fi
-  if [[ -n "${GH_PROXY:-${WEBHOOK_DOWNLOAD_PROXY:-}}" ]]; then
-    info "使用 GitHub 代理: ${WEBHOOK_DOWNLOAD_PROXY:-${GH_PROXY}}（与 /etc/lnmp-env.conf 中 init 配置相同）"
-    page="$(_webhook_github_release_page_url "$git_repo" "$ver" "$asset_file")" || true
-    if [[ -n "$page" ]]; then
-      proxied="$(_webhook_apply_download_proxy "$page")"
-      [[ "$proxied" != "$page" ]] && dl_urls+=("$proxied")
-    fi
-    if [[ "$download_url" == *"api.github.com/"*"/releases/assets/"* && -n "$token" ]]; then
-      cdn_url="$(_webhook_resolve_github_release_cdn "$download_url" "$token")" || true
-      if [[ -n "$cdn_url" ]]; then
-        proxied="$(_webhook_apply_download_proxy "$cdn_url")"
-        [[ "$proxied" != "$cdn_url" ]] && dl_urls+=("$proxied")
-      fi
-    fi
   fi
   dl_urls+=("$download_url")
 
@@ -885,9 +848,8 @@ WEBHOOK_PROXY_DOMAIN=${WEBHOOK_PROXY_DOMAIN:-}
 # 私有仓库 release 下载（可选）
 # WEBHOOK_GITHUB_TOKEN=
 # WEBHOOK_GITEE_TOKEN=
-# 国内 ECS 拉 GitHub CDN 易卡死，可设 HTTP 代理：
+# 国内 ECS 拉 GitHub release 易卡死，可设 HTTP 代理：
 # WEBHOOK_HTTP_PROXY=http://127.0.0.1:7890
-# WEBHOOK_DOWNLOAD_PROXY=  # 留空则沿用 /etc/lnmp-env.conf 的 GH_PROXY（init 里配的 ghfast 等）
 EOF
   chmod 600 "$WEBHOOK_LISTENER_ENV"
 }
