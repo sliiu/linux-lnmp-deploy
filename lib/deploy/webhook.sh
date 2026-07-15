@@ -666,7 +666,7 @@ _webhook_deploy_release() {
   if [[ -z "$token" && "$download_url" == *"github.com/"*"/releases/download/"* ]]; then
     warn "未配置 github_token，私有仓库 release 附件可能返回 404"
   fi
-  download_url="$(_webhook_resolve_github_download_url "$download_url" "$token")"
+  _webhook_resolve_github_download_url download_url "$download_url" "$token"
 
   mirror="$(_webhook_read_kv "$wf" asset_mirror_url)" || true
   asset_file="$(_webhook_pick_release_asset_name "$body_file" "$asset_hint")" || true
@@ -795,54 +795,72 @@ _webhook_github_release_asset_download_url() {
 }
 
 # 私有仓须走 API asset；有 token 时解析为 api.github.com/.../releases/assets/{id}
+# 输出变量名作为第 1 参数（勿用 $() 捕获，避免 info/warn 污染 URL）
 _webhook_github_api_release_asset_url() {
-  local repo_ref="$1" tag="$2" artifact="$3" token="$4"
-  local slug owner repo json asset_id
+  local _out="$1" repo_ref="$2" tag="$3" artifact="$4" token="$5"
+  local slug owner repo resp http_code json asset_id
+  printf -v "$_out" '%s' ""
   [[ -n "$repo_ref" && -n "$tag" && -n "$artifact" && -n "$token" ]] || return 1
   command -v python3 &>/dev/null || return 1
   slug="$(_webhook_repo_slug "$(_webhook_normalize_repo "$repo_ref")")"
   owner="${slug%%/*}"
   repo="${slug#*/}"
   [[ -n "$owner" && -n "$repo" ]] || return 1
-  json="$(curl -fsS --connect-timeout 30 --max-time 60 \
+  resp="$(curl -sS --connect-timeout 30 --max-time 60 \
     -H "Authorization: Bearer ${token}" \
     -H "Accept: application/vnd.github+json" \
+    -w $'\nHTTP_CODE:%{http_code}' \
     "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}" 2>/dev/null)" || return 1
+  http_code="${resp##*HTTP_CODE:}"
+  json="${resp%HTTP_CODE:*}"
+  if [[ "$http_code" != "200" ]]; then
+    warn "GitHub API HTTP ${http_code}（releases/tags/${tag}）"
+    return 1
+  fi
   asset_id="$(printf '%s' "$json" | python3 - "$artifact" <<'PY' 2>/dev/null
 import json, sys
 d = json.load(sys.stdin)
 want = sys.argv[1]
+names = [a.get("name") or "" for a in d.get("assets") or []]
 for a in d.get("assets") or []:
     if a.get("name") == want:
         aid = a.get("id")
         if aid:
             print(aid, end="")
         break
+else:
+    if names:
+        print("可用附件: " + ", ".join(names), file=sys.stderr)
 PY
-)"
-  [[ -n "$asset_id" ]] || return 1
-  printf 'https://api.github.com/repos/%s/%s/releases/assets/%s' "$owner" "$repo" "$asset_id"
+)" || return 1
+  if [[ -z "$asset_id" ]]; then
+    warn "GitHub API 未找到附件 ${artifact}（tag=${tag}）"
+    return 1
+  fi
+  printf -v "$_out" '%s' "https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset_id}"
 }
 
 _webhook_resolve_github_download_url() {
-  local url="$1" token="$2" owner repo tag artifact api_url
-  [[ -n "$url" ]] || return 1
-  [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]] && { printf '%s' "$url"; return 0; }
-  [[ -n "$token" && "$url" == *"github.com/"*"/releases/download/"* ]] || { printf '%s' "$url"; return 0; }
-  if [[ "$url" =~ github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/?]+) ]]; then
+  local _out="$1" url="$2" token="$3" owner repo tag artifact api_url=""
+  [[ -n "$_out" && -n "$url" ]] || return 1
+  if [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]]; then
+    printf -v "$_out" '%s' "$url"
+    return 0
+  fi
+  if [[ -n "$token" && "$url" == *"github.com/"*"/releases/download/"* ]] \
+    && [[ "$url" =~ github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/?]+) ]]; then
     owner="${BASH_REMATCH[1]}"
     repo="${BASH_REMATCH[2]}"
     tag="${BASH_REMATCH[3]}"
     artifact="${BASH_REMATCH[4]}"
-    api_url="$(_webhook_github_api_release_asset_url "${owner}/${repo}" "$tag" "$artifact" "$token")" || true
-    if [[ -n "$api_url" ]]; then
+    if _webhook_github_api_release_asset_url api_url "${owner}/${repo}" "$tag" "$artifact" "$token"; then
       info "GitHub API asset: ${artifact}"
-      printf '%s' "$api_url"
+      printf -v "$_out" '%s' "$api_url"
       return 0
     fi
-    warn "GitHub API 未找到附件 ${artifact}（tag=${tag}），回退 releases/download 直链"
+    warn "回退 releases/download 直链"
   fi
-  printf '%s' "$url"
+  printf -v "$_out" '%s' "$url"
 }
 
 _webhook_ci_artifact_ok() {
