@@ -500,6 +500,8 @@ _webhook_download_url_one() {
       hdr=()
       info "GitHub API → CDN（HTTP/1.1）"
     fi
+  elif [[ -n "$token" && "$url" == *"github.com/"*"/releases/download/"* ]]; then
+    hdr=(-H "Authorization: Bearer ${token}")
   fi
   read -r -a curl_opts <<< "$(_webhook_curl_common_opts "$speed_time")"
   stop_file="$(mktemp -u "${TMPDIR:-/tmp}/webhook-dl-stop.XXXXXX")"
@@ -661,6 +663,11 @@ _webhook_deploy_release() {
   [[ -n "$download_url" ]] || download_url="$(_webhook_pick_release_asset_url "$body_file" "$asset_hint")"
   [[ -n "$download_url" ]] || die "未找到 release 下载地址"
 
+  if [[ -z "$token" && "$download_url" == *"github.com/"*"/releases/download/"* ]]; then
+    warn "未配置 github_token，私有仓库 release 附件可能返回 404"
+  fi
+  download_url="$(_webhook_resolve_github_download_url "$download_url" "$token")"
+
   mirror="$(_webhook_read_kv "$wf" asset_mirror_url)" || true
   asset_file="$(_webhook_pick_release_asset_name "$body_file" "$asset_hint")" || true
   _webhook_load_listener_env
@@ -785,6 +792,57 @@ _webhook_github_release_asset_download_url() {
   repo="${slug#*/}"
   [[ -n "$owner" && -n "$repo" ]] || return 1
   printf 'https://github.com/%s/%s/releases/download/%s/%s' "$owner" "$repo" "$tag" "$artifact"
+}
+
+# 私有仓须走 API asset；有 token 时解析为 api.github.com/.../releases/assets/{id}
+_webhook_github_api_release_asset_url() {
+  local repo_ref="$1" tag="$2" artifact="$3" token="$4"
+  local slug owner repo json asset_id
+  [[ -n "$repo_ref" && -n "$tag" && -n "$artifact" && -n "$token" ]] || return 1
+  command -v python3 &>/dev/null || return 1
+  slug="$(_webhook_repo_slug "$(_webhook_normalize_repo "$repo_ref")")"
+  owner="${slug%%/*}"
+  repo="${slug#*/}"
+  [[ -n "$owner" && -n "$repo" ]] || return 1
+  json="$(curl -fsS --connect-timeout 30 --max-time 60 \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}" 2>/dev/null)" || return 1
+  asset_id="$(printf '%s' "$json" | python3 - "$artifact" <<'PY' 2>/dev/null
+import json, sys
+d = json.load(sys.stdin)
+want = sys.argv[1]
+for a in d.get("assets") or []:
+    if a.get("name") == want:
+        aid = a.get("id")
+        if aid:
+            print(aid, end="")
+        break
+PY
+)"
+  [[ -n "$asset_id" ]] || return 1
+  printf 'https://api.github.com/repos/%s/%s/releases/assets/%s' "$owner" "$repo" "$asset_id"
+}
+
+_webhook_resolve_github_download_url() {
+  local url="$1" token="$2" owner repo tag artifact api_url
+  [[ -n "$url" ]] || return 1
+  [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]] && { printf '%s' "$url"; return 0; }
+  [[ -n "$token" && "$url" == *"github.com/"*"/releases/download/"* ]] || { printf '%s' "$url"; return 0; }
+  if [[ "$url" =~ github\.com/([^/]+)/([^/]+)/releases/download/([^/]+)/([^/?]+) ]]; then
+    owner="${BASH_REMATCH[1]}"
+    repo="${BASH_REMATCH[2]}"
+    tag="${BASH_REMATCH[3]}"
+    artifact="${BASH_REMATCH[4]}"
+    api_url="$(_webhook_github_api_release_asset_url "${owner}/${repo}" "$tag" "$artifact" "$token")" || true
+    if [[ -n "$api_url" ]]; then
+      info "GitHub API asset: ${artifact}"
+      printf '%s' "$api_url"
+      return 0
+    fi
+    warn "GitHub API 未找到附件 ${artifact}（tag=${tag}），回退 releases/download 直链"
+  fi
+  printf '%s' "$url"
 }
 
 _webhook_ci_artifact_ok() {
