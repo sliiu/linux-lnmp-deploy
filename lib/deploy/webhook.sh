@@ -151,6 +151,7 @@ EOF
 # 站点级 token 优先，其次 listener.env 全局 token
 _webhook_trim_token() {
   local t="${1:-}"
+  t="${t//$'\r'/}"
   t="${t#"${t%%[![:space:]]*}"}"
   t="${t%"${t##*[![:space:]]}"}"
   printf '%s' "$t"
@@ -841,6 +842,8 @@ _webhook_github_api_release_asset_url() {
   local slug owner repo resp http_code json asset_id api_msg avail=""
   printf -v "$_out" '%s' ""
   token="$(_webhook_trim_token "$token")"
+  artifact="$(_webhook_trim_token "$artifact")"
+  tag="$(_webhook_trim_token "$tag")"
   [[ -n "$repo_ref" && -n "$tag" && -n "$artifact" && -n "$token" ]] || {
     warn "GitHub API 解析附件缺少参数（需 github_token、tag、artifact）"
     return 1
@@ -858,18 +861,18 @@ _webhook_github_api_release_asset_url() {
     warn "GitHub API HTTP ${http_code}（releases/tags/${tag}）${api_msg:+: ${api_msg}}"
     return 1
   fi
-  asset_id="$(printf '%s' "$json" | python3 - "$artifact" <<'PY' 2>/dev/null
+  asset_id="$(printf '%s' "$json" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
-want = sys.argv[1]
+want = sys.argv[1].strip()
 for a in d.get("assets") or []:
-    if a.get("name") == want:
+    name = (a.get("name") or "").strip()
+    if name == want:
         aid = a.get("id")
-        if aid:
+        if aid is not None:
             print(aid, end="")
         break
-PY
-)"
+' "$artifact" 2>/dev/null)"
   if [[ -z "$asset_id" ]]; then
     avail="$(printf '%s' "$json" | python3 -c "import json,sys; print(', '.join(a.get('name') or '' for a in json.load(sys.stdin).get('assets') or []))" 2>/dev/null || true)"
     warn "GitHub API 未找到附件 ${artifact}（tag=${tag}）${avail:+；可用: ${avail}}"
@@ -919,9 +922,9 @@ _webhook_process_ci_static_release() {
     k="${line%%=*}"; v="${line#*=}"
     case "$k" in
       repository) repository="$v" ;;
-      tag)        tag="$v" ;;
-      artifact)   artifact="$v" ;;
-      app)        app="$v" ;;
+      tag)        tag="$(_webhook_trim_token "$v")" ;;
+      artifact)   artifact="$(_webhook_trim_token "$v")" ;;
+      app)        app="$(_webhook_trim_token "$v")" ;;
     esac
   done <<< "$parsed"
 
