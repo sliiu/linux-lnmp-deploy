@@ -42,7 +42,7 @@ _webhook_normalize_repo() {
     host="${BASH_REMATCH[1]}"
     path="${BASH_REMATCH[2]}"
   elif [[ "$raw" != *:* && "$raw" =~ ^([^/]+)/([^/]+)$ ]]; then
-    host=""
+    host="github.com"
     path="${raw}"
   else
     printf '%s' "$raw"
@@ -723,8 +723,146 @@ _webhook_json_release_name() {
   _webhook_json_field "$body_file" '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"'
 }
 
+# GitHub Actions scripts/ci/trigger-deploy-webhook.mjs → event=static-release + Bearer token
+_webhook_parse_ci_static_release() {
+  local body_file="$1"
+  command -v python3 &>/dev/null || return 1
+  python3 - "$body_file" <<'PY' 2>/dev/null || return 1
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    d = json.load(f)
+if d.get("event") != "static-release":
+    raise SystemExit(1)
+for k in ("repository", "tag", "artifact", "app", "version"):
+    v = d.get(k) or ""
+    if v:
+        print(f"{k}={v}")
+PY
+}
+
+_webhook_header_value() {
+  local file="$1" want="${2,,}" line k v
+  [[ -f "$file" && -n "$want" ]] || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" != *:* ]] && continue
+    k="${line%%:*}"; v="${line#*:}"
+    k="${k#"${k%%[![:space:]]*}"}"; k="${k%"${k##*[![:space:]]}"}"
+    v="${v#"${v%%[![:space:]]*}"}"
+    [[ "${k,,}" = "$want" ]] && { printf '%s' "$v"; return 0; }
+  done < "$file"
+  return 1
+}
+
+_webhook_bearer_from_headers() {
+  local headers_file="$1" auth=""
+  auth="$(_webhook_header_value "$headers_file" "Authorization")" || return 1
+  case "$auth" in
+    [Bb][Ee][Aa][Rr][Ee][Rr]\ *) auth="${auth#*[Bb][Ee][Aa][Rr][Ee][Rr] }" ;;
+  esac
+  auth="${auth#"${auth%%[![:space:]]*}"}"
+  auth="${auth%"${auth##*[![:space:]]}"}"
+  [[ -n "$auth" ]] || return 1
+  printf '%s' "$auth"
+}
+
+_webhook_verify_bearer_token() {
+  local token="${1:-}" secret="${2:-}"
+  [[ -n "$token" && -n "$secret" && "$token" = "$secret" ]]
+}
+
+_webhook_github_release_asset_download_url() {
+  local repo_ref="$1" tag="$2" artifact="$3" slug owner repo
+  [[ -n "$repo_ref" && -n "$tag" && -n "$artifact" ]] || return 1
+  slug="$(_webhook_repo_slug "$(_webhook_normalize_repo "$repo_ref")")"
+  owner="${slug%%/*}"
+  repo="${slug#*/}"
+  [[ -n "$owner" && -n "$repo" ]] || return 1
+  printf 'https://github.com/%s/%s/releases/download/%s/%s' "$owner" "$repo" "$tag" "$artifact"
+}
+
+_webhook_ci_artifact_ok() {
+  local artifact="${1:-}" hint="${2:-}"
+  [[ -n "$artifact" ]] || return 1
+  [[ -z "$hint" ]] && return 0
+  [[ "$artifact" == *"$hint"* ]]
+}
+
+_webhook_process_ci_static_release() {
+  local body_file="$1" headers_file="${2:-}"
+  local parsed repository="" tag="" artifact="" app="" bearer norm dl_url
+  local matched=0 site_count=0 domain mode wf secret expected asset_hint line k v
+
+  parsed="$(_webhook_parse_ci_static_release "$body_file")" || { warn "无法解析 CI static-release payload"; return 1; }
+  while IFS= read -r line; do
+    [[ "$line" != *=* ]] && continue
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      repository) repository="$v" ;;
+      tag)        tag="$v" ;;
+      artifact)   artifact="$v" ;;
+      app)        app="$v" ;;
+    esac
+  done <<< "$parsed"
+
+  bearer="$(_webhook_bearer_from_headers "$headers_file")" || true
+  norm="$(_webhook_normalize_repo "$repository")"
+  [[ -n "$norm" ]] || { warn "无法解析仓库: ${repository:-}"; return 1; }
+  [[ -n "$tag" && -n "$artifact" ]] || { warn "CI payload 缺少 tag 或 artifact"; return 1; }
+
+  info "webhook 解析: event=static-release tag=${tag} artifact=${artifact} repo=${norm}"
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    site_count=$((site_count + 1))
+    domain="${line%%|*}"
+    mode="${line#*|}"
+    deploy_log_bind_domain "$domain"
+    wf="$(site_webhook_file "$domain")"
+    secret="$(_webhook_read_kv "$wf" secret)"
+    if ! _webhook_verify_bearer_token "$bearer" "$secret"; then
+      warn "站点 ${domain} Bearer token 校验失败，跳过"
+      continue
+    fi
+    [[ "$mode" = "release" ]] || { warn "站点 ${domain} 跳过: mode=${mode}（CI 仅支持 release）"; continue; }
+
+    expected="$(_webhook_read_kv "$wf" release_name)"
+    if ! _webhook_release_name_match "$expected" "$app" "$tag"; then
+      warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 app=${app:-} tag=${tag}）"
+      continue
+    fi
+    asset_hint="$(_webhook_read_kv "$wf" asset_name)" || true
+    if ! _webhook_ci_artifact_ok "$artifact" "$asset_hint"; then
+      warn "站点 ${domain} 跳过: artifact 不匹配（期望含 ${asset_hint}，实际 ${artifact}）"
+      continue
+    fi
+    dl_url="$(_webhook_github_release_asset_download_url "$repository" "$tag" "$artifact")" \
+      || { warn "站点 ${domain} 跳过: 无法构造 release 下载地址"; continue; }
+    if _webhook_deploy_release "$domain" "$body_file" "${app:-}" "$tag" "$dl_url"; then
+      matched=1
+    else
+      warn "站点 ${domain} release 部署未执行（见上方原因）"
+    fi
+  done < <(_webhook_sites_for_repo "$norm")
+
+  if [[ "$matched" -eq 1 ]]; then
+    info "webhook 处理完成: 已触发部署"
+    return 0
+  fi
+  if [[ "$site_count" -eq 0 ]]; then
+    info "webhook 处理完成: 无已启用 webhook 站点匹配仓库 ${norm}（slug=$(_webhook_repo_slug "$norm")）"
+  else
+    info "webhook 处理完成: 仓库 ${norm} 有 ${site_count} 个站点，均未触发部署（见上方跳过原因）"
+  fi
+  return 0
+}
+
 _webhook_process_payload() {
-  local body_file="$1" event="${2:-}" gh_sig="${3:-}" gitee_token="${4:-}"
+  local body_file="$1" event="${2:-}" gh_sig="${3:-}" gitee_token="${4:-}" headers_file="${5:-}"
+
+  if _webhook_parse_ci_static_release "$body_file" &>/dev/null; then
+    _webhook_process_ci_static_release "$body_file" "$headers_file"
+    return $?
+  fi
 
   local action ref repo_full clone_url html_url norm provider parsed line k v
   action="$(_webhook_json_field "$body_file" '"action"[[:space:]]*:[[:space:]]*"[^"]+"')"

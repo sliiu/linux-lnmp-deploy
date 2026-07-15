@@ -392,6 +392,7 @@ cmd_webhook_setup() {
   info "回调 URL: $(_webhook_public_callback_url)"
   info "GitHub: 事件 release / 签名 X-Hub-Signature-256"
   info "Gitee:  事件 Release Hook / Push Hook(tag) / Header X-Gitee-Token=secret"
+  info "CI:     POST JSON event=static-release / Authorization: Bearer <站点 .webhook 内 secret>"
   [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]] && info "请确保防火墙/安全组已放行 ${WEBHOOK_PORT}/tcp"
 }
 
@@ -404,7 +405,7 @@ cmd_webhook_handle() {
   [[ -n "$WEBHOOK_BODY_FILE" && -f "$WEBHOOK_BODY_FILE" ]] || die "缺少 --body-file"
   # trap 在 EXIT 时执行，勿引用 local（函数返回后 set -u 会报 unbound variable）
   trap 'rm -f '"$(printf '%q ' "$WEBHOOK_BODY_FILE" "${WEBHOOK_HEADERS_FILE:-}")"' 2>/dev/null || true' EXIT
-  if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}"; then
+  if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}" "${WEBHOOK_HEADERS_FILE:-}"; then
     warn "webhook handle 结束: payload 处理失败"
     return 1
   fi
