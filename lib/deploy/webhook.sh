@@ -149,15 +149,24 @@ EOF
 }
 
 # 站点级 token 优先，其次 listener.env 全局 token
+_webhook_trim_token() {
+  local t="${1:-}"
+  t="${t#"${t%%[![:space:]]*}"}"
+  t="${t%"${t##*[![:space:]]}"}"
+  printf '%s' "$t"
+}
+
 _webhook_site_download_token() {
   local domain="$1" wf token=""
   wf="$(site_webhook_file "$domain")"
   token="$(_webhook_read_kv "$wf" github_token)" || true
+  token="$(_webhook_trim_token "$token")"
   [[ -n "$token" ]] && { printf '%s' "$token"; return 0; }
   token="$(_webhook_read_kv "$wf" gitee_token)" || true
+  token="$(_webhook_trim_token "$token")"
   [[ -n "$token" ]] && { printf '%s' "$token"; return 0; }
   _webhook_load_listener_env
-  printf '%s' "${WEBHOOK_GITHUB_TOKEN:-${WEBHOOK_GITEE_TOKEN:-}}"
+  printf '%s' "$(_webhook_trim_token "${WEBHOOK_GITHUB_TOKEN:-${WEBHOOK_GITEE_TOKEN:-}}")"
 }
 
 _webhook_load_listener_env() {
@@ -472,13 +481,42 @@ PY
 }
 
 # GitHub API 302 到 release-assets；国内 ECS 常在 200 后正文卡住
+_webhook_curl_proxy_args() {
+  _webhook_load_listener_env
+  [[ -n "${WEBHOOK_HTTP_PROXY:-}" ]] && printf '%s' "--proxy" "${WEBHOOK_HTTP_PROXY}"
+}
+
+_webhook_github_api_curl() {
+  local url="$1" token="$2"
+  local err_file proxy=() rc=0 out=""
+  err_file="$(mktemp "${TMPDIR:-/tmp}/webhook-gh-api.XXXXXX")"
+  read -r -a proxy <<< "$(_webhook_curl_proxy_args)"
+  out="$(curl -sS --connect-timeout 30 --max-time 60 \
+    "${proxy[@]}" \
+    -H "Authorization: Bearer ${token}" \
+    -H "Accept: application/vnd.github+json" \
+    -H "User-Agent: lnmp-deploy-webhook" \
+    -w $'\nHTTP_CODE:%{http_code}' \
+    "$url" 2>"$err_file")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    warn "GitHub API 请求失败: ${url%%\?*}（$(tr '\n' ' ' <"$err_file" | sed 's/  */ /g' | head -c 200)）"
+    rm -f "$err_file"
+    return 1
+  fi
+  rm -f "$err_file"
+  printf '%s' "$out"
+}
+
 _webhook_resolve_github_release_cdn() {
-  local api_url="$1" token="$2"
+  local api_url="$1" token="$2" proxy=() out=""
   [[ -n "$token" ]] || return 1
-  curl -fsS --connect-timeout 30 --max-time 60 \
+  read -r -a proxy <<< "$(_webhook_curl_proxy_args)"
+  out="$(curl -fsS --connect-timeout 30 --max-time 60 \
+    "${proxy[@]}" \
     -H "Authorization: Bearer ${token}" \
     -H "Accept: application/octet-stream" \
-    -o /dev/null -w '%{redirect_url}' "$api_url" 2>/dev/null
+    -o /dev/null -w '%{redirect_url}' "$api_url" 2>/dev/null)" || return 1
+  printf '%s' "$out"
 }
 
 _webhook_curl_common_opts() {
@@ -664,7 +702,9 @@ _webhook_deploy_release() {
   [[ -n "$download_url" ]] || die "未找到 release 下载地址"
 
   if [[ -z "$token" && "$download_url" == *"github.com/"*"/releases/download/"* ]]; then
-    warn "未配置 github_token，私有仓库 release 附件可能返回 404"
+    warn "未配置 github_token，私有仓库 release 附件将 404"
+  elif [[ -n "$token" && "$download_url" == *"github.com/"*"/releases/download/"* ]]; then
+    info "github_token: ${token:0:8}...（用于拉取 release 附件）"
   fi
   _webhook_resolve_github_download_url download_url "$download_url" "$token"
 
@@ -798,43 +838,41 @@ _webhook_github_release_asset_download_url() {
 # 输出变量名作为第 1 参数（勿用 $() 捕获，避免 info/warn 污染 URL）
 _webhook_github_api_release_asset_url() {
   local _out="$1" repo_ref="$2" tag="$3" artifact="$4" token="$5"
-  local slug owner repo resp http_code json asset_id
+  local slug owner repo resp http_code json asset_id api_msg avail=""
   printf -v "$_out" '%s' ""
-  [[ -n "$repo_ref" && -n "$tag" && -n "$artifact" && -n "$token" ]] || return 1
-  command -v python3 &>/dev/null || return 1
+  token="$(_webhook_trim_token "$token")"
+  [[ -n "$repo_ref" && -n "$tag" && -n "$artifact" && -n "$token" ]] || {
+    warn "GitHub API 解析附件缺少参数（需 github_token、tag、artifact）"
+    return 1
+  }
+  command -v python3 &>/dev/null || { warn "缺少 python3，无法查询 GitHub Release 附件"; return 1; }
   slug="$(_webhook_repo_slug "$(_webhook_normalize_repo "$repo_ref")")"
   owner="${slug%%/*}"
   repo="${slug#*/}"
-  [[ -n "$owner" && -n "$repo" ]] || return 1
-  resp="$(curl -sS --connect-timeout 30 --max-time 60 \
-    -H "Authorization: Bearer ${token}" \
-    -H "Accept: application/vnd.github+json" \
-    -w $'\nHTTP_CODE:%{http_code}' \
-    "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}" 2>/dev/null)" || return 1
+  [[ -n "$owner" && -n "$repo" ]] || { warn "无法解析仓库: ${repo_ref}"; return 1; }
+  resp="$(_webhook_github_api_curl "https://api.github.com/repos/${owner}/${repo}/releases/tags/${tag}" "$token")" || return 1
   http_code="${resp##*HTTP_CODE:}"
   json="${resp%HTTP_CODE:*}"
   if [[ "$http_code" != "200" ]]; then
-    warn "GitHub API HTTP ${http_code}（releases/tags/${tag}）"
+    api_msg="$(printf '%s' "$json" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('message',''))" 2>/dev/null || true)"
+    warn "GitHub API HTTP ${http_code}（releases/tags/${tag}）${api_msg:+: ${api_msg}}"
     return 1
   fi
   asset_id="$(printf '%s' "$json" | python3 - "$artifact" <<'PY' 2>/dev/null
 import json, sys
 d = json.load(sys.stdin)
 want = sys.argv[1]
-names = [a.get("name") or "" for a in d.get("assets") or []]
 for a in d.get("assets") or []:
     if a.get("name") == want:
         aid = a.get("id")
         if aid:
             print(aid, end="")
         break
-else:
-    if names:
-        print("可用附件: " + ", ".join(names), file=sys.stderr)
 PY
-)" || return 1
+)"
   if [[ -z "$asset_id" ]]; then
-    warn "GitHub API 未找到附件 ${artifact}（tag=${tag}）"
+    avail="$(printf '%s' "$json" | python3 -c "import json,sys; print(', '.join(a.get('name') or '' for a in json.load(sys.stdin).get('assets') or []))" 2>/dev/null || true)"
+    warn "GitHub API 未找到附件 ${artifact}（tag=${tag}）${avail:+；可用: ${avail}}"
     return 1
   fi
   printf -v "$_out" '%s' "https://api.github.com/repos/${owner}/${repo}/releases/assets/${asset_id}"
