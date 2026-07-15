@@ -353,15 +353,22 @@ _webhook_sites_for_repo() {
 }
 
 _webhook_release_name_match() {
-  local expected="${1:-}" actual_name="${2:-}" actual_tag="${3:-}"
+  local expected="${1:-}" actual_name="${2:-}" actual_tag="${3:-}" candidate suffix=""
   [[ -n "$expected" ]] || return 0
   expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
   actual_name="$(printf '%s' "$actual_name" | tr '[:upper:]' '[:lower:]')"
   actual_tag="$(printf '%s' "$actual_tag" | tr '[:upper:]' '[:lower:]')"
   [[ "$expected" = "$actual_name" || "$expected" = "$actual_tag" ]] && return 0
-  # 前缀匹配：配置 slimppt → tag slimppt-v0.1.0、name "slimppt slimppt-v0.1.0"
-  [[ "$actual_tag" == "$expected-"* ]] && return 0
   [[ "$actual_name" == "$expected "* || "$actual_name" == "$expected-"* ]] && return 0
+  # 前缀匹配：slimppt → slimppt-v0.1.0；official-v → official-v1.0.0
+  for candidate in "$actual_tag" "$actual_name"; do
+    [[ -z "$candidate" ]] && continue
+    [[ "$candidate" = "$expected" || "$candidate" == "$expected-"* ]] && return 0
+    if [[ "$candidate" == "$expected"* ]]; then
+      suffix="${candidate#"$expected"}"
+      [[ -z "$suffix" || "$suffix" == -* || "$suffix" == [0-9.]* ]] && return 0
+    fi
+  done
   return 1
 }
 
