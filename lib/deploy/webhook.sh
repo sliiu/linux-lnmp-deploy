@@ -373,20 +373,22 @@ _webhook_sites_for_repo() {
 }
 
 _webhook_release_name_match() {
-  local expected="${1:-}" actual_name="${2:-}" actual_tag="${3:-}" candidate suffix=""
+  local expected="${1:-}" actual_name="${2:-}" actual_tag="${3:-}" candidate suffix ver_suffix=""
   [[ -n "$expected" ]] || return 0
   expected="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
   actual_name="$(printf '%s' "$actual_name" | tr '[:upper:]' '[:lower:]')"
   actual_tag="$(printf '%s' "$actual_tag" | tr '[:upper:]' '[:lower:]')"
   [[ "$expected" = "$actual_name" || "$expected" = "$actual_tag" ]] && return 0
   [[ "$actual_name" == "$expected "* || "$actual_name" == "$expected-"* ]] && return 0
-  # 前缀匹配：slimppt → slimppt-v0.1.0；official-v → official-v1.0.0
+  # 前缀匹配：slimppt → slimppt-v1.0.2；slimppt- → slimppt-v1.0.2；official-v → official-v1.0.0
   for candidate in "$actual_tag" "$actual_name"; do
     [[ -z "$candidate" ]] && continue
     [[ "$candidate" = "$expected" || "$candidate" == "$expected-"* ]] && return 0
     if [[ "$candidate" == "$expected"* ]]; then
       suffix="${candidate#"$expected"}"
-      [[ -z "$suffix" || "$suffix" == -* || "$suffix" == [0-9.]* ]] && return 0
+      ver_suffix="$suffix"
+      [[ "$ver_suffix" == v* ]] && ver_suffix="${ver_suffix#v}"
+      [[ -z "$suffix" || "$suffix" == -* || "$ver_suffix" == [0-9.]* ]] && return 0
     fi
   done
   return 1
@@ -798,7 +800,7 @@ with open(sys.argv[1], encoding="utf-8") as f:
     d = json.load(f)
 if d.get("event") != "static-release":
     raise SystemExit(1)
-for k in ("repository", "tag", "artifact", "app", "version"):
+for k in ("repository", "tag", "release", "artifact", "app", "version"):
     v = d.get(k) or ""
     if v:
         print(f"{k}={v}")
@@ -923,7 +925,7 @@ _webhook_ci_artifact_ok() {
 
 _webhook_process_ci_static_release() {
   local body_file="$1" headers_file="${2:-}"
-  local parsed repository="" tag="" artifact="" app="" bearer norm dl_url
+  local parsed repository="" tag="" artifact="" app="" release="" bearer norm dl_url
   local matched=0 site_count=0 domain mode wf secret expected asset_hint line k v
 
   parsed="$(_webhook_parse_ci_static_release "$body_file")" || { warn "无法解析 CI static-release payload"; return 1; }
@@ -933,6 +935,7 @@ _webhook_process_ci_static_release() {
     case "$k" in
       repository) repository="$v" ;;
       tag)        tag="$(_webhook_trim_token "$v")" ;;
+      release)    release="$(_webhook_trim_token "$v")" ;;
       artifact)   artifact="$(_webhook_trim_token "$v")" ;;
       app)        app="$(_webhook_trim_token "$v")" ;;
     esac
@@ -960,8 +963,8 @@ _webhook_process_ci_static_release() {
     [[ "$mode" = "release" ]] || { warn "站点 ${domain} 跳过: mode=${mode}（CI 仅支持 release）"; continue; }
 
     expected="$(_webhook_read_kv "$wf" release_name)"
-    if ! _webhook_release_name_match "$expected" "$app" "$tag"; then
-      warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 app=${app:-} tag=${tag}）"
+    if ! _webhook_release_name_match "$expected" "${release:-$app}" "$tag"; then
+      warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 release=${release:-} app=${app:-} tag=${tag}）"
       continue
     fi
     asset_hint="$(_webhook_read_kv "$wf" asset_name)" || true
