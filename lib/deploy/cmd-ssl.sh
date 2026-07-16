@@ -63,7 +63,7 @@ usage() {
   --webhook-proxy-domain= setup：Nginx 反代域名（mode=nginx，本机仍 127.0.0.1）
   --webhook-public-mode=  setup：nginx | bind | local
   --webhook-release-name=  release 模式：匹配的 Release 名称或 tag
-  --webhook-secret=     webhook 密钥（留空自动生成）
+  --webhook-secret=     webhook 密钥（留空则交互输入，更新时保留原值）
   --webhook-github-token=  release 模式：站点 GitHub Token（私有仓下载）
   --webhook-gitee-token=   release 模式：站点 Gitee Token（私有仓下载）
   --webhook-asset-name=    release 模式：附件名关键字（如 slimppt-standalone.tar.gz）

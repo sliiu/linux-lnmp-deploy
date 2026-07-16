@@ -15,7 +15,8 @@ _webhook_save_on_add() {
   [[ "$mode" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
     || die "静态站点 release 模式需 --webhook-release-name="
   local fe="" sec
-  sec="$(_webhook_write_site_config "$DOMAIN" "$mode" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "${WEBHOOK_SECRET:-}")"
+  _webhook_collect_secret ""
+  sec="$(_webhook_write_site_config "$DOMAIN" "$mode" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "${WEBHOOK_SECRET}")"
   ok "Webhook 已配置（mode=${mode}）"
   if [[ "$mode" = "release" ]]; then
     info "  静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
@@ -147,7 +148,8 @@ _webhook_configure_site() {
 
   [[ "$WEBHOOK_MODE" = "release" ]] && _webhook_collect_site_release_opts "$wf_old"
 
-  local sec="${WEBHOOK_SECRET:-${old_secret:-}}"
+  _webhook_collect_secret "${old_secret:-}"
+  local sec="${WEBHOOK_SECRET}"
   sec="$(_webhook_write_site_config "$DOMAIN" "$WEBHOOK_MODE" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "$sec")"
   WEBHOOK_ENABLE=1
   ok "Webhook 已配置: ${DOMAIN} (${WEBHOOK_MODE})"

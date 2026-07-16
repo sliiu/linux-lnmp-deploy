@@ -22,12 +22,22 @@ _adding_frontend_release_webhook() {
 _webhook_history_file() { printf '%s/%s/history.tsv' "$WEBHOOK_HISTORY_DIR" "$1"; }
 _webhook_lock_file()    { printf '%s/%s/.deploy.lock' "$WEBHOOK_HISTORY_DIR" "$1"; }
 
-_webhook_gen_secret() {
-  if command -v openssl &>/dev/null; then
-    openssl rand -hex 24
-  else
-    head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'
+# 收集站点 webhook secret：CLI --webhook-secret 优先；更新时保留原值；否则交互输入（必填）
+_webhook_collect_secret() {
+  local old_secret="${1:-}"
+  [[ -n "${WEBHOOK_SECRET:-}" ]] && return 0
+  if [[ -n "$old_secret" ]]; then
+    WEBHOOK_SECRET="$old_secret"
+    return 0
   fi
+  while [[ -z "${WEBHOOK_SECRET:-}" ]]; do
+    prompt_secret "Webhook Secret（GitHub/Gitee 回调校验，必填）"
+    WEBHOOK_SECRET="$PROMPT_RESULT"
+    if [[ -z "$WEBHOOK_SECRET" ]]; then
+      interactive_tty_ok || die "Webhook Secret 不能为空（请指定 --webhook-secret 或在本机终端交互运行）"
+      warn "Webhook Secret 不能为空"
+    fi
+  done
 }
 
 # 统一为 provider:owner/repo（小写 host/path）
@@ -116,7 +126,7 @@ _webhook_write_site_config() {
   local domain="$1" mode="$2" git_repo="$3" release_name="${4:-}" secret="${5:-}"
   local f inc; f="$(site_webhook_file "$domain")"
   mkdir -p "$NGINX_CONF"
-  [[ -n "$secret" ]] || secret="$(_webhook_gen_secret)"
+  [[ -n "$secret" ]] || die "Webhook Secret 不能为空"
   if [[ "$mode" = "release" ]]; then
     inc="${WEBHOOK_INCREMENTAL:-}"
     if [[ -z "$inc" && -f "$f" ]]; then
