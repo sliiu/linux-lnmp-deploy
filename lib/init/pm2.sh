@@ -1,10 +1,11 @@
 # shellcheck shell=bash
 
 PM2_MARKER="/etc/pm2-init.done"
-FNM_DIR="${FNM_DIR:-/usr/local/fnm}"
+FNM_BIN_DIR="${FNM_BIN_DIR:-/usr/local/fnm}"
+FNM_DATA_DIR_REL='${HOME}/.local/share/fnm'
 
 is_pm2_ok() {
-  [[ -x "${FNM_DIR}/fnm" ]] || [[ -x /usr/local/bin/fnm ]] || return 1
+  [[ -x "${FNM_BIN_DIR}/fnm" ]] || [[ -x /usr/local/bin/fnm ]] || return 1
   id "${DEVOPS_USER:-devops}" &>/dev/null || return 1
   su - "${DEVOPS_USER}" -c 'command -v node &>/dev/null && command -v pm2 &>/dev/null'
 }
@@ -18,9 +19,9 @@ collect_node_version() {
 _pm2_shell_block() {
   cat <<EOF
 # >>> pm2 init.sh >>>
-export FNM_DIR="${FNM_DIR}"
+export FNM_DIR="${FNM_DATA_DIR_REL}"
 export FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
-export PATH="\${FNM_DIR}:\${PATH}"
+export PATH="${FNM_BIN_DIR}:\${PATH}"
 eval "\$(fnm env --shell bash)"
 # <<< pm2 init.sh <<<
 EOF
@@ -36,16 +37,16 @@ _pm2_install_fnm_binary() {
     *) die "不支持的架构: ${arch}" ;;
   esac
   url="${GH_PROXY:+${GH_PROXY}/}https://github.com/Schniz/fnm/releases/download/${fnm_ver}/${asset}"
-  mkdir -p "${FNM_DIR}"
+  mkdir -p "${FNM_BIN_DIR}"
   tmpzip="$(mktemp)"
   info "下载 fnm ${fnm_ver} ..."
   fetch_url "$url" "$tmpzip" || die "下载 fnm 失败（可配置 --gh-proxy 或 GitHub 代理）"
   run_pkg install -y unzip 2>/dev/null || true
-  unzip -oq "$tmpzip" -d "${FNM_DIR}"
-  chmod +x "${FNM_DIR}/fnm"
-  ln -sf "${FNM_DIR}/fnm" /usr/local/bin/fnm 2>/dev/null || true
+  unzip -oq "$tmpzip" -d "${FNM_BIN_DIR}"
+  chmod +x "${FNM_BIN_DIR}/fnm"
+  ln -sf "${FNM_BIN_DIR}/fnm" /usr/local/bin/fnm 2>/dev/null || true
   rm -f "$tmpzip"
-  ok "fnm 已安装: ${FNM_DIR}/fnm"
+  ok "fnm 已安装: ${FNM_BIN_DIR}/fnm"
 }
 
 _pm2_write_devops_shell() {
@@ -71,6 +72,14 @@ EOF
     chown "${DEVOPS_USER}:${DEVOPS_USER}" "$profile"
   fi
   ok "已写入 ${DEVOPS_USER} shell 配置（fnm env）"
+}
+
+_pm2_prepare_devops_fnm_data() {
+  local home
+  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6)"
+  [[ -n "$home" && -d "$home" ]] || die "devops 家目录不存在: ${DEVOPS_USER}"
+  mkdir -p "${home}/.local/share/fnm"
+  chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${home}/.local/share/fnm"
 }
 
 _pm2_run_devops() {
@@ -102,13 +111,14 @@ install_pm2() {
 
   run_pkg install -y curl unzip 2>/dev/null || true
 
-  if [[ ! -x "${FNM_DIR}/fnm" ]]; then
+  if [[ ! -x "${FNM_BIN_DIR}/fnm" ]]; then
     _pm2_install_fnm_binary
   else
-    ok "fnm 已存在: ${FNM_DIR}/fnm"
+    ok "fnm 已存在: ${FNM_BIN_DIR}/fnm"
   fi
 
   _pm2_write_devops_shell
+  _pm2_prepare_devops_fnm_data
 
   info "安装 Node.js ${NODE_VERSION}（用户 ${DEVOPS_USER}）..."
   _pm2_run_devops "fnm install ${NODE_VERSION} && fnm default ${NODE_VERSION}"
@@ -143,6 +153,6 @@ uninstall_pm2() {
   rm -f "/etc/systemd/system/pm2-${DEVOPS_USER}.service" 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
 
-  rm -rf "${FNM_DIR}" /usr/local/bin/fnm "$PM2_MARKER" 2>/dev/null || true
+  rm -rf "${FNM_BIN_DIR}" /usr/local/bin/fnm "$PM2_MARKER" 2>/dev/null || true
   ok "PM2 / fnm 已卸载"
 }
