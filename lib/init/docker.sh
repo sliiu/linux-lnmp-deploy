@@ -1,4 +1,8 @@
 # shellcheck shell=bash
+_is_amazon_linux() {
+  [[ -f /etc/os-release ]] && grep -qE '^ID="?amzn"?' /etc/os-release 2>/dev/null
+}
+
 install_docker() {
   hr; info "安装 Docker"; echo ""
 
@@ -7,6 +11,8 @@ install_docker() {
   else
     if [[ -f /etc/os-release ]] && grep -q "Alibaba Cloud Linux" /etc/os-release 2>/dev/null; then
       _install_docker_alinux
+    elif _is_amazon_linux; then
+      _install_docker_amazonlinux
     elif [[ -f /etc/redhat-release ]] || [[ -f /etc/centos-release ]]; then
       _install_docker_centos
     elif [[ -f /etc/debian_version ]]; then
@@ -29,7 +35,10 @@ install_docker() {
 
 _fix_alinux4_docker_repo() {
   [[ -f /etc/yum.repos.d/docker-ce.repo ]] || return 0
-  grep -q "Alibaba Cloud Linux 4" /etc/os-release 2>/dev/null || return 0
+  if ! grep -q "Alibaba Cloud Linux 4" /etc/os-release 2>/dev/null \
+     && ! _is_amazon_linux; then
+    return 0
+  fi
   grep -q '\$releasever' /etc/yum.repos.d/docker-ce.repo 2>/dev/null \
     && sed -i 's|\$releasever|9|g' /etc/yum.repos.d/docker-ce.repo || true
 }
@@ -53,6 +62,19 @@ _install_docker_alinux() {
   else
     _fix_alinux4_docker_repo
   fi
+
+  dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+}
+
+_install_docker_amazonlinux() {
+  run_pkg clean all 2>/dev/null || true
+  dnf remove -y docker docker-client docker-client-latest docker-common \
+    docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null || true
+  run_pkg install -y dnf-plugins-core 2>/dev/null || true
+
+  /bin/rm -f /etc/yum.repos.d/docker*.repo
+  dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+  _fix_alinux4_docker_repo
 
   dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 }
