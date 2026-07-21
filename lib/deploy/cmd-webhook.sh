@@ -19,7 +19,11 @@ _webhook_save_on_add() {
   sec="$(_webhook_write_site_config "$DOMAIN" "$mode" "$GIT_REPO" "${WEBHOOK_RELEASE_NAME:-}" "${WEBHOOK_SECRET}")"
   ok "Webhook 已配置（mode=${mode}）"
   if [[ "$mode" = "release" ]]; then
-    info "  静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
+    if [[ "${SITE_TYPE:-}" = "pm2" ]]; then
+      info "  Gateway 产物将解压到 ${WWW_ROOT}/${DOMAIN}/（CI gateway-release）"
+    else
+      info "  静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
+    fi
   fi
   info "  回调 URL: $(_webhook_public_callback_url)"
   info "  Secret: ${sec}（写入 $(site_webhook_file "$DOMAIN")）"
@@ -394,7 +398,7 @@ cmd_webhook_setup() {
   info "回调 URL: $(_webhook_public_callback_url)"
   info "GitHub: 事件 release / 签名 X-Hub-Signature-256"
   info "Gitee:  事件 Release Hook / Push Hook(tag) / Header X-Gitee-Token=secret"
-  info "CI:     POST JSON event=static-release / Authorization: Bearer <站点 .webhook 内 secret>"
+  info "CI:     POST JSON event=static-release|gateway-release / Authorization: Bearer <站点 .webhook 内 secret>"
   [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]] && info "请确保防火墙/安全组已放行 ${WEBHOOK_PORT}/tcp"
 }
 

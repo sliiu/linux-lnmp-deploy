@@ -19,6 +19,10 @@ _adding_frontend_release_webhook() {
   [[ "${SITE_TYPE:-}" = "frontend" && "${WEBHOOK_MODE:-}" = "release" && "${WEBHOOK_ENABLE:-0}" -eq 1 ]]
 }
 
+_adding_pm2_release_webhook() {
+  [[ "${SITE_TYPE:-}" = "pm2" && "${WEBHOOK_MODE:-}" = "release" && "${WEBHOOK_ENABLE:-0}" -eq 1 ]]
+}
+
 _webhook_history_file() { printf '%s/%s/history.tsv' "$WEBHOOK_HISTORY_DIR" "$1"; }
 _webhook_lock_file()    { printf '%s/%s/.deploy.lock' "$WEBHOOK_HISTORY_DIR" "$1"; }
 
@@ -120,6 +124,43 @@ _webhook_clear_site_dir() {
     rm -rf "$name"
   done
   shopt -u dotglob nullglob
+}
+
+# Gateway PM2 部署：保留 env、日志与持久化数据目录
+_webhook_clear_gateway_site_dir() {
+  local site_dir="$1" name base
+  [[ -d "$site_dir" ]] || return 0
+  shopt -s dotglob nullglob
+  for name in "$site_dir"/*; do
+    [[ -e "$name" ]] || continue
+    base="$(basename "$name")"
+    case "$base" in
+      .well-known|.env|.env.production|.env.production.local|logs|data) continue ;;
+    esac
+    rm -rf "$name"
+  done
+  shopt -u dotglob nullglob
+}
+
+# .env.production + .env.production.local → .env（PM2 env_file / node --env-file 读取）
+_webhook_merge_gateway_env() {
+  local site_dir="$1" tmp f
+  tmp="${site_dir}/.env.merged.$$"
+  : > "$tmp"
+  for f in .env.production .env.production.local; do
+    [[ -f "${site_dir}/${f}" ]] || continue
+    cat "${site_dir}/${f}" >> "$tmp"
+    printf '\n' >> "$tmp"
+  done
+  if [[ -s "$tmp" ]]; then
+    mv "$tmp" "${site_dir}/.env"
+    chown "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}/.env" 2>/dev/null || true
+    chmod 640 "${site_dir}/.env" 2>/dev/null || true
+    info "已合并 .env.production → .env"
+  else
+    rm -f "$tmp"
+    [[ -f "${site_dir}/.env" ]] || warn "未找到 .env / .env.production，请先在站点目录配置环境变量"
+  fi
 }
 
 _webhook_write_site_config() {
@@ -923,6 +964,178 @@ _webhook_ci_artifact_ok() {
   [[ "$artifact" == *"$hint"* ]]
 }
 
+_webhook_parse_ci_gateway_release() {
+  local body_file="$1"
+  command -v python3 &>/dev/null || return 1
+  python3 - "$body_file" <<'PY' 2>/dev/null || return 1
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    d = json.load(f)
+if d.get("event") != "gateway-release":
+    raise SystemExit(1)
+for k in ("repository", "tag", "release", "artifact", "app", "version", "buildTarget"):
+    v = d.get(k) or ""
+    if v:
+        print(f"{k}={v}")
+PY
+}
+
+_webhook_deploy_gateway_release() {
+  local domain="$1" body_file="$2" release_name="${3:-}" release_tag="${4:-}" download_url="${5:-}"
+  local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
+  local dl_urls=() mirror asset_file
+  [[ "$(_site_type_for_domain "$domain")" = "pm2" ]] || die "站点 ${domain} 非 pm2 类型，无法部署 gateway-release"
+
+  wf="$(site_webhook_file "$domain")"
+  asset_hint="$(_webhook_read_kv "$wf" asset_name)"
+  token="$(_webhook_site_download_token "$domain")"
+  ver="${release_tag:-$release_name}"
+  [[ -n "$ver" ]] || ver="release"
+
+  _webhook_acquire_lock "$domain" || return 1
+  trap '_webhook_release_lock "'"$domain"'"' RETURN
+
+  _webhook_backup_site "$domain" "$ver" "gateway-release" >/dev/null
+
+  [[ -n "$download_url" ]] || download_url="$(_webhook_pick_release_asset_url "$body_file" "$asset_hint")"
+  [[ -n "$download_url" ]] || die "未找到 gateway release 下载地址"
+
+  if [[ -z "$token" && "$download_url" == *"github.com/"*"/releases/download/"* ]]; then
+    warn "未配置 github_token，私有仓库 release 附件将 404"
+  fi
+  _webhook_resolve_github_download_url download_url "$download_url" "$token"
+
+  mirror="$(_webhook_read_kv "$wf" asset_mirror_url)" || true
+  asset_file="$(_webhook_pick_release_asset_name "$body_file" "$asset_hint")" || true
+  _webhook_load_listener_env
+  if [[ -n "$mirror" ]]; then
+    dl_urls+=("$(_webhook_expand_mirror_url "$mirror" "$ver" "$asset_file")")
+  fi
+  dl_urls+=("$download_url")
+
+  tmp="$(mktemp -d)"
+  arch="${tmp}/pkg"
+  case "$download_url" in
+    *.zip|*zipball*) arch="${arch}.zip" ;;
+    *) arch="${arch}.tar.gz" ;;
+  esac
+  _webhook_download_try_urls "$arch" "$token" 60 "${dl_urls[@]}" || die "下载失败"
+
+  local incremental
+  incremental="$(_webhook_site_incremental "$wf")"
+  _webhook_extract_archive "$arch" "${tmp}/extract"
+  mkdir -p "$site_dir"
+  if [[ "$incremental" = "1" ]]; then
+    info "增量部署：覆盖同名文件，保留站点内其余文件"
+    rsync -a "${tmp}/extract/" "$site_dir/" 2>/dev/null \
+      || cp -a "${tmp}/extract/." "$site_dir/"
+  else
+    info "全量部署：清空站点（保留 .env* / logs / data）后替换"
+    _webhook_clear_gateway_site_dir "$site_dir"
+    rsync -a "${tmp}/extract/" "$site_dir/" 2>/dev/null \
+      || cp -a "${tmp}/extract/." "$site_dir/"
+  fi
+  rm -rf "$tmp"
+  chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "$site_dir" 2>/dev/null || true
+
+  _webhook_merge_gateway_env "$site_dir"
+
+  ensure_pm2_runtime
+  apply_site_pm2_port_cli "$domain"
+  apply_site_pm2_cmd_cli "$domain"
+  local port
+  port="$(allocate_pm2_port "$domain" "${SITE_PM2_PORT:-8787}")"
+  printf '%s\n' "$port" > "$(site_pm2_port_file "$domain")"
+  chmod 644 "$(site_pm2_port_file "$domain")" 2>/dev/null || true
+
+  info "npm install（生产依赖）..."
+  _pm2_run_as_devops "$site_dir" "npm ci --omit=dev 2>/dev/null || npm install --omit=dev"
+  ok "依赖安装完成"
+
+  PM2_BUILD=n reload_pm2_site "$domain"
+  gen_nginx_pm2 "$domain"
+  fix_site_readable_for_nginx "$domain" "pm2" ""
+  if container_ok "lnmp-nginx"; then
+    docker exec lnmp-nginx nginx -t 2>&1 && docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
+  fi
+  ok "站点 ${domain} 已更新到 gateway release ${ver}"
+}
+
+_webhook_process_ci_gateway_release() {
+  local body_file="$1" headers_file="${2:-}"
+  local parsed repository="" tag="" artifact="" app="" release="" build_target="" bearer norm dl_url
+  local matched=0 site_count=0 domain mode wf secret expected asset_hint line k v
+
+  parsed="$(_webhook_parse_ci_gateway_release "$body_file")" || { warn "无法解析 CI gateway-release payload"; return 1; }
+  while IFS= read -r line; do
+    [[ "$line" != *=* ]] && continue
+    k="${line%%=*}"; v="${line#*=}"
+    case "$k" in
+      repository)  repository="$v" ;;
+      tag)         tag="$(_webhook_trim_token "$v")" ;;
+      release)     release="$(_webhook_trim_token "$v")" ;;
+      artifact)    artifact="$(_webhook_trim_token "$v")" ;;
+      app)         app="$(_webhook_trim_token "$v")" ;;
+      buildTarget) build_target="$(_webhook_trim_token "$v")" ;;
+    esac
+  done <<< "$parsed"
+
+  bearer="$(_webhook_bearer_from_headers "$headers_file")" || true
+  norm="$(_webhook_normalize_repo "$repository")"
+  [[ -n "$norm" ]] || { warn "无法解析仓库: ${repository:-}"; return 1; }
+  [[ -n "$tag" && -n "$artifact" ]] || { warn "CI payload 缺少 tag 或 artifact"; return 1; }
+
+  info "webhook 解析: event=gateway-release tag=${tag} artifact=${artifact} buildTarget=${build_target:-} repo=${norm}"
+
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    site_count=$((site_count + 1))
+    domain="${line%%|*}"
+    mode="${line#*|}"
+    deploy_log_bind_domain "$domain"
+    wf="$(site_webhook_file "$domain")"
+    secret="$(_webhook_read_kv "$wf" secret)"
+    if ! _webhook_verify_bearer_token "$bearer" "$secret"; then
+      warn "站点 ${domain} Bearer token 校验失败，跳过"
+      continue
+    fi
+    [[ "$mode" = "release" ]] || { warn "站点 ${domain} 跳过: mode=${mode}（gateway CI 仅支持 release）"; continue; }
+    [[ "$(_site_type_for_domain "$domain")" = "pm2" ]] || {
+      warn "站点 ${domain} 跳过: 非 pm2 类型"
+      continue
+    }
+
+    expected="$(_webhook_read_kv "$wf" release_name)"
+    if ! _webhook_release_name_match "$expected" "${release:-$app}" "$tag"; then
+      warn "站点 ${domain} 跳过: release 不匹配（期望 ${expected:-任意}，实际 release=${release:-} app=${app:-} tag=${tag}）"
+      continue
+    fi
+    asset_hint="$(_webhook_read_kv "$wf" asset_name)" || true
+    if ! _webhook_ci_artifact_ok "$artifact" "$asset_hint"; then
+      warn "站点 ${domain} 跳过: artifact 不匹配（期望含 ${asset_hint}，实际 ${artifact}）"
+      continue
+    fi
+    dl_url="$(_webhook_github_release_asset_download_url "$repository" "$tag" "$artifact")" \
+      || { warn "站点 ${domain} 跳过: 无法构造 release 下载地址"; continue; }
+    if _webhook_deploy_gateway_release "$domain" "$body_file" "${app:-}" "$tag" "$dl_url"; then
+      matched=1
+    else
+      warn "站点 ${domain} gateway release 部署未执行（见上方原因）"
+    fi
+  done < <(_webhook_sites_for_repo "$norm")
+
+  if [[ "$matched" -eq 1 ]]; then
+    info "webhook 处理完成: 已触发 gateway 部署"
+    return 0
+  fi
+  if [[ "$site_count" -eq 0 ]]; then
+    info "webhook 处理完成: 无已启用 webhook 站点匹配仓库 ${norm}（slug=$(_webhook_repo_slug "$norm")）"
+  else
+    info "webhook 处理完成: 仓库 ${norm} 有 ${site_count} 个站点，均未触发 gateway 部署（见上方跳过原因）"
+  fi
+  return 0
+}
+
 _webhook_process_ci_static_release() {
   local body_file="$1" headers_file="${2:-}"
   local parsed repository="" tag="" artifact="" app="" release="" bearer norm dl_url
@@ -995,6 +1208,11 @@ _webhook_process_ci_static_release() {
 
 _webhook_process_payload() {
   local body_file="$1" event="${2:-}" gh_sig="${3:-}" gitee_token="${4:-}" headers_file="${5:-}"
+
+  if _webhook_parse_ci_gateway_release "$body_file" &>/dev/null; then
+    _webhook_process_ci_gateway_release "$body_file" "$headers_file"
+    return $?
+  fi
 
   if _webhook_parse_ci_static_release "$body_file" &>/dev/null; then
     _webhook_process_ci_static_release "$body_file" "$headers_file"

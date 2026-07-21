@@ -801,6 +801,11 @@ cmd_add() {
       printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
       printf "  %-18s %s\n" "增量部署" \
         "$([[ "$(_webhook_normalize_incremental "${WEBHOOK_INCREMENTAL:-0}")" = 1 ]] && echo 是 || echo 否)"
+    elif [[ "$SITE_TYPE" = "pm2" && "${WEBHOOK_MODE:-}" = "release" ]]; then
+      printf "  %-18s %s\n" "部署"   "Webhook Gateway Release（不 clone）"
+      printf "  %-18s %s\n" "仓库(匹配)" "${GIT_REPO}"
+      printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
+      printf "  %-18s %s\n" "附件关键字" "${WEBHOOK_ASSET_NAME:-自动}"
     elif [[ -n "$GIT_REPO" ]]; then
       printf "  %-18s %s\n" "Git" "${GIT_REPO}${GIT_BRANCH:+ (${GIT_BRANCH})}"
     else
@@ -875,6 +880,11 @@ cmd_add() {
     fix_site_readable_for_nginx "$DOMAIN" "frontend" ""
     info "Webhook Release：跳过 git clone"
     warn "请发布匹配的 Release 触发 webhook，或手动上传静态文件到 ${WWW_ROOT}/${DOMAIN}/"
+  elif _adding_pm2_release_webhook; then
+    mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge" "${WWW_ROOT}/${DOMAIN}/logs" "${WWW_ROOT}/${DOMAIN}/data"
+    chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
+    info "Webhook Gateway Release：跳过 git clone"
+    warn "请先在 ${WWW_ROOT}/${DOMAIN}/ 配置 .env.production 与 .env.production.local，再推送 gateway tag 触发 CI"
   else
     deploy_code "$DOMAIN" "$GIT_REPO" "$GIT_BRANCH"
     ok "代码部署完成"
@@ -891,7 +901,17 @@ cmd_add() {
   elif [[ "$SITE_TYPE" = "pm2" ]]; then
     mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}/.well-known" 2>/dev/null || true
-    setup_pm2 "$DOMAIN"
+    apply_site_pm2_port_cli "$DOMAIN"
+    apply_site_pm2_cmd_cli "$DOMAIN"
+    local port
+    port="$(allocate_pm2_port "$DOMAIN" "${SITE_PM2_PORT:-8787}")"
+    printf '%s\n' "$port" > "$(site_pm2_port_file "$DOMAIN")"
+    chmod 644 "$(site_pm2_port_file "$DOMAIN")" 2>/dev/null || true
+    if _adding_pm2_release_webhook && [[ ! -f "${WWW_ROOT}/${DOMAIN}/package.json" ]]; then
+      warn "待 gateway-release webhook 推送产物后再启动 PM2（端口已预留: ${port}）"
+    else
+      setup_pm2 "$DOMAIN"
+    fi
     gen_nginx_pm2 "$DOMAIN"
     wait_container_running "lnmp-nginx" 45
     docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"

@@ -268,8 +268,9 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
   - **端口**：写入 `**conf.d/<域名>.pm2-port**`；`**--pm2-port**` 可指定，留空或 `-` 则从 **3000** 起自动分配（避开已占用端口与其它站点）。
   - **启动命令**：写入 `**conf.d/<域名>.pm2-cmd**`；未指定时按顺序检测 `ecosystem.config.cjs` → `ecosystem.config.js` → `package.json` 的 `scripts.start`（`npm start`）；可用 `**--pm2-cmd**` 覆盖。
   - **进程名**：`lnmp-<域名中点换横线>`（如 `api.example.com` → `lnmp-api-example-com`）；启动时注入 `PORT`、`HOST=0.0.0.0`、`NODE_ENV=production`。
-  - **构建**：`**--pm2-build=y|n**`（默认 y）；`package.json` 无 `build` 脚本则跳过。
-  - **update**：`git pull`（若有 `.git`）→ 依赖安装 → build → `pm2 reload`；可 `**--pm2-port**` / `**--pm2-cmd**` / `**--pm2-build**` 更新行为。
+- **构建**：`**--pm2-build=y|n**`（默认 y）；`package.json` 无 `build` 脚本则跳过。
+- **Nginx**：反代块内置 `client_max_body_size 110m`（Gateway PPTX 上传）；`update` 或 webhook 部署后会 `nginx reload`。
+- **update**：`git pull`（若有 `.git`）→ 依赖安装 → build → `pm2 reload`；可 `**--pm2-port**` / `**--pm2-cmd**` / `**--pm2-build**` 更新行为。
   - **remove**：删除 PM2 进程及 `**.pm2-port**`、`**.pm2-cmd**`、`**.site-type**` 等元数据。
   - **无数据库 / PHP / crontab**：PM2 站点跳过 Laravel 的 DB、composer、Horizon 等步骤。
 - **Git**：`**--git=` 留空或省略**跳过 clone/pull；`**--git-branch`** 指定分支/标签（clone 使用

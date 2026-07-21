@@ -321,6 +321,9 @@ server {
     ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
     ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
 
+    # Gateway PPTX 上传（与 packages/gateway IMPORT_MAX_BYTES 默认 100MB 对齐）
+    client_max_body_size 110m;
+
     add_header X-Frame-Options            "SAMEORIGIN"                        always;
     add_header X-Content-Type-Options     "nosniff"                           always;
     add_header X-XSS-Protection           "1; mode=block"                    always;
