@@ -63,6 +63,7 @@ _source_lib lib/init/docker.sh
 _source_lib lib/init/ssh.sh
 _source_lib lib/init/accounts.sh
 _source_lib lib/init/lnmp.sh
+_source_lib lib/init/pm2.sh
 _source_lib lib/init/status.sh
 _source_lib lib/init/interactive.sh
 _source_lib lib/init/saferm.sh
@@ -95,6 +96,7 @@ usage() {
   redis       Redis 容器
   acme        ACME 证书容器
   phpmyadmin  phpMyAdmin 容器
+  pm2         Node.js + PM2（devops 用户，供 deploy-site --type=pm2）
   wheel       Wheel 管理员
   cyber       等保加固
   devops      Devops 部署用户
@@ -104,6 +106,8 @@ usage() {
   --gh-proxy=URL          GitHub 代理
   --docker-mirrors=URL,.. Docker 镜像源（逗号分隔）
   --alpine-mirror=HOST    Alpine 源
+  --node-version=VER     Node.js 主版本（fnm，默认 22）
+  --node-mirror=URL      Node 二进制镜像 [https://npmmirror.com/mirrors/node]
   --php-version=VER       PHP 主版本，对应 php:VER-fpm-alpine（如 8.3）
   --php-ext=EXT,...       PHP 扩展（逗号分隔）
   --nginx-image=IMG       Nginx 镜像 (如 nginx:stable-alpine)
@@ -124,6 +128,7 @@ usage() {
   $0                                    # 交互模式
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
+  $0 install pm2 --node-version=22
   $0 install lnmp --php-version=8.3 --mysql-pwd=secret --acme-email=a@b.com
   $0 update lnmp
   $0 update lnmp nginx
@@ -159,6 +164,8 @@ main() {
       --docker-mirrors=*) DOCKER_MIRRORS_STR="${arg#*=}" ;;
       --alpine-mirror=*)  ALPINE_MIRROR="${arg#*=}" ;;
       --php-version=*)    PHP_VERSION="${arg#*=}" ;;
+      --node-version=*)   NODE_VERSION="${arg#*=}" ;;
+      --node-mirror=*)    FNM_NODE_DIST_MIRROR="${arg#*=}" ;;
       --php-ext=*)        PHP_EXTENSIONS="${arg#*=}" ;;
       --nginx-image=*)    NGINX_IMAGE="${arg#*=}" ;;
       --mysql-image=*)    MYSQL_IMAGE="${arg#*=}" ;;
@@ -201,6 +208,7 @@ main() {
         redis)    LNMP_SERVICES="${LNMP_SERVICES},redis";  install_lnmp "redis" ;;
         acme)     LNMP_SERVICES="${LNMP_SERVICES},acme";   install_lnmp "acme" ;;
         phpmyadmin) LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
+        pm2)      install_pm2 ;;
         wheel)    setup_wheel_user ;;
         cyber)    setup_cyber_users ;;
         devops)   setup_devops_user ;;
@@ -243,6 +251,7 @@ main() {
         redis)    uninstall_lnmp "redis" ;;
         acme)     uninstall_lnmp "acme" ;;
         phpmyadmin) uninstall_lnmp "phpmyadmin" ;;
+        pm2)      uninstall_pm2 ;;
         saferm)   uninstall_saferm ;;
         *)        die "未知组件: $target" ;;
       esac

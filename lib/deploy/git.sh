@@ -72,9 +72,14 @@ deploy_code() {
   fi
 
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}"
-  local _dc_st="laravel" _dc_fe=""
-  [[ -f "${site_dir}/artisan" ]] || _dc_st="frontend"
+  local _dc_st="${SITE_TYPE:-}"
+  if [[ -z "$_dc_st" ]]; then
+    _dc_st="$(_site_type_for_domain "$domain")"
+  fi
+  local _dc_fe=""
   [[ "$_dc_st" = "frontend" ]] && _dc_fe=$(effective_frontend_subdir "$domain")
-  fix_site_readable_for_nginx "$domain" "$_dc_st" "$_dc_fe"
+  if [[ "$_dc_st" != "pm2" ]]; then
+    fix_site_readable_for_nginx "$domain" "$_dc_st" "$_dc_fe"
+  fi
 }
 

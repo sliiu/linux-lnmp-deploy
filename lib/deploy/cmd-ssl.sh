@@ -7,8 +7,8 @@ cmd_ssl() {
   local site_dir="${WWW_ROOT}/${DOMAIN}"
   [[ -d "$site_dir" ]] || die "站点 ${DOMAIN} 不存在"
 
-  local site_type="laravel"
-  [[ -f "${site_dir}/artisan" ]] || site_type="frontend"
+  local site_type
+  site_type="$(_site_type_for_domain "$DOMAIN")"
 
   container_ok "lnmp-acme" || die "lnmp-acme 未运行"
 
@@ -71,7 +71,10 @@ usage() {
   --webhook-no-incremental  同 --webhook-incremental=n
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
   --rollback-index=N    rollback 序号（同 --rollback-to 数字形式）
-  --type=laravel|frontend  站点类型 [默认: laravel]
+  --type=laravel|frontend|pm2  站点类型 [默认: laravel]
+  --pm2-port=端口       PM2 监听端口（留空或 - = 自动分配）[默认: 3000 起]
+  --pm2-cmd=命令        PM2 启动命令（留空=自动检测 ecosystem / npm start）
+  --pm2-build=y|n       PM2 部署时是否执行 build [y]
   --php-version=主版本   站点 PHP 版本（如 8.2 / 7.4），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
                        写入 ${NGINX_CONF}/<域名>.php-version；nginx fastcgi 与 composer/artisan/cron/horizon 自动路由到对应容器
   --app-name=名称       APP_NAME [Laravel]
@@ -120,7 +123,8 @@ usage() {
   $0 add --domain=x.com --git=... --dns=dns_ali --ali-key=AK --ali-secret=SK
   $0 add --domain=x.com --git=   # 或省略 --git，配合事先放入 ${DATA_DIR:-/data/docker-lnmp}/www/x.com
   $0 add --domain=legacy.com --git=... --php-version=7.4   # 该站使用 lnmp-php74
-  $0 update --domain=api.example.com --php-version=8.2     # 切到 lnmp-php82
+  $0 add --domain=api.example.com --type=pm2 --git=git@github.com:org/node-api.git --pm2-port=3000
+  $0 update --domain=api.example.com --pm2-build=y
 EOF
 }
 

@@ -4,6 +4,8 @@ conf_load() {
   GH_PROXY="${GH_PROXY:-}"
   DOCKER_MIRRORS_STR="${DOCKER_MIRRORS_STR:-}"
   ALPINE_MIRROR="${ALPINE_MIRROR:-mirrors.aliyun.com}"
+  NODE_VERSION="${NODE_VERSION:-22}"
+  FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
   PHP_VERSION="${PHP_VERSION:-8.3}"
   EXTRA_PHP_VERSIONS="${EXTRA_PHP_VERSIONS:-}"
   PHP_EXTENSIONS="${PHP_EXTENSIONS:-pdo_mysql,opcache,mysqli,curl,gd,xml,dom,pcntl,bcmath,sockets,mbstring,zip,exif,intl,fileinfo,redis}"
@@ -31,6 +33,8 @@ conf_load() {
 conf_save() {
   cat > "$CONF_FILE" <<EOF
 DEVOPS_USER=${DEVOPS_USER}
+NODE_VERSION=${NODE_VERSION}
+FNM_NODE_DIST_MIRROR=${FNM_NODE_DIST_MIRROR}
 GH_PROXY=${GH_PROXY}
 DOCKER_MIRRORS_STR=${DOCKER_MIRRORS_STR}
 ALPINE_MIRROR=${ALPINE_MIRROR}

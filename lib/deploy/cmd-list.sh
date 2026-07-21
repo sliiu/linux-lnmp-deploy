@@ -59,6 +59,7 @@ _status_print_hints() {
   [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" != "laravel" ]] \
     && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 php-fpm 异常，查看下方 Nginx error.log 中 upstream/fastcgi 报错")
+  [[ "$code_https" = "502" ]] && [[ "$site_type" = "pm2" ]] && issues+=("502：多为 PM2 进程未运行或端口不匹配，检查 pm2 status 与 ${NGINX_CONF}/${d}.pm2-port")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "frontend" ]] && issues+=("404：确认构建产物在 ${WWW_ROOT}/${d}${fe_sub:+/}${fe_sub} 且含 index.html")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "laravel" ]] && issues+=("404：确认 ${WWW_ROOT}/${d}/public 存在且含 index.php")
   if [[ ${#issues[@]} -gt 0 ]]; then
@@ -139,9 +140,8 @@ cmd_status() {
     hr; info "站点: ${dom}"; echo ""
 
     local site_dir="${WWW_ROOT}/${dom}"
-    local site_type="laravel"
-    [[ -f "${site_dir}/artisan" ]] || site_type="frontend"
-    local fe_sub="" doc_host code_http code_https
+    local site_type fe_sub="" doc_host code_http code_https
+    site_type="$(_site_type_for_domain "$dom")"
     if [[ "$site_type" = "frontend" ]]; then
       fe_sub=$(effective_frontend_subdir "$dom")
       doc_host="${site_dir}${fe_sub:+/}${fe_sub}"
@@ -163,6 +163,18 @@ cmd_status() {
 
     if [[ "$site_type" = "laravel" ]]; then
       [[ -f "${site_dir}/public/index.php" ]] && ok "Laravel public/index.php 存在" || warn "缺少 public/index.php"
+    elif [[ "$site_type" = "pm2" ]]; then
+      [[ -f "${site_dir}/package.json" ]] && ok "Node package.json 存在" || warn "缺少 package.json"
+      local _pport _papp
+      _pport="$(pm2_port_for_site "$dom" 2>/dev/null || echo '?')"
+      _papp="$(pm2_app_name "$dom")"
+      info "PM2 应用: ${_papp}  端口: ${_pport}"
+      if su - "${DEVOPS_USER}" -c "pm2 describe '${_papp}' &>/dev/null"; then
+        ok "PM2 进程在线"
+        su - "${DEVOPS_USER}" -c "pm2 describe '${_papp}' 2>/dev/null" | sed -n '1,12p' | sed 's/^/  /' || true
+      else
+        warn "PM2 进程未运行（${_papp}）"
+      fi
     else
       [[ -f "${doc_host}/index.html" ]] && ok "前端 index.html: ${doc_host}/index.html" || warn "缺少 index.html（文档根: ${doc_host}）"
     fi
@@ -252,11 +264,8 @@ cmd_list() {
     local type="unknown" status="无代码"
     local site_dir="${WWW_ROOT}/${name}"
 
-    if [[ -f "${site_dir}/artisan" ]]; then
-      type="laravel"
-    elif [[ -d "${site_dir}" ]]; then
-      type="frontend"
-    fi
+    type="$(_site_type_for_domain "$name")"
+    [[ "$type" = "frontend" && ! -d "${site_dir}" ]] && type="unknown"
 
     if [[ -d "${site_dir}/.git" ]] || [[ -f "${site_dir}/artisan" ]] \
       || { [[ -d "${site_dir}" ]] && [[ -n "$(ls -A "${site_dir}" 2>/dev/null)" ]]; }; then
@@ -273,15 +282,24 @@ cmd_list() {
       cron="有"
     fi
 
-    local php_v="default" _vv lv_v="-"
+    local php_v="default" _vv lv_v="-" pm2_p="-"
     _vv="$(_php_ver_for_site "$name")"
     [[ -n "$_vv" ]] && php_v="$_vv"
     if [[ "$type" = "laravel" ]]; then
       local _lvv; _lvv="$(_laravel_min_for_site "$name")"
       [[ -n "$_lvv" ]] && lv_v="$_lvv"
+    elif [[ "$type" = "pm2" ]]; then
+      pm2_p="$(pm2_port_for_site "$name" 2>/dev/null || echo '-')"
+      lv_v="-"
+      php_v="-"
     fi
-    printf "  %-30s 类型:%-10s Laravel:%-6s PHP:%-8s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
-      "$name" "$type" "$lv_v" "$php_v" "$status" "$ssl" "$cron"
+    if [[ "$type" = "pm2" ]]; then
+      printf "  %-30s 类型:%-10s 端口:%-6s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
+        "$name" "$type" "$pm2_p" "$status" "$ssl" "$cron"
+    else
+      printf "  %-30s 类型:%-10s Laravel:%-6s PHP:%-8s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
+        "$name" "$type" "$lv_v" "$php_v" "$status" "$ssl" "$cron"
+    fi
   done
 
   [[ $found -eq 0 ]] && info "暂无站点"

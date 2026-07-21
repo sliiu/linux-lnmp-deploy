@@ -432,6 +432,7 @@ _interactive_full_install() {
     "等保加固 (cyber 三权用户)" \
     "Docker (LNMP 前置)" \
     "LNMP (nginx + php + mysql + redis + acme)" \
+    "PM2 (Node.js + pm2，deploy-site 用)" \
     "SSH 安全策略 (改端口/禁 root)" \
     "Firewalld (防火墙)" \
     "BBR (TCP 拥塞)" \
@@ -440,12 +441,12 @@ _interactive_full_install() {
     "saferm 安全删除"
   sel=$MENU_MULTI_RESULT
 
-  local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_wheel=0 sel_saferm=0
+  local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_pm2=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
     case "$idx" in
-      0) sel_cyber=1 ;; 1) sel_docker=1 ;; 2) sel_lnmp=1 ;;  3) sel_ssh=1 ;;
-      4) sel_fire=1 ;;  5) sel_bbr=1 ;;    6) sel_zsh=1 ;;   7) sel_wheel=1 ;;
-      8) sel_saferm=1 ;;
+      0) sel_cyber=1 ;; 1) sel_docker=1 ;; 2) sel_lnmp=1 ;; 3) sel_pm2=1 ;;
+      4) sel_ssh=1 ;;  5) sel_fire=1 ;;  6) sel_bbr=1 ;;  7) sel_zsh=1 ;;
+      8) sel_wheel=1 ;; 9) sel_saferm=1 ;;
     esac
   done
 
@@ -468,8 +469,8 @@ _interactive_full_install() {
     WHEEL_USER=$PROMPT_RESULT
   fi
 
-  # 2) 仅当真用得到 GitHub 时才问代理（zsh / lnmp 需要 acme.sh 等）
-  if [[ $sel_zsh -eq 1 || $sel_lnmp -eq 1 || $sel_saferm -eq 1 ]]; then
+  # 2) 仅当真用得到 GitHub 时才问代理（zsh / lnmp / pm2 需要）
+  if [[ $sel_zsh -eq 1 || $sel_lnmp -eq 1 || $sel_pm2 -eq 1 || $sel_saferm -eq 1 ]]; then
     collect_github_proxy
   fi
 
@@ -484,6 +485,8 @@ _interactive_full_install() {
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "acme"; then collect_acme_email; fi
   fi
+
+  if [[ $sel_pm2 -eq 1 ]]; then collect_node_version; fi
 
   # 5) SSH 安全策略（最后问：会改 sshd 配置，留给末尾减少变更冲突）
   if [[ $sel_ssh -eq 1 ]]; then collect_ssh_config; fi
@@ -514,6 +517,7 @@ _interactive_full_install() {
   fi
   if [[ $sel_ssh -eq 1 ]]; then printf "  %-20s %s\n" "SSH" "root=${ROOT_LOGIN}, 端口=${SSH_PORT}"; fi
   if [[ $sel_wheel -eq 1 ]]; then printf "  %-20s %s\n" "Wheel 管理员" "$WHEEL_USER"; fi
+  if [[ $sel_pm2 -eq 1 ]]; then printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"; fi
   if [[ $sel_saferm -eq 1 ]]; then printf "  %-20s %s\n" "saferm" "安装"; fi
   echo ""
 
@@ -530,6 +534,7 @@ _interactive_full_install() {
 
   if [[ $sel_docker -eq 1 ]]; then install_docker; fi
   if [[ $sel_lnmp -eq 1 ]]; then install_lnmp; fi
+  if [[ $sel_pm2 -eq 1 ]]; then install_pm2; fi
   if [[ $sel_zsh -eq 1 ]]; then install_zsh; fi
   if [[ $sel_ssh -eq 1 ]]; then install_ssh; fi
   if [[ $sel_saferm -eq 1 ]]; then install_saferm; fi
@@ -552,6 +557,7 @@ _interactive_install_one() {
     "LNMP - acme" \
     "LNMP - phpMyAdmin" \
     "Docker" \
+    "PM2 (Node.js)" \
     "Devops 用户" \
     "Wheel 管理员" \
     "SSH 安全策略" \
@@ -581,14 +587,15 @@ _interactive_install_one() {
     5)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
     6)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
     7)  collect_docker_mirrors; install_docker ;;
-    8)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
-    9)  prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
-    10) collect_ssh_config; install_ssh ;;
-    11) install_firewall ;;
-    12) install_bbr ;;
-    13) collect_github_proxy; install_zsh ;;
-    14) install_saferm ;;
-    15) setup_cyber_users ;;
+    8)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_node_version; install_pm2 ;;
+    9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+    10) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
+    11) collect_ssh_config; install_ssh ;;
+    12) install_firewall ;;
+    13) install_bbr ;;
+    14) collect_github_proxy; install_zsh ;;
+    15) install_saferm ;;
+    16) setup_cyber_users ;;
   esac
   conf_save
 }
@@ -598,6 +605,7 @@ _interactive_uninstall_one() {
   menu_select "选择要卸载的组件（高危操作前会二次确认）" \
     "LNMP - php"   "LNMP - mysql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin" \
     "LNMP (全部)" "Docker" \
+    "PM2 (Node.js)" \
     "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
   idx=$MENU_SELECT_RESULT
 
@@ -612,7 +620,8 @@ _interactive_uninstall_one() {
     5) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
     6) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
     7) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
-    8) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
+    8) _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
+    9) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
   esac
   if [[ -n "$_danger_msg" ]]; then
     warn "$_danger_msg"
@@ -628,11 +637,12 @@ _interactive_uninstall_one() {
     5)  uninstall_lnmp "phpmyadmin" ;;
     6)  uninstall_lnmp "all" ;;
     7)  uninstall_docker ;;
-    8)  uninstall_ssh ;;
-    9)  uninstall_firewall ;;
-    10) uninstall_bbr ;;
-    11) uninstall_zsh ;;
-    12) uninstall_saferm ;;
+    8)  uninstall_pm2 ;;
+    9)  uninstall_ssh ;;
+    10) uninstall_firewall ;;
+    11) uninstall_bbr ;;
+    12) uninstall_zsh ;;
+    13) uninstall_saferm ;;
   esac
   conf_save
 }
@@ -650,6 +660,7 @@ _interactive_config() {
     "SSH 配置" \
     "ACME 邮箱" \
     "ACME SSL 默认 (deploy-site)" \
+    "Node.js 版本 (PM2)" \
     "Devops 用户"
   idx=$MENU_SELECT_RESULT
 
@@ -688,7 +699,8 @@ _interactive_config() {
        fi
        ;;
     9) collect_acme_ssl_dns_default ;;
-    10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+    10) collect_node_version; if is_pm2_ok; then install_pm2; else ok "已写入配置（执行「安装单个组件 → PM2」后生效）"; fi ;;
+    11) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
   esac
   conf_save
   ok "配置已更新"

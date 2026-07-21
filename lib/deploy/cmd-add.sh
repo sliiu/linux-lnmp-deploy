@@ -212,6 +212,7 @@ NEED_DB="" DB_HOST="" DB_NAME="" DB_PWD=""
 DB_PWD_FROM_CLI=0
 CREATE_DB="" RUN_MIGRATE="" RUN_SEED="" ADD_CRONTAB="" NEED_HORIZON=""
 FRONTEND_ROOT=""
+SITE_PM2_PORT="" SITE_PM2_PORT_CLI=0 SITE_PM2_CMD="" SITE_PM2_CMD_CLI=0 PM2_BUILD=""
 SSL_DNS="" CF_TOKEN="" FORCE_SSL="" SSL_STAGING=0
 ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
 AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" TENCENT_SECRET_ID="" TENCENT_SECRET_KEY=""
@@ -260,6 +261,7 @@ reset_menu_deploy_state() {
   ADD_CRONTAB=""
   NEED_HORIZON=""
   FRONTEND_ROOT=""
+  SITE_PM2_PORT="" SITE_PM2_PORT_CLI=0 SITE_PM2_CMD="" SITE_PM2_CMD_CLI=0 PM2_BUILD=""
   SSL_DNS=""
   CF_TOKEN=""
   FORCE_SSL=""
@@ -385,6 +387,19 @@ parse_args() {
       --need-horizon)    shift; NEED_HORIZON="$1" ;;
       --frontend-root=*) FRONTEND_ROOT="${1#*=}" ;;
       --frontend-root)   shift; FRONTEND_ROOT="$1" ;;
+      --pm2-port=*)      SITE_PM2_PORT="${1#*=}"; SITE_PM2_PORT_CLI=1 ;;
+      --pm2-port)
+        SITE_PM2_PORT_CLI=1
+        if [[ $# -ge 2 && -n "$2" && "$2" != --* ]]; then
+          shift; SITE_PM2_PORT="$1"
+        else
+          SITE_PM2_PORT=""
+        fi
+        ;;
+      --pm2-cmd=*)       SITE_PM2_CMD="${1#*=}"; SITE_PM2_CMD_CLI=1 ;;
+      --pm2-cmd)         shift; SITE_PM2_CMD="$1"; SITE_PM2_CMD_CLI=1 ;;
+      --pm2-build=*)     PM2_BUILD="${1#*=}" ;;
+      --pm2-build)       shift; PM2_BUILD="$1" ;;
       --webhook=*)       WEBHOOK_MODE="${1#*=}"; WEBHOOK_ENABLE=1 ;;
       --webhook)         shift; WEBHOOK_MODE="$1"; WEBHOOK_ENABLE=1 ;;
       --webhook-release-name=*) WEBHOOK_RELEASE_NAME="${1#*=}" ;;
@@ -644,12 +659,22 @@ collect_interactive() {
   if [[ "${SITE_TYPE_CLI:-0}" -ne 1 ]]; then
     SITE_TYPE=""
     local _st_i
-    menu_select "站点类型" "laravel (PHP 后端)" "frontend (静态/SPA)"
+    menu_select "站点类型" \
+      "laravel (PHP 后端)" \
+      "frontend (静态/SPA)" \
+      "pm2 (Node.js 应用)"
     _st_i=$MENU_SELECT_RESULT
-    [[ "$_st_i" -eq 1 ]] && SITE_TYPE="frontend" || SITE_TYPE="laravel"
+    case "$_st_i" in
+      1) SITE_TYPE="frontend" ;;
+      2) SITE_TYPE="pm2" ;;
+      *) SITE_TYPE="laravel" ;;
+    esac
   fi
   SITE_TYPE=${SITE_TYPE:-laravel}
-  [[ "$SITE_TYPE" != "laravel" && "$SITE_TYPE" != "frontend" ]] && SITE_TYPE="laravel"
+  case "$SITE_TYPE" in
+    laravel|frontend|pm2) ;;
+    *) SITE_TYPE="laravel" ;;
+  esac
 
   if [[ "$SITE_TYPE" = "frontend" ]]; then
     _collect_frontend_source_interactive
@@ -722,7 +747,16 @@ collect_interactive() {
       fi
     fi
   else
-    if [[ "${WEBHOOK_MODE:-}" != "release" ]]; then
+    if [[ "$SITE_TYPE" = "pm2" ]]; then
+      [[ -z "$SITE_PM2_PORT" ]] && SITE_PM2_PORT=$(prompt "PM2 监听端口（留空=自动分配，从 3000 起）" "3000")
+      [[ "$SITE_PM2_PORT" = "auto" || "$SITE_PM2_PORT" = "-" ]] && SITE_PM2_PORT=""
+      [[ -n "$SITE_PM2_PORT" ]] && SITE_PM2_PORT_CLI=1
+      [[ -z "$SITE_PM2_CMD" ]] && SITE_PM2_CMD=$(prompt "PM2 启动命令（留空=自动检测 ecosystem / npm start）" "")
+      [[ -n "$SITE_PM2_CMD" ]] && SITE_PM2_CMD_CLI=1
+      if [[ -z "${PM2_BUILD:-}" ]]; then
+        confirm "部署时执行 npm/pnpm/yarn build？" "y" && PM2_BUILD=y || PM2_BUILD=n
+      fi
+    elif [[ "${WEBHOOK_MODE:-}" != "release" ]]; then
       [[ -z "$FRONTEND_ROOT" ]] && FRONTEND_ROOT=$(prompt "前端子目录（相对站点目录，留空则：有 dist 目录→dist，否则→站点根）" "")
     fi
   fi
@@ -790,6 +824,10 @@ cmd_add() {
       printf "  %-18s %s\n" "cron / Horizon" "${ADD_CRONTAB:-y} / ${NEED_HORIZON:-y}"
       printf "  %-18s %s\n" "APP_NAME" "${APP_NAME:-Laravel}"
       [[ ${#CUSTOM_ENV[@]} -gt 0 ]] && printf "  %-18s %s\n" "自定义 ENV" "${#CUSTOM_ENV[@]} 项"
+    elif [[ "$SITE_TYPE" = "pm2" ]]; then
+      printf "  %-18s %s\n" "PM2 端口" "${SITE_PM2_PORT:-自动分配}"
+      printf "  %-18s %s\n" "PM2 命令" "${SITE_PM2_CMD:-自动检测}"
+      printf "  %-18s %s\n" "构建" "${PM2_BUILD:-y}"
     else
       if [[ "${WEBHOOK_MODE:-}" = "release" ]]; then
         printf "  %-18s %s\n" "静态根" "${WWW_ROOT}/${DOMAIN}/（Release 产物直出）"
@@ -819,6 +857,10 @@ cmd_add() {
     docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
     docker exec lnmp-nginx nginx -s reload
     ok "Nginx 配置已生成"
+    write_site_type_file "$DOMAIN" "laravel"
+  elif [[ "$SITE_TYPE" = "pm2" ]]; then
+    info "PM2 站点：Nginx 反代在代码部署与 PM2 启动后生成"
+    write_site_type_file "$DOMAIN" "pm2"
   else
     if _adding_frontend_release_webhook; then
       info "前端站点：Webhook Release，Nginx 根目录 = 站点目录（待 Release 推送后写入产物）"
@@ -851,6 +893,16 @@ cmd_add() {
     docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
     docker exec lnmp-nginx nginx -s reload
     ok "Nginx 配置已生成"
+    write_site_type_file "$DOMAIN" "frontend"
+  elif [[ "$SITE_TYPE" = "pm2" ]]; then
+    mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
+    chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}/.well-known" 2>/dev/null || true
+    setup_pm2 "$DOMAIN"
+    gen_nginx_pm2 "$DOMAIN"
+    wait_container_running "lnmp-nginx" 45
+    docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
+    docker exec lnmp-nginx nginx -s reload
+    ok "Nginx 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$DOMAIN")）"
   fi
 
   echo ""
@@ -858,6 +910,8 @@ cmd_add() {
   if container_ok "lnmp-acme"; then
     if [[ "$SITE_TYPE" = "frontend" ]]; then
       issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "${_fe_sub}"
+    elif [[ "$SITE_TYPE" = "pm2" ]]; then
+      issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" ""
     else
       issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "dist"
     fi
@@ -896,6 +950,19 @@ cmd_add() {
     ok "Laravel 部署完成"
     info "访问: https://${DOMAIN}"
     info "目录: ${WWW_ROOT}/${DOMAIN}"
+    hr
+  elif [[ "$SITE_TYPE" = "pm2" ]]; then
+    echo ""
+    hr; info "[4/6] 跳过（PM2 无数据库）"
+    hr; info "[5/6] 跳过（PM2 无 PHP）"
+    hr; info "[6/6] 跳过（PM2 无 crontab）"
+    echo ""
+    hr
+    ok "PM2 站点部署完成"
+    info "访问: https://${DOMAIN}"
+    info "目录: ${WWW_ROOT}/${DOMAIN}"
+    info "PM2: $(pm2_app_name "$DOMAIN")  端口: $(pm2_port_for_site "$DOMAIN")"
+    info "日志: su - ${DEVOPS_USER} -c 'pm2 logs $(pm2_app_name "$DOMAIN")'"
     hr
   else
     echo ""
@@ -940,8 +1007,8 @@ cmd_update() {
   local site_dir="${WWW_ROOT}/${DOMAIN}"
   [[ -d "$site_dir" ]] || die "站点 ${DOMAIN} 不存在（${site_dir}）"
 
-  local site_type="laravel"
-  [[ -f "${site_dir}/artisan" ]] || site_type="frontend"
+  local site_type
+  site_type="$(_site_type_for_domain "$DOMAIN")"
 
   echo ""
   hr; info "更新站点: ${DOMAIN} (${site_type})"; echo ""
@@ -1056,6 +1123,18 @@ cmd_update() {
     if container_ok "lnmp-nginx"; then
       if docker exec lnmp-nginx nginx -t 2>&1; then
         docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload（与模板同步）" || warn "Nginx reload 失败"
+      else
+        warn "Nginx 配置校验失败，未 reload"
+      fi
+    fi
+  elif [[ "$site_type" = "pm2" ]]; then
+    apply_site_pm2_port_cli "$DOMAIN"
+    apply_site_pm2_cmd_cli "$DOMAIN"
+    reload_pm2_site "$DOMAIN"
+    gen_nginx_pm2 "$DOMAIN"
+    if container_ok "lnmp-nginx"; then
+      if docker exec lnmp-nginx nginx -t 2>&1; then
+        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload" || warn "Nginx reload 失败"
       else
         warn "Nginx 配置校验失败，未 reload"
       fi

@@ -287,6 +287,71 @@ NGINX
   fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
 }
 
+gen_nginx_pm2() {
+  local domain="$1" port="${2:-}"
+  [[ -n "$port" ]] || port="$(pm2_port_for_site "$domain")"
+  [[ "$port" =~ ^[0-9]+$ ]] || die "gen_nginx_pm2: 无效端口（${domain}）"
+
+  local upstream_host
+  upstream_host="$(_docker_host_gateway)"
+
+  cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
+server {
+    listen 80;
+    server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
+    root ${CONTAINER_WWW}/${domain};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CONTAINER_WWW}/${domain};
+        allow all;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
+
+    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
+    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
+
+    add_header X-Frame-Options            "SAMEORIGIN"                        always;
+    add_header X-Content-Type-Options     "nosniff"                           always;
+    add_header X-XSS-Protection           "1; mode=block"                    always;
+    add_header Referrer-Policy            "strict-origin-when-cross-origin"  always;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CONTAINER_WWW}/${domain};
+        allow all;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    location / {
+        proxy_pass         http://${upstream_host}:${port};
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host \$host;
+        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    location ~ /\.(?!well-known) { deny all; }
+}
+NGINX
+  fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
+}
+
 gen_nginx_frontend() {
   local domain="$1" sub="$2"
   local root_path="${CONTAINER_WWW}/${domain}"

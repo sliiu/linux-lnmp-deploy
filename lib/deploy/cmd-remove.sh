@@ -11,7 +11,11 @@ cmd_remove() {
 
   rm -f "${NGINX_CONF}/${DOMAIN}.sse-prefixes" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.php-version" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.site-type" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.pm2-port" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.pm2-cmd" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.webhook" 2>/dev/null || true
+  stop_pm2_site "$DOMAIN"
   if [[ -f "${NGINX_CONF}/${DOMAIN}.conf" ]]; then
     rm -f "${NGINX_CONF}/${DOMAIN}.conf"
     normalize_nginx_conf_d
