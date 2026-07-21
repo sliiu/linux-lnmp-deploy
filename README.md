@@ -51,9 +51,9 @@ sudo git -C /opt/alibaba-cloud-ecs-deployment pull --ff-only
 
 - `**bootstrap.sh**`：克隆/更新仓库到 `**INSTALL_DIR**` 后 `**exec**` 运行 `**init.sh**` 或 `**deploy-site.sh**`（参数透传）。
 - `**init.sh**`：以 **root** 安装/配置 BBR、防火墙、Docker、LNMP 容器、SSH、用户与可选等保加固；
-写入 `/etc/lnmp-env.conf`；可选安装 **saferm**（见下文「saferm」）。实现按领域拆在 `**lib/init/*.sh`**（如 `**config**`、`**lnmp**`、`**docker**`、`**saferm**` 等），由 `**init.sh**` 统一加载。
+写入 `/etc/lnmp-env.conf`；可选安装 **PM2 环境**（fnm + Node.js + pm2，见下文「PM2 环境」）、**saferm**（见下文「saferm」）。实现按领域拆在 `**lib/init/*.sh`**（如 `**config**`、`**lnmp**`、`**docker**`、`**pm2**`、`**saferm**` 等），由 `**init.sh**` 统一加载。
 - `**deploy-site.sh**`：以 **root** 在已有 LNMP 栈上 **新增/更新/删除/列举/状态/SSL** 站点：Nginx、可选 Git、SSL
-（acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、或静态前端。子命令实现在 `**lib/deploy/*.sh`**，由 `**deploy-site.sh**` 加载 `**lib/common.sh**` 与各 cmd 模块。
+（acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、静态前端、或 **PM2 Node.js 应用**（Nginx 反代宿主机进程）。子命令实现在 `**lib/deploy/*.sh`**，由 `**deploy-site.sh**` 加载 `**lib/common.sh**` 与各 cmd 模块。
 
 `**lib/common.sh**`：`die`、菜单、确认等共用函数，供两个入口脚本共用。
 
@@ -63,7 +63,7 @@ sudo git -C /opt/alibaba-cloud-ecs-deployment pull --ff-only
 
 - **执行用户**：两个脚本均须 **root**。
 - **顺序**：先在本机完成 `init.sh`（至少 Docker + LNMP 相关容器、devops 用户），再执行
-`deploy-site.sh`。
+`deploy-site.sh`。部署 `**--type=pm2**` 站点前还须 `**init.sh install pm2**`（或交互向导勾选 PM2）。
 - **数据目录**：默认 `/data/docker-lnmp`（站点代码在 `www/<域名>/`）。`deploy-site.sh` 会
 source `/etc/lnmp-env.conf`：`CONTAINER_WWW` 由 `init.sh` 写入该文件；若需改主机上的数据根目录，
 须**自行**在配置中加入 `LNMP_DATA_DIR=...`（`init.sh` 当前不会写入该项），并保证与现有
@@ -88,7 +88,8 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
 与扩展、ACME 邮箱、`**ACME_SSL_DNS_DEFAULT**`（`deploy-site` 交互默认 SSL 模式）、SSH 端口与 root
 策略、LNMP 组件列表等。
 - 可选模块：**SSH 加固**、**等保三权用户**、**BBR**、**Oh-My-Zsh**、**Firewalld**、
-**Docker**、**LNMP（docker-compose）**、**wheel 管理员**、**devops 用户**（将 `DEVOPS_USER`
+**Docker**、**LNMP（docker-compose）**、**PM2 环境**（fnm + Node.js + pm2，供 `deploy-site --type=pm2`）、
+**wheel 管理员**、**devops 用户**（将 `DEVOPS_USER`
 加入组 `**devops`**，sudoers 为 `%devops NOPASSWD: /usr/local/bin/deploy-site.sh`）、
 **saferm**（安全删除脚本，见「saferm」一节）。
 - LNMP：`/data/docker-lnmp/docker-compose.yml`，容器名 `lnmp-nginx`、`lnmp-php`、`lnmp-mysql`、
@@ -111,6 +112,7 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
    sudo ./init.sh install docker --docker-mirrors=https://docker.m.daocloud.io
    sudo ./init.sh install lnmp --php-version=8.3 --mysql-pwd='你的root密码' --acme-email=you@example.com
    sudo ./init.sh install ssh --ssh-port=22 --root-login=key
+   sudo ./init.sh install pm2 --node-version=22   # Node.js 站点：fnm + pm2（依赖 devops 用户）
    sudo ./init.sh install saferm   # 可选：安装安全删除到 /usr/local/bin/saferm
   ```
 5. **更新 LNMP 容器镜像**（按 `/etc/lnmp-env.conf` 中的镜像名拉取并重建；`update` 会重写
@@ -126,6 +128,25 @@ Docker Hub 等可拉取的镜像引用，与 `docker-compose` 中 `image:` 一�
 - `**sudo ./init.sh status**`：在 LNMP 区域会按已启用服务打印当前配置的镜像与 PHP 版本。
 - **菜单「4) 更新配置」**：含 **LNMP 组件镜像**；若本机已有 `docker-compose.yml`，改完后会执行与
 `**update lnmp`** 相同的拉取与重建流程（未安装 LNMP 时仅写入配置，待后续 `install lnmp` 生效）。
+
+### PM2 环境（init.sh）
+
+为 **Node.js 应用站点**（`deploy-site.sh --type=pm2`）在 **`DEVOPS_USER`**（默认 `devops`）下安装运行时：`**fnm**`、`**Node.js**`、全局 `**pm2**`，并配置 **systemd 开机自启**（`pm2 startup` + `pm2 save`）。逻辑在 `**lib/init/pm2.sh**`。
+
+**安装 / 卸载**：
+
+```bash
+sudo ./init.sh install pm2                    # 默认 Node 主版本 22
+sudo ./init.sh install pm2 --node-version=20
+sudo ./init.sh install pm2 --node-mirror=https://npmmirror.com/mirrors/node
+sudo ./init.sh uninstall pm2
+```
+
+- **前提**：`install pm2` 若 `devops` 用户不存在会先创建；全新安装向导中勾选 **PM2** 时会询问 Node 主版本。
+- **配置写入**：`NODE_VERSION`、`FNM_NODE_DIST_MIRROR` 会写入 `/etc/lnmp-env.conf`；`devops` 的 `~/.bashrc` 写入 fnm env 块（login shell 经 `~/.bash_profile` 加载）。
+- **镜像**：Node 二进制默认从 `FNM_NODE_DIST_MIRROR`（国内默认 npmmirror）拉取；npm 全局包默认 registry 为 `https://registry.npmmirror.com`。
+- **状态**：`sudo ./init.sh status` 显示 Node / pm2 版本；交互菜单 **「5) 查看状态」** 同理。
+- **GitHub**：下载 fnm 可走 `**--gh-proxy=**`（与 zsh / lnmp 相同）。
 
 ### saferm（安全删除）
 
@@ -196,12 +217,12 @@ saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
 
 ### 菜单项对照
 
-- **1 全新安装**：多选模块（含可选 **saferm**）后一次性执行。
-- **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器 / **saferm** 等。
-- **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录；可卸载 **saferm**。
-- **4 更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**LNMP 各组件镜像**（可触发单栈更新）、
+- **1 全新安装**：多选模块（含可选 **PM2**、**saferm**）后一次性执行。
+- **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器 / **PM2** / **saferm** 等。
+- **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录；可卸载 **PM2**、**saferm**。
+- **4 更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**Node.js 版本（PM2）**、**LNMP 各组件镜像**（可触发单栈更新）、
 SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等。
-- **5 查看状态**：BBR、Docker、容器、SSH、等保标记等。
+- **5 查看状态**：BBR、Docker、容器、**PM2 / Node.js**、SSH、等保标记等。
 - **6 账户管理**：用户/组、密码、authorized_keys、AllowUsers 与 `resync-allow`。
 
 ### 账户相关 CLI
@@ -241,6 +262,15 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 - **Laravel SSE（长连接）**：环境变量 `**LARAVEL_SSE_PREFIXES`** 为全局默认前缀列表（空格或逗号分隔，默认 `**wave**`）；`**--sse-prefixes=**` 或与 `**update**` 联用写入 `**conf.d/<域名>.sse-prefixes**`；亦可事后编辑该文件。细节以 `**deploy-site.sh --help**` 为准。
 - **frontend**：Nginx 在 **代码就绪后**生成。未指定 `**--frontend-root`** 时：若站点目录下存在
 `**dist/**` 则用 `dist`，否则 **站点根目录**即静态根。可用 `**--frontend-root`** 显式指定子目录。
+- **pm2**：Node.js 应用在 **宿主机**由 `**DEVOPS_USER**` 的 PM2 管理，`**lnmp-nginx**` 容器通过 Docker 网关 IP **反代**到宿主机监听端口（支持 WebSocket）。部署流程：Git clone/pull → 检测包管理器（pnpm / yarn / npm）→ `install` → 可选 `build` → PM2 启动/reload → 生成 Nginx 配置与 SSL。
+  - **前提**：已执行 `**init.sh install pm2**`；仍需 **Docker + lnmp-nginx**（及签发证书时的 **lnmp-acme**）。
+  - **端口**：写入 `**conf.d/<域名>.pm2-port**`；`**--pm2-port**` 可指定，留空或 `-` 则从 **3000** 起自动分配（避开已占用端口与其它站点）。
+  - **启动命令**：写入 `**conf.d/<域名>.pm2-cmd**`；未指定时按顺序检测 `ecosystem.config.cjs` → `ecosystem.config.js` → `package.json` 的 `scripts.start`（`npm start`）；可用 `**--pm2-cmd**` 覆盖。
+  - **进程名**：`lnmp-<域名中点换横线>`（如 `api.example.com` → `lnmp-api-example-com`）；启动时注入 `PORT`、`HOST=0.0.0.0`、`NODE_ENV=production`。
+  - **构建**：`**--pm2-build=y|n**`（默认 y）；`package.json` 无 `build` 脚本则跳过。
+  - **update**：`git pull`（若有 `.git`）→ 依赖安装 → build → `pm2 reload`；可 `**--pm2-port**` / `**--pm2-cmd**` / `**--pm2-build**` 更新行为。
+  - **remove**：删除 PM2 进程及 `**.pm2-port**`、`**.pm2-cmd**`、`**.site-type**` 等元数据。
+  - **无数据库 / PHP / crontab**：PM2 站点跳过 Laravel 的 DB、composer、Horizon 等步骤。
 - **Git**：`**--git=` 留空或省略**跳过 clone/pull；`**--git-branch`** 指定分支/标签（clone 使用
 `--single-branch`；已有仓库时 fetch + checkout + pull）。`**list**`：有 `.git`、或有 `artisan`、
 或站点目录非空则状态为「已部署」。
@@ -275,10 +305,10 @@ sudo chmod +x /usr/local/bin/deploy-site.sh
 - `**add**`：新站点；无参数时进入交互。
 - `**update**`：要求 `**www/<域名>/` 目录已存在**。若存在 `**.git`**：`git pull`（可选
 `**--git-branch**`）；若无 `.git`：跳过 Git 并提示。Laravel：**composer install**、可选 **migrate**、
-**optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**。自动化可加 `**--run-migrate=y|n`**（及同类 y/n）避免交互。
-- `**remove**`：删除 Nginx 配置、SSL 目录、**.sse-prefixes**、crontab/Horizon、可选删除代码目录。
-- `**list`**：列出 `conf.d` 下站点及类型、SSL、Cron、部署状态等。
-- `**status**`：`**--domain=<域名>**` 检查该站证书、容器、日志等；`**--all**` 遍历 `conf.d` 全部站点（概要）。
+**optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**；**pm2**：依赖安装、build、**pm2 reload** 并刷新 Nginx 反代。自动化可加 `**--run-migrate=y|n`**（及同类 y/n）避免交互。
+- `**remove**`：删除 Nginx 配置、SSL 目录、**.sse-prefixes**、crontab/Horizon、**PM2 进程**与 `**.pm2-port**` 等、可选删除代码目录。
+- `**list`**：列出 `conf.d` 下站点及类型、SSL、Cron、部署状态等；PM2 站点显示监听端口。
+- `**status**`：`**--domain=<域名>**` 检查该站证书、容器、**PM2 进程**、日志等；`**--all**` 遍历 `conf.d` 全部站点（概要）。
 - `**ssl**`：对已有站点重新签发/续期证书。
 - **（无参数）**：数字菜单（含站点运行状态一项），等价于选择上述功能。
 
@@ -324,9 +354,35 @@ sudo /usr/local/bin/deploy-site.sh add \
 # sudo ... add --domain=www.example.com --type=frontend --frontend-root=build
 ```
 
+PM2（Node.js API / SSR）站点示例：
+
+```bash
+# 1. 初始化 PM2 运行时（每台机器一次）
+sudo ./init.sh install pm2 --node-version=22
+
+# 2. 部署站点
+sudo /usr/local/bin/deploy-site.sh add \
+  --domain=api.example.com \
+  --git=git@github.com:org/node-api.git \
+  --git-branch=main \
+  --type=pm2 \
+  --pm2-port=3000
+
+# 自动端口、自定义启动命令、跳过 build
+# sudo ... add --domain=api.example.com --type=pm2 --git=... --pm2-port=-
+# sudo ... add --domain=api.example.com --type=pm2 --git=... --pm2-cmd='node dist/main.js'
+# sudo ... add --domain=api.example.com --type=pm2 --git=... --pm2-build=n
+
+sudo /usr/local/bin/deploy-site.sh update --domain=api.example.com --pm2-build=y
+
+# 查看 PM2 日志（devops 用户）
+su - devops -c 'pm2 logs lnmp-api-example-com'
+```
+
 ### 主要参数（add/ssl 等）
 
-- `**--domain**`、`**--git**`（可空=跳过 Git）、`**--git-branch**`、`--type=laravel|frontend`
+- `**--domain**`、`**--git**`（可空=跳过 Git）、`**--git-branch**`、`--type=laravel|frontend|pm2`
+- **PM2**：`**--pm2-port**`（留空或 `-` = 自动分配）、`**--pm2-cmd**`、`**--pm2-build=y|n**`（默认 y）
 - `**--php-version**`：仅当 init 已为该主版本配置 `**EXTRA_PHP_VERSIONS**`（或该版本即为默认 `**lnmp-php**`）时有效（见上文）。
 - **SSE**：`**--sse-prefixes=**`、环境变量 `**LARAVEL_SSE_PREFIXES**`
 - `**status**`：`**--all**` 或 `**--domain**`
@@ -356,6 +412,7 @@ sudo /usr/local/bin/deploy-site.sh add \
 `sudo /usr/local/bin/deploy-site.sh ...`（勿改组名，否则须同步改 sudoers）。
 - 默认 `**NEED_DB=y**` 的 Laravel 部署必须提供 `**--db-name**`（或交互输入）；`**update**` 对无
 `**.git**` 的目录不会执行 pull，请在主机上先同步好代码再执行。
+- **PM2 502**：多为进程未运行或端口与 `**conf.d/<域名>.pm2-port**` 不一致；`su - devops -c 'pm2 status'` 排查；应用须监听 `**PORT**` 环境变量（脚本已注入）或 `0.0.0.0`。
 
 ---
 
@@ -364,9 +421,9 @@ sudo /usr/local/bin/deploy-site.sh add \
 1. 控制台用 root 或密钥登录 ECS，按「快速使用」一节执行 `bootstrap.sh` 或 `git clone` 仓库到
   `/opt/alibaba-cloud-ecs-deployment`。
 2. `cd /opt/alibaba-cloud-ecs-deployment && sudo bash init.sh`（若已是 root 可省略 `sudo`），完成
-  Docker、LNMP、devops、SSH、防火墙、ACME 邮箱等。
+  Docker、LNMP、devops、SSH、防火墙、ACME 邮箱等；**Node.js 站点**另勾选或执行 `install pm2`。
 3. 若使用 Git：为 devops 配置 SSH 公钥，保证能 clone/pull 私有仓库。
-4. `sudo bash deploy-site.sh add`（或带全参数）添加站点；浏览器访问 `https://域名` 验证。
+4. `sudo bash deploy-site.sh add`（或带全参数）添加站点（Laravel / frontend / **pm2**）；浏览器访问 `https://域名` 验证。
   `**deploy-site.sh` 移到其它目录执行时须有同级 `**lib/**`（或与「安装到系统路径」一节相同做法）；否则依赖 curl/wget 从 `**_LIB_RAW_BASE**` 拉取缺失文件。
 
 ---
@@ -377,6 +434,7 @@ sudo /usr/local/bin/deploy-site.sh add \
 变量）。与 LNMP 相关的常见键包括：`LNMP_SERVICES`、`PHP_VERSION`、`PHP_EXTENSIONS`、
 `**EXTRA_PHP_VERSIONS`**、
 `NGINX_IMAGE`、`MYSQL_IMAGE`、`REDIS_IMAGE`、`ACME_IMAGE`、`ACME_EMAIL`、`ACME_SSL_DNS_DEFAULT`、
+`**NODE_VERSION**`、`**FNM_NODE_DIST_MIRROR**`、
 `CONTAINER_WWW`、`LNMP_DATA_DIR` 等（完整列表以生成文件或 `sudo ./init.sh --help` 为准）。
 - **仅限 `deploy-site` 进程**：环境变量 `**LARAVEL_SSE_PREFIXES`** 可写入 shell 配置文件或在调用前导出，不写则走脚本内默认值；与 `/etc/lnmp-env.conf` 无必填关联。
 - 脚本内版本号均为 **2.0.0**（以脚本内 `VERSION=` 为准）。
