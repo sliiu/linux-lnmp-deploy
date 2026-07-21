@@ -132,6 +132,14 @@ usage() {
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install pm2 --node-version=22
+  # PM2 网关栈（无 php）：nginx 反代 + postgres + redis + acme + 宿主机 PM2
+  $0 install docker --docker-mirrors=https://docker.m.daocloud.io
+  $0 install devops
+  $0 install nginx
+  $0 install postgres --postgres-pwd=secret
+  $0 install redis
+  $0 install acme --acme-email=a@b.com
+  $0 install pm2 --node-version=20
   $0 install lnmp --php-version=8.3 --mysql-pwd=secret --postgres-pwd=secret --acme-email=a@b.com
   $0 install postgres --postgres-image=postgres:16-alpine --postgres-pwd=secret
   $0 update lnmp

@@ -251,17 +251,16 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
+  menu_multi "LNMP 组件（Laravel 需 php；PM2 网关仅需 nginx + acme，可选 postgres/redis）" "nginx" "php" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
   sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
   local -a names=(nginx php mysql postgres redis acme phpmyadmin)
   for idx in $sel; do
     LNMP_SERVICES+="${LNMP_SERVICES:+,}${names[$idx]}"
   done
-  # nginx 选了 → 自动补 php（fastcgi 后端）
+  # nginx 未选 php：PM2 / 纯反代 / 静态站可用；仅 Laravel 需要 php-fpm
   if [[ ",$LNMP_SERVICES," = *",nginx,"* && ",$LNMP_SERVICES," != *",php,"* ]]; then
-    LNMP_SERVICES+=",php"
-    info "已自动补充 php（nginx fastcgi 后端必需）"
+    info "未选 php：适合 PM2 网关 / 纯反代 / 静态站；部署 Laravel 请另行勾选或安装 php"
   fi
   # acme webroot 模式需要 nginx 提供 .well-known 端点
   if [[ ",$LNMP_SERVICES," = *",acme,"* && ",$LNMP_SERVICES," != *",nginx,"* ]]; then
@@ -366,6 +365,55 @@ collect_lnmp_stack_images() {
   if has_service "phpmyadmin"; then collect_phpmyadmin_image; collect_phpmyadmin_listen; fi
 }
 
+# PM2 网关（SlimPPT api 等）：反代 + 数据库 + 缓存 + 证书，不含 php/mysql
+collect_lnmp_services_pm2_gateway() {
+  LNMP_SERVICES="nginx,postgres,redis,acme"
+  info "PM2 网关栈：nginx + postgres + redis + acme（无 php / mysql）"
+}
+
+_interactive_pm2_gateway_install() {
+  echo ""
+  hr; info "PM2 网关栈（最小安装）"; hr; echo ""
+  info "将安装：Docker → devops 用户 → nginx + postgres + redis + acme → PM2"
+  info "不含 PHP / MySQL（deploy-site --type=pm2 反代宿主机 Node 进程）"
+  echo ""
+
+  if ! is_docker_ok; then collect_docker_mirrors; fi
+  collect_github_proxy
+
+  prompt "devops 部署用户名" "${DEVOPS_USER:-devops}"
+  DEVOPS_USER=$PROMPT_RESULT
+
+  collect_lnmp_services_pm2_gateway
+  collect_lnmp_stack_images
+  collect_postgres_password
+  collect_acme_email
+  collect_node_version
+
+  echo ""
+  hr; info "配置确认"; hr
+  printf "  %-20s %s\n" "Devops 用户" "$DEVOPS_USER"
+  printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
+  printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"
+  printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"
+  echo ""
+  confirm "确认执行？" "y" || { warn "已取消"; return; }
+
+  run_pkg install -y wget git screen supervisor acl 2>/dev/null || true
+  ensure_supervisor_service
+
+  setup_devops_user
+  if ! is_docker_ok; then install_docker; fi
+  install_lnmp
+  install_pm2
+
+  conf_save
+  echo ""
+  hr; ok "PM2 网关栈安装完成"; hr
+  show_status
+  info "下一步: deploy-site.sh add --type=pm2 --domain=api.example.com ..."
+}
+
 # ═══════════════════════════════════════════════
 #  交互模式
 # ═══════════════════════════════════════════════
@@ -385,6 +433,7 @@ interactive_setup() {
     local _i
     menu_select "请选择操作" \
       "查看状态" \
+      "PM2 网关栈（Docker + nginx + postgres + redis + acme + PM2）" \
       "全新安装（完整向导）" \
       "一键重装 LNMP（沿用上次配置，跳过所有问询）" \
       "更新配置（含 PHP 多版本、镜像源、SSH 等）" \
@@ -395,13 +444,14 @@ interactive_setup() {
     _i=$MENU_SELECT_RESULT
     case "$_i" in
       0) show_status ;;
-      1) _interactive_full_install ;;
-      2) _interactive_oneclick_reinstall ;;
-      3) _interactive_config ;;
-      4) _interactive_install_one ;;
-      5) _interactive_account_mgmt ;;
-      6) _interactive_uninstall_one ;;
-      7) echo ""; ok "退出"; exit 0 ;;
+      1) _interactive_pm2_gateway_install ;;
+      2) _interactive_full_install ;;
+      3) _interactive_oneclick_reinstall ;;
+      4) _interactive_config ;;
+      5) _interactive_install_one ;;
+      6) _interactive_account_mgmt ;;
+      7) _interactive_uninstall_one ;;
+      8) echo ""; ok "退出"; exit 0 ;;
     esac
   done
 }

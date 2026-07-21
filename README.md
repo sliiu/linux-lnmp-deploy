@@ -102,12 +102,24 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
   ```bash
    sudo bash init.sh
   ```
-   首次建议选 **「1) 全新安装（完整向导）」**，按提示勾选模块并填写密码、邮箱、镜像源等。
-3. **查看状态**：
+   - **仅 PM2 网关**（SlimPPT API 等）：选 **「PM2 网关栈」**（Docker + nginx + postgres + redis + acme + PM2，**不含 php**）
+   - **Laravel 全栈**：选 **「全新安装」** 并勾选 LNMP + 按需 PM2
+   - **安装单个组件 → PM2 (Node.js)**：在已有 Docker/nginx 的机器上单独补 PM2
+3. **非交互 — PM2 网关最小栈**（无 php/mysql）：
+  ```bash
+  sudo ./init.sh install docker --docker-mirrors=https://docker.m.daocloud.io
+  sudo ./init.sh install devops
+  sudo ./init.sh install nginx
+  sudo ./init.sh install postgres --postgres-pwd='你的密码'
+  sudo ./init.sh install redis
+  sudo ./init.sh install acme --acme-email=you@example.com
+  sudo ./init.sh install pm2 --node-version=20
+  ```
+4. **查看状态**：
   ```bash
    sudo ./init.sh status
   ```
-4. **非交互安装示例**（需自行保证参数完整，避免漏配）：
+5. **非交互安装示例**（Laravel 全栈等，需自行保证参数完整）：
   ```bash
    sudo ./init.sh install docker --docker-mirrors=https://docker.m.daocloud.io
    sudo ./init.sh install lnmp --php-version=8.3 --mysql-pwd='你的root密码' --acme-email=you@example.com
@@ -115,7 +127,7 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
    sudo ./init.sh install pm2 --node-version=22   # Node.js 站点：fnm + pm2（依赖 devops 用户）
    sudo ./init.sh install saferm   # 可选：安装安全删除到 /usr/local/bin/saferm
   ```
-5. **更新 LNMP 容器镜像**（按 `/etc/lnmp-env.conf` 中的镜像名拉取并重建；`update` 会重写
+6. **更新 LNMP 容器镜像**（按 `/etc/lnmp-env.conf` 中的镜像名拉取并重建；`update` 会重写
   `docker-compose.yml` 后执行 `pull` + `up --force-recreate`）：
 
 ### LNMP 版本与镜像（init.sh）

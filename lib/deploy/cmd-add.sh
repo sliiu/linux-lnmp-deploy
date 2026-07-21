@@ -767,20 +767,25 @@ collect_interactive() {
   fi
 }
 
-cmd_add() {
-  for c in lnmp-nginx lnmp-php; do
-    container_ok "$c" || die "容器 ${c} 未运行，请先执行 init.sh"
-  done
+_require_deploy_containers() {
+  local site_type="${1:-${SITE_TYPE:-laravel}}"
+  container_ok "lnmp-nginx" || die "容器 lnmp-nginx 未运行，请先执行: init.sh install nginx"
+  if [[ "$site_type" = "laravel" ]]; then
+    container_ok "lnmp-php" || die "容器 lnmp-php 未运行，请先执行: init.sh install php"
+    ensure_php_fpm_slowlog_host_artifacts
+    warn_php_fpm_slowlog_compose_missing
+    ensure_php_fpm_wave_pool_host_artifacts
+    warn_php_fpm_wave_pool_compose_missing
+    ensure_mysql_low_memory_host_artifacts
+    warn_mysql_low_memory_compose_missing
+  fi
   container_ok "lnmp-acme" || warn "lnmp-acme 未运行，SSL 签发可能失败"
+}
 
-  ensure_php_fpm_slowlog_host_artifacts
-  warn_php_fpm_slowlog_compose_missing
-  ensure_php_fpm_wave_pool_host_artifacts
-  warn_php_fpm_wave_pool_compose_missing
-  ensure_mysql_low_memory_host_artifacts
-  warn_mysql_low_memory_compose_missing
-
+cmd_add() {
   collect_interactive
+
+  _require_deploy_containers "$SITE_TYPE"
 
   if [[ "$SITE_TYPE" = "laravel" && "${NEED_DB:-y}" = "y" ]]; then
     [[ -z "${DB_CONNECTION:-}" ]] && DB_CONNECTION="$(_default_db_connection)"
@@ -1041,12 +1046,14 @@ cmd_update() {
     fi
   fi
 
-  ensure_php_fpm_slowlog_host_artifacts
-  warn_php_fpm_slowlog_compose_missing
-  ensure_php_fpm_wave_pool_host_artifacts
-  warn_php_fpm_wave_pool_compose_missing
-  ensure_mysql_low_memory_host_artifacts
-  warn_mysql_low_memory_compose_missing
+  if [[ "$site_type" = "laravel" ]]; then
+    ensure_php_fpm_slowlog_host_artifacts
+    warn_php_fpm_slowlog_compose_missing
+    ensure_php_fpm_wave_pool_host_artifacts
+    warn_php_fpm_wave_pool_compose_missing
+    ensure_mysql_low_memory_host_artifacts
+    warn_mysql_low_memory_compose_missing
+  fi
 
   if frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
     warn "Webhook Release 站点：跳过 git 操作"
