@@ -324,14 +324,19 @@ _php_ext_apk_retry_exec() {
 
 ensure_lnmp_php_laravel_extensions() {
   local cname="${1:-lnmp-php}"
+  local db_conn="${2:-mysql}"
+  local need_pgsql=0
   container_ok "$cname" || die "${cname} 容器未运行"
-  if docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
+  [[ "$(_normalize_db_connection "$db_conn")" = "pgsql" ]] && need_pgsql=1
+  local _req='foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);'
+  [[ $need_pgsql -eq 1 ]] && _req='foreach (["bcmath","pcntl","gd","zip","pdo_pgsql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);'
+  if docker exec "$cname" php -r "$_req" 2>/dev/null; then
     return 0
   fi
   info "尝试启用已编译的 PHP 扩展 (${cname} → docker-php-ext-enable)..."
   docker exec -u root "$cname" sh -c \
-    'for e in bcmath pcntl zip gd pdo_mysql mysqli opcache dom mbstring curl xml intl fileinfo exif sockets redis; do docker-php-ext-enable "$e" 2>/dev/null || true; done'
-  if docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null; then
+    'for e in bcmath pcntl zip gd pdo_mysql pdo_pgsql mysqli opcache dom mbstring curl xml intl fileinfo exif sockets redis; do docker-php-ext-enable "$e" 2>/dev/null || true; done'
+  if docker exec "$cname" php -r "$_req" 2>/dev/null; then
     ok "PHP 扩展已可用（${cname}）"
     docker restart "$cname"
     wait_container_running "$cname" 45
@@ -349,7 +354,9 @@ ensure_lnmp_php_laravel_extensions() {
   elif ! _lv_ge "$php_ver" "7.4"; then redis_pkg="redis-5.3.7"
   else redis_pkg=""; fi
   local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
+  [[ $need_pgsql -eq 1 ]] && apk_deps+=" libpq-dev"
   local install_list="pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif fileinfo"
+  [[ $need_pgsql -eq 1 ]] && install_list="pdo_pgsql ${install_list}"
   local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
   cmd+=" && docker-php-ext-configure gd ${gd_args}"
   if _lv_ge "$php_ver" "7.2"; then
@@ -367,10 +374,16 @@ ensure_lnmp_php_laravel_extensions() {
     || die "PHP 扩展安装失败，请在主机执行 init.sh「更新配置 → PHP 扩展」或 docker restart ${cname} 后重试"
   docker restart "$cname"
   wait_container_running "$cname" 45
-  docker exec "$cname" php -m | grep -q pdo_mysql || die "pdo_mysql 仍未加载，请检查 ${cname}"
+  if [[ $need_pgsql -eq 1 ]]; then
+    docker exec "$cname" php -m | grep -q pdo_pgsql || die "pdo_pgsql 仍未加载，请 init.sh install postgres 或更新 PHP 扩展后重试"
+    docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_pgsql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
+      || die "Laravel (PostgreSQL) 所需扩展仍未齐全，请检查 ${cname}"
+  else
+    docker exec "$cname" php -m | grep -q pdo_mysql || die "pdo_mysql 仍未加载，请检查 ${cname}"
+    docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
+      || die "Laravel 所需扩展仍未齐全，请检查 ${cname} 或重新部署 PHP 容器"
+  fi
   docker exec "$cname" php -m | grep -q '^redis$' || die "redis 扩展仍未加载，请检查 ${cname} 或 pecl"
-  docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
-    || die "Laravel 所需扩展仍未齐全，请检查 ${cname} 或重新部署 PHP 容器"
   ok "PHP 扩展就绪（${cname}）"
 }
 

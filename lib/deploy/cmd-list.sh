@@ -94,7 +94,7 @@ cmd_status() {
   echo ""
   hr; info "运行环境（Docker）"; echo ""
   local c _st
-  local _stack=(lnmp-nginx lnmp-php lnmp-redis lnmp-mysql)
+  local _stack=(lnmp-nginx lnmp-php lnmp-redis lnmp-mysql lnmp-postgres)
   while IFS= read -r c; do
     [[ -z "$c" || "$c" = "lnmp-php" ]] && continue
     _stack+=("$c")

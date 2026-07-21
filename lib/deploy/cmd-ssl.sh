@@ -82,7 +82,10 @@ usage() {
   --redis-port=         REDIS_PORT [6379]
   --redis-password=     REDIS_PASSWORD；留空: --redis-password= 或 --redis-password 下一参数为另一选项
   --need-db=y|n         是否配置数据库 [y]
-  --db-host=            DB_HOST [mysql]
+  --db-connection=      DB_CONNECTION：mysql | pgsql [自动检测 lnmp-mysql / lnmp-postgres]
+  --db-host=            DB_HOST [mysql 或 postgres]
+  --db-port=            DB_PORT [3306 / 5432]
+  --db-user=            DB_USERNAME [root / postgres]
   --db-name=            DB_DATABASE
   --db-password=        DB_PASSWORD
   --create-db=y|n       自动建库 [y]
@@ -124,6 +127,7 @@ usage() {
   $0 add --domain=x.com --git=   # 或省略 --git，配合事先放入 ${DATA_DIR:-/data/docker-lnmp}/www/x.com
   $0 add --domain=legacy.com --git=... --php-version=7.4   # 该站使用 lnmp-php74
   $0 add --domain=api.example.com --type=pm2 --git=git@github.com:org/node-api.git --pm2-port=3000
+  $0 add --domain=api.example.com --type=laravel --db-connection=pgsql --db-name=app --db-password=secret
   $0 update --domain=api.example.com --pm2-build=y
 EOF
 }

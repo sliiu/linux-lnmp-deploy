@@ -99,6 +99,15 @@ max_connections = 100
 MYCNF
 }
 
+_ensure_php_pgsql_ext() {
+  has_service "postgres" || return 0
+  case ",${PHP_EXTENSIONS}," in
+    *,pdo_pgsql,*) return 0 ;;
+  esac
+  PHP_EXTENSIONS="${PHP_EXTENSIONS},pdo_pgsql"
+  PHP_EXTENSIONS="${PHP_EXTENSIONS#,}"
+}
+
 _ensure_php_fpm_slowlog_host_layout() {
   has_service "php" || return 0
   local sub
@@ -146,7 +155,7 @@ ${php_deps}"; fi
 }
 
 lnmp_gen_compose() {
-  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,mysql-docker/conf.d,redis,www,ssl,php/conf.d,php/fpm.d,php/log,php/composer-cache}
+  mkdir -p "${DATA_DIR}"/{nginx/conf.d,nginx/logs,nginx/cache,mysql,mysql-docker/conf.d,postgres,redis,www,ssl,php/conf.d,php/fpm.d,php/log,php/composer-cache}
   chmod 1777 "${DATA_DIR}/php/composer-cache" 2>/dev/null || true
 
   if has_service "php"; then
@@ -206,6 +215,8 @@ lnmp_gen_compose() {
     has_service "mysql" && php_deps+="      - mysql
 " && php_env+="      - DB_HOST=mysql
 "
+    has_service "postgres" && php_deps+="      - postgres
+"
     has_service "redis" && php_deps+="      - redis
 " && php_env+="      - REDIS_HOST=redis
 "
@@ -237,6 +248,23 @@ volumes:
     networks: [lnmp-net]
     environment:
       - MYSQL_ROOT_PASSWORD=\${MYSQL_ROOT_PASSWORD:-changeme}
+      - TZ=Asia/Shanghai
+"
+  fi
+
+  if has_service "postgres"; then
+    yaml+="
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    container_name: lnmp-postgres
+    security_opt: [\"no-new-privileges:true\"]
+    command: [\"postgres\", \"-c\", \"shared_buffers=256MB\", \"-c\", \"max_connections=100\"]
+    volumes:
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    restart: always
+    networks: [lnmp-net]
+    environment:
+      - POSTGRES_PASSWORD=\${POSTGRES_PASSWORD:-changeme}
       - TZ=Asia/Shanghai
 "
   fi
@@ -426,11 +454,16 @@ install_lnmp() {
   done
   shopt -u nullglob
   if [[ -z "$(ls -A "${DATA_DIR}/redis" 2>/dev/null)" ]]; then chown -R 999:999 "${DATA_DIR}/redis" 2>/dev/null || true; fi
+  if has_service "postgres" && [[ -z "$(ls -A "${DATA_DIR}/postgres" 2>/dev/null)" ]]; then
+    chown -R 70:70 "${DATA_DIR}/postgres" 2>/dev/null || true
+  fi
   chmod -R 755 "${DATA_DIR}"
   chown root:"${_dg}" "${DATA_DIR}" 2>/dev/null || true
   chmod 771 "${DATA_DIR}"
 
   _ensure_php_fpm_slowlog_host_layout
+
+  _ensure_php_pgsql_ext
 
   _compose_up up -d
 
@@ -479,8 +512,15 @@ LOGROTATE
 }
 
 _compose_up() {
+  local env_args=()
   if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
-    MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD" compose_cmd -f "$COMPOSE_FILE" "$@"
+    env_args+=(MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PWD")
+  fi
+  if has_service "postgres" && [[ -n "${POSTGRES_PWD:-}" ]]; then
+    env_args+=(POSTGRES_PASSWORD="$POSTGRES_PWD")
+  fi
+  if [[ ${#env_args[@]} -gt 0 ]]; then
+    env "${env_args[@]}" compose_cmd -f "$COMPOSE_FILE" "$@"
   else
     compose_cmd -f "$COMPOSE_FILE" "$@"
   fi
@@ -506,7 +546,7 @@ update_lnmp() {
   _ensure_php_fpm_slowlog_host_layout
   if [[ -n "$one" ]]; then
     case "$one" in
-      nginx|php|mysql|redis|acme|phpmyadmin) ;;
+      nginx|php|mysql|postgres|redis|acme|phpmyadmin) ;;
       php-*)
         local _ev="${one#php-}"
         _php_extra_list | grep -qx "$_ev" || die "未知 LNMP 组件: $one（请确认 EXTRA_PHP_VERSIONS 含此版本）"
@@ -517,7 +557,7 @@ update_lnmp() {
         _install_php_extensions_one "$(_php_container_name "$_ev")"
         conf_save; ok "LNMP 已更新"; return 0
         ;;
-      *) die "未知 LNMP 组件: $one（nginx|php|mysql|redis|acme|phpmyadmin|php-<版本>）" ;;
+      *) die "未知 LNMP 组件: $one（nginx|php|mysql|postgres|redis|acme|phpmyadmin|php-<版本>）" ;;
     esac
     has_service "$one" || die "当前编排未包含 lnmp-${one}"
     compose_cmd -f "$COMPOSE_FILE" pull "$one"
@@ -593,15 +633,16 @@ _install_php_extensions_one() {
   info "安装 PHP 扩展（${cname}），日志：${logfile}"
 
   IFS=',' read -ra exts <<< "$PHP_EXTENSIONS"
-  local need_gd=0 need_intl=0 need_redis=0
+  local need_gd=0 need_intl=0 need_redis=0 need_pgsql=0
   local ext_install=""
 
   for e in "${exts[@]}"; do
     case "$e" in
-      gd)    need_gd=1;    ext_install+=" gd" ;;
-      intl)  need_intl=1;  ext_install+=" intl" ;;
-      redis) need_redis=1 ;;
-      *)     ext_install+=" $e" ;;
+      gd)       need_gd=1;    ext_install+=" gd" ;;
+      intl)     need_intl=1;  ext_install+=" intl" ;;
+      redis)    need_redis=1 ;;
+      pdo_pgsql) need_pgsql=1; ext_install+=" pdo_pgsql" ;;
+      *)        ext_install+=" $e" ;;
     esac
   done
   ext_install=$(echo "$ext_install" | xargs)
@@ -653,6 +694,7 @@ _install_php_extensions_one() {
   fi
 
   local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
+  [[ $need_pgsql -eq 1 ]] && apk_deps+=" libpq-dev"
   local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
 
   if [[ $need_gd -eq 1 ]]; then cmd+=" && docker-php-ext-configure gd ${gd_args}"; fi
@@ -727,6 +769,12 @@ _install_php_extensions_one() {
     docker exec "$cname" php -m | grep -q pdo_mysql || {
       _php_ext_show_log_tail "$logfile"
       die "PHP pdo_mysql 扩展安装失败（${cname}）。日志：${logfile}"
+    }
+  fi
+  if [[ " $ext_install " = *" pdo_pgsql "* ]] || [[ $need_pgsql -eq 1 ]]; then
+    docker exec "$cname" php -m | grep -q pdo_pgsql || {
+      _php_ext_show_log_tail "$logfile"
+      die "PHP pdo_pgsql 扩展安装失败（${cname}）。日志：${logfile}"
     }
   fi
 

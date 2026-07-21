@@ -80,7 +80,7 @@ usage() {
   status                查看当前状态
   install <组件>        安装指定组件
   uninstall <组件>      卸载指定组件
-  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: nginx|php|mysql|redis|acme|phpmyadmin
+  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: nginx|php|mysql|postgres|redis|acme|phpmyadmin
   account [子命令]      账户/组/AllowUsers（见 account help）
 
 组件:
@@ -93,6 +93,7 @@ usage() {
   nginx       Nginx 容器
   php         PHP 容器
   mysql       MySQL 容器
+  postgres    PostgreSQL 容器
   redis       Redis 容器
   acme        ACME 证书容器
   phpmyadmin  phpMyAdmin 容器
@@ -112,12 +113,14 @@ usage() {
   --php-ext=EXT,...       PHP 扩展（逗号分隔）
   --nginx-image=IMG       Nginx 镜像 (如 nginx:stable-alpine)
   --mysql-image=IMG       MySQL 镜像 (如 mysql:8.0)
+  --postgres-image=IMG    PostgreSQL 镜像 (如 postgres:16-alpine)
   --redis-image=IMG       Redis 镜像 (如 redis:alpine)
   --acme-image=IMG        acme.sh 镜像 (如 neilpang/acme.sh:latest)
   --phpmyadmin-image=IMG  phpMyAdmin 镜像 (如 phpmyadmin:latest)
   --phpmyadmin-bind=ADDR  phpMyAdmin 绑定地址（默认 127.0.0.1）
   --phpmyadmin-port=PORT  phpMyAdmin 端口（默认 8080）
   --mysql-pwd=PWD         MySQL root 密码
+  --postgres-pwd=PWD      PostgreSQL 超级用户密码
   --acme-email=EMAIL      ACME 邮箱
   --ssh-port=PORT         SSH 端口
   --root-login=no|key     SSH root 策略
@@ -129,7 +132,8 @@ usage() {
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install pm2 --node-version=22
-  $0 install lnmp --php-version=8.3 --mysql-pwd=secret --acme-email=a@b.com
+  $0 install lnmp --php-version=8.3 --mysql-pwd=secret --postgres-pwd=secret --acme-email=a@b.com
+  $0 install postgres --postgres-image=postgres:16-alpine --postgres-pwd=secret
   $0 update lnmp
   $0 update lnmp nginx
   $0 install ssh --ssh-port=2222 --root-login=no
@@ -169,12 +173,14 @@ main() {
       --php-ext=*)        PHP_EXTENSIONS="${arg#*=}" ;;
       --nginx-image=*)    NGINX_IMAGE="${arg#*=}" ;;
       --mysql-image=*)    MYSQL_IMAGE="${arg#*=}" ;;
+      --postgres-image=*) POSTGRES_IMAGE="${arg#*=}" ;;
       --redis-image=*)    REDIS_IMAGE="${arg#*=}" ;;
       --acme-image=*)     ACME_IMAGE="${arg#*=}" ;;
       --phpmyadmin-image=*) PHPMYADMIN_IMAGE="${arg#*=}" ;;
       --phpmyadmin-bind=*)  PHPMYADMIN_BIND="${arg#*=}" ;;
       --phpmyadmin-port=*)  PHPMYADMIN_PORT="${arg#*=}" ;;
       --mysql-pwd=*)      MYSQL_ROOT_PWD="${arg#*=}" ;;
+      --postgres-pwd=*)   POSTGRES_PWD="${arg#*=}" ;;
       --acme-email=*)     ACME_EMAIL="${arg#*=}" ;;
       --ssh-port=*)       SSH_PORT="${arg#*=}" ;;
       --root-login=*)
@@ -205,6 +211,7 @@ main() {
         nginx)    LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
         php)      LNMP_SERVICES="${LNMP_SERVICES},php";   install_lnmp "php" ;;
         mysql)    LNMP_SERVICES="${LNMP_SERVICES},mysql";  install_lnmp "mysql" ;;
+        postgres) LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
         redis)    LNMP_SERVICES="${LNMP_SERVICES},redis";  install_lnmp "redis" ;;
         acme)     LNMP_SERVICES="${LNMP_SERVICES},acme";   install_lnmp "acme" ;;
         phpmyadmin) LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
@@ -248,6 +255,7 @@ main() {
         nginx)    uninstall_lnmp "nginx" ;;
         php)      uninstall_lnmp "php" ;;
         mysql)    uninstall_lnmp "mysql" ;;
+        postgres) uninstall_lnmp "postgres" ;;
         redis)    uninstall_lnmp "redis" ;;
         acme)     uninstall_lnmp "acme" ;;
         phpmyadmin) uninstall_lnmp "phpmyadmin" ;;

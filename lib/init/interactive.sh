@@ -161,7 +161,7 @@ collect_extra_php_versions() {
 }
 
 collect_php_extensions() {
-  local -a all_exts=(pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif intl fileinfo redis)
+  local -a all_exts=(pdo_mysql pdo_pgsql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif intl fileinfo redis)
   echo ""
   info "当前已选: ${PHP_EXTENSIONS:-<空，默认全选>}"
   local sel
@@ -186,6 +186,10 @@ collect_php_extensions() {
 
 collect_mysql_password() {
   prompt_secret_confirm_into "MySQL root 密码" MYSQL_ROOT_PWD
+}
+
+collect_postgres_password() {
+  prompt_secret_confirm_into "PostgreSQL 超级用户密码" POSTGRES_PWD
 }
 
 collect_acme_email() {
@@ -247,10 +251,10 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "redis" "acme.sh" "phpMyAdmin"
+  menu_multi "LNMP 组件（推荐 nginx + php + mysql + redis + acme）" "nginx" "php" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
   sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
-  local -a names=(nginx php mysql redis acme phpmyadmin)
+  local -a names=(nginx php mysql postgres redis acme phpmyadmin)
   for idx in $sel; do
     LNMP_SERVICES+="${LNMP_SERVICES:+,}${names[$idx]}"
   done
@@ -305,6 +309,12 @@ collect_mysql_image() {
     "mysql:8.0 (推荐)" "mysql:8.4" "mysql:lts" "mysql:9" "mysql:9.0" "mariadb:11.4"
 }
 
+collect_postgres_image() {
+  _collect_image POSTGRES_IMAGE "PostgreSQL 镜像" "${POSTGRES_IMAGE:-postgres:16-alpine}" \
+    "postgres:16-alpine (推荐)" "postgres:16" "postgres:15-alpine" "postgres:15" \
+    "postgres:14-alpine" "postgres:14" "postgres:17-alpine" "postgres:17"
+}
+
 collect_redis_image() {
   _collect_image REDIS_IMAGE "Redis 镜像" "${REDIS_IMAGE:-redis:alpine}" \
     "redis:alpine (推荐)" "redis:7-alpine" "redis:7.4-alpine" "redis:8-alpine" "redis:8.2-alpine"
@@ -350,6 +360,7 @@ collect_phpmyadmin_listen() {
 collect_lnmp_stack_images() {
   has_service "nginx" && collect_nginx_image
   has_service "mysql" && collect_mysql_image
+  has_service "postgres" && collect_postgres_image
   has_service "redis" && collect_redis_image
   has_service "acme" && collect_acme_image
   if has_service "phpmyadmin"; then collect_phpmyadmin_image; collect_phpmyadmin_listen; fi
@@ -406,6 +417,7 @@ _interactive_oneclick_reinstall() {
   printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
   if has_service "nginx"; then printf "  %-20s %s\n" "Nginx 镜像" "$NGINX_IMAGE"; fi
   if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
+  if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"; fi
   if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
   if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"
                               printf "  %-20s %s\n" "ACME 邮箱" "${ACME_EMAIL:-<未设置>}"; fi
@@ -483,6 +495,7 @@ _interactive_full_install() {
     collect_lnmp_stack_images
     if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
     if has_service "mysql"; then collect_mysql_password; fi
+    if has_service "postgres"; then collect_postgres_password; fi
     if has_service "acme"; then collect_acme_email; fi
   fi
 
@@ -500,6 +513,7 @@ _interactive_full_install() {
     printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
     if has_service "nginx"; then printf "  %-20s %s\n" "Nginx 镜像" "$NGINX_IMAGE"; fi
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
+    if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"; fi
     if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
     if has_service "acme"; then printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"; fi
     if has_service "phpmyadmin"; then
@@ -513,6 +527,7 @@ _interactive_full_install() {
       printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
     fi
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL" "已设置"; fi
+    if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL" "已设置"; fi
     if has_service "acme"; then printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"; fi
   fi
   if [[ $sel_ssh -eq 1 ]]; then printf "  %-20s %s\n" "SSH" "root=${ROOT_LOGIN}, 端口=${SSH_PORT}"; fi
@@ -552,6 +567,7 @@ _interactive_install_one() {
     "LNMP (全部，推荐)" \
     "LNMP - php" \
     "LNMP - mysql" \
+    "LNMP - postgresql" \
     "LNMP - redis" \
     "LNMP - nginx" \
     "LNMP - acme" \
@@ -576,26 +592,28 @@ _interactive_install_one() {
       collect_lnmp_stack_images
       if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
       if has_service "mysql"; then collect_mysql_password; fi
+      if has_service "postgres"; then collect_postgres_password; fi
       if has_service "acme"; then collect_acme_email; fi
       install_lnmp
       ;;
     1)  collect_php_version; collect_extra_php_versions; collect_php_extensions; collect_alpine_mirror
         LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
     2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
-    3)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
-    4)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
-    5)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
-    6)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
-    7)  collect_docker_mirrors; install_docker ;;
-    8)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_node_version; install_pm2 ;;
-    9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
-    10) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
-    11) collect_ssh_config; install_ssh ;;
-    12) install_firewall ;;
-    13) install_bbr ;;
-    14) collect_github_proxy; install_zsh ;;
-    15) install_saferm ;;
-    16) setup_cyber_users ;;
+    3)  collect_postgres_image; collect_postgres_password; LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
+    4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
+    5)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
+    6)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
+    7)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
+    8)  collect_docker_mirrors; install_docker ;;
+    9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_node_version; install_pm2 ;;
+    10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+    11) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
+    12) collect_ssh_config; install_ssh ;;
+    13) install_firewall ;;
+    14) install_bbr ;;
+    15) collect_github_proxy; install_zsh ;;
+    16) install_saferm ;;
+    17) setup_cyber_users ;;
   esac
   conf_save
 }
@@ -603,7 +621,7 @@ _interactive_install_one() {
 _interactive_uninstall_one() {
   local idx
   menu_select "选择要卸载的组件（高危操作前会二次确认）" \
-    "LNMP - php"   "LNMP - mysql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin" \
+    "LNMP - php"   "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin" \
     "LNMP (全部)" "Docker" \
     "PM2 (Node.js)" \
     "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
@@ -614,14 +632,15 @@ _interactive_uninstall_one() {
   case "$idx" in
     0) _danger_msg="将停止 lnmp-php 与所有 lnmp-phpNN 额外容器" ;;
     1) _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
-    2) _danger_msg="将停止并移除 lnmp-redis 容器" ;;
-    3) _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
-    4) _danger_msg="将停止并移除 lnmp-acme 容器" ;;
-    5) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
-    6) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
-    7) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
-    8) _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
-    9) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
+    2) _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
+    3) _danger_msg="将停止并移除 lnmp-redis 容器" ;;
+    4) _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
+    5) _danger_msg="将停止并移除 lnmp-acme 容器" ;;
+    6) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
+    7) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
+    8) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
+    9) _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
+    10) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
   esac
   if [[ -n "$_danger_msg" ]]; then
     warn "$_danger_msg"
@@ -631,18 +650,19 @@ _interactive_uninstall_one() {
   case "$idx" in
     0)  uninstall_lnmp "php" ;;
     1)  uninstall_lnmp "mysql" ;;
-    2)  uninstall_lnmp "redis" ;;
-    3)  uninstall_lnmp "nginx" ;;
-    4)  uninstall_lnmp "acme" ;;
-    5)  uninstall_lnmp "phpmyadmin" ;;
-    6)  uninstall_lnmp "all" ;;
-    7)  uninstall_docker ;;
-    8)  uninstall_pm2 ;;
-    9)  uninstall_ssh ;;
-    10) uninstall_firewall ;;
-    11) uninstall_bbr ;;
-    12) uninstall_zsh ;;
-    13) uninstall_saferm ;;
+    2)  uninstall_lnmp "postgres" ;;
+    3)  uninstall_lnmp "redis" ;;
+    4)  uninstall_lnmp "nginx" ;;
+    5)  uninstall_lnmp "acme" ;;
+    6)  uninstall_lnmp "phpmyadmin" ;;
+    7)  uninstall_lnmp "all" ;;
+    8)  uninstall_docker ;;
+    9)  uninstall_pm2 ;;
+    10) uninstall_ssh ;;
+    11) uninstall_firewall ;;
+    12) uninstall_bbr ;;
+    13) uninstall_zsh ;;
+    14) uninstall_saferm ;;
   esac
   conf_save
 }

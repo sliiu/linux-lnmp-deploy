@@ -258,6 +258,7 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 **composer**（容器内与站点目录属主一致）、**artisan**（`docker exec` 以 devops 身份、项目目录下
 `php artisan`）。**默认**：`NEED_DB` / `RUN_SEED` / `NEED_HORIZON` 为 **y**；默认连库时需
 `**--db-name`**（或交互填写），否则脚本会报错退出；不需要数据库时用 `**--need-db=n**`。
+- **数据库类型**：`**--db-connection=mysql|pgsql**`（默认按运行中的 `lnmp-mysql` / `lnmp-postgres` 自动检测；两者并存时交互可选）。PostgreSQL 默认 `DB_HOST=postgres`、`DB_PORT=5432`、`DB_USERNAME=postgres`；MySQL 默认 `mysql` / `3306` / `root`。`init.sh install postgres` 后可用 `pgsql`；建库通过 `psql` / `mysql` 自动执行。
 - **PHP 版本（每站点）**：`**--php-version=`**（如 `8.2`、`7.4`）须在 `**init.sh**` 所写配置里的 `**EXTRA_PHP_VERSIONS**` 中已声明；会写入 `**conf.d/<域名>.php-version**`，Nginx **fastcgi** 与 **composer / artisan / cron / Horizon** 路由到对应 `**lnmp-php`** + **无点号主版本** 容器（如 **7.4 → `lnmp-php74`**）。`**update**` 时可改该项以切换站点所用 PHP 镜像。
 - **Laravel SSE（长连接）**：环境变量 `**LARAVEL_SSE_PREFIXES`** 为全局默认前缀列表（空格或逗号分隔，默认 `**wave**`）；`**--sse-prefixes=**` 或与 `**update**` 联用写入 `**conf.d/<域名>.sse-prefixes**`；亦可事后编辑该文件。细节以 `**deploy-site.sh --help**` 为准。
 - **frontend**：Nginx 在 **代码就绪后**生成。未指定 `**--frontend-root`** 时：若站点目录下存在
@@ -320,9 +321,13 @@ sudo /usr/local/bin/deploy-site.sh add \
   --git=git@github.com:org/repo.git \
   --git-branch=main \
   --type=laravel \
+  --db-connection=pgsql \
   --db-name=myapp \
   --db-password='数据库密码' \
   --redis-password='redis密码或留空'
+
+# MySQL（默认，可省略 --db-connection）
+# sudo ... add --domain=api.example.com --git=... --db-name=myapp --db-password=secret
 
 # 不使用数据库时
 # sudo ... add --domain=api.example.com --git=... --need-db=n ...
@@ -386,8 +391,9 @@ su - devops -c 'pm2 logs lnmp-api-example-com'
 - `**--php-version**`：仅当 init 已为该主版本配置 `**EXTRA_PHP_VERSIONS**`（或该版本即为默认 `**lnmp-php**`）时有效（见上文）。
 - **SSE**：`**--sse-prefixes=**`、环境变量 `**LARAVEL_SSE_PREFIXES**`
 - `**status**`：`**--all**` 或 `**--domain**`
-- Laravel：`**--app-name**`、`**--redis-host**`、`**--redis-port**`、`**--redis-password**`、
-`**--need-db**`（默认 y）、`**--db-host**`、`**--db-name**`、`**--db-password**`、
+- Laravel：`**--app-name**`、`**--db-connection=mysql|pgsql**`、`**--db-host**`、`**--db-port**`、`**--db-user**`、
+`**--redis-host**`、`**--redis-port**`、`**--redis-password**`、
+`**--need-db**`（默认 y）、`**--db-name**`、`**--db-password**`、
 `**--create-db**`、`**--run-migrate**`、`**--run-seed**`（默认 y）、`**--add-crontab**`、
 `**--need-horizon**`（默认 y）
 - `**--frontend-root**`：相对站点目录；留空则按是否存在 `**dist/**` 自动选择（见上文）

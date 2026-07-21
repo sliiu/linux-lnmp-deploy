@@ -41,12 +41,7 @@ setup_laravel() {
   env_set "LOG_LEVEL"        "warning"          "$envfile"
 
   if [[ "${NEED_DB:-y}" = "y" ]]; then
-    env_set "DB_CONNECTION" "mysql"      "$envfile"
-    env_set "DB_HOST"       "${DB_HOST}" "$envfile"
-    env_set "DB_PORT"       "3306"       "$envfile"
-    env_set "DB_DATABASE"   "${DB_NAME}" "$envfile"
-    env_set "DB_USERNAME"   "root"       "$envfile"
-    env_set "DB_PASSWORD"   "${DB_PWD}"  "$envfile"
+    _write_laravel_db_env "$envfile"
   fi
 
   for kv in "${CUSTOM_ENV[@]}"; do
@@ -73,7 +68,7 @@ setup_laravel() {
   gid=$(id -g "${DEVOPS_USER}")
 
   local cname; cname="$(_php_container_for_site "$domain")"
-  ensure_lnmp_php_laravel_extensions "$cname"
+  ensure_lnmp_php_laravel_extensions "$cname" "${DB_CONNECTION:-mysql}"
   ensure_composer_in_lnmp_php "$cname"
   docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache "$cname" \
     composer install \
@@ -108,18 +103,6 @@ setup_laravel() {
 
   # 通过全局变量返回，避免调用方用 $() 捕获时吞掉所有 info/ok/warn 输出
   _QUEUE_CONN="$queue_conn"
-}
-
-create_database() {
-  local db_name="$1" db_pwd="$2" db_host="${3:-mysql}"
-  if [[ "$db_host" = "mysql" ]] && container_ok "lnmp-mysql"; then
-    docker exec lnmp-mysql mysql -uroot -p"${db_pwd}" \
-      -e "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null \
-      && ok "数据库 ${db_name} 已就绪" \
-      || warn "建库命令返回错误（可能已存在或密码错误）"
-  else
-    warn "lnmp-mysql 未运行，跳过建库"
-  fi
 }
 
 run_migrations() {
@@ -208,7 +191,7 @@ SITE_PHP_VERSION="" SITE_PHP_VERSION_CLI=0
 SITE_SSE_PREFIXES="" SITE_SSE_PREFIXES_CLI=0
 APP_NAME="" REDIS_HOST="" REDIS_PORT="" REDIS_PASSWORD=""
 REDIS_PASSWORD_FROM_CLI=0
-NEED_DB="" DB_HOST="" DB_NAME="" DB_PWD=""
+NEED_DB="" DB_CONNECTION="" DB_HOST="" DB_NAME="" DB_PWD="" DB_USERNAME="" DB_PORT=""
 DB_PWD_FROM_CLI=0
 CREATE_DB="" RUN_MIGRATE="" RUN_SEED="" ADD_CRONTAB="" NEED_HORIZON=""
 FRONTEND_ROOT=""
@@ -251,9 +234,12 @@ reset_menu_deploy_state() {
   REDIS_PASSWORD=""
   REDIS_PASSWORD_FROM_CLI=0
   NEED_DB=""
+  DB_CONNECTION=""
   DB_HOST=""
   DB_NAME=""
   DB_PWD=""
+  DB_USERNAME=""
+  DB_PORT=""
   DB_PWD_FROM_CLI=0
   CREATE_DB=""
   RUN_MIGRATE=""
@@ -358,8 +344,14 @@ parse_args() {
         ;;
       --need-db=*)       NEED_DB="${1#*=}" ;;
       --need-db)         shift; NEED_DB="$1" ;;
+      --db-connection=*) DB_CONNECTION="${1#*=}" ;;
+      --db-connection) shift; DB_CONNECTION="$1" ;;
       --db-host=*)       DB_HOST="${1#*=}" ;;
       --db-host)         shift; DB_HOST="$1" ;;
+      --db-port=*)       DB_PORT="${1#*=}" ;;
+      --db-port)         shift; DB_PORT="$1" ;;
+      --db-user=*)       DB_USERNAME="${1#*=}" ;;
+      --db-user)         shift; DB_USERNAME="$1" ;;
       --db-name=*)       DB_NAME="${1#*=}" ;;
       --db-name)         shift; DB_NAME="$1" ;;
       --db-password=*)
@@ -709,8 +701,9 @@ collect_interactive() {
     # 5) 数据库块：先决定是否需要 DB，再凭证，再动作预设
     [[ -z "$NEED_DB" ]] && { confirm "配置数据库？" "y" && NEED_DB="y" || NEED_DB="n"; }
     if [[ "$NEED_DB" = "y" ]]; then
-      DB_HOST=${DB_HOST:-$(prompt "DB_HOST（MySQL 主机/容器名）" "mysql")}
-      [[ -z "$DB_NAME" ]] && DB_NAME=$(prompt "DB_DATABASE（业务库名，勿填 mysql 主机名）")
+      _collect_db_connection_interactive
+      DB_HOST=${DB_HOST:-$(prompt "DB_HOST（数据库主机/容器名）" "$(_default_db_host "${DB_CONNECTION:-mysql}")")}
+      [[ -z "$DB_NAME" ]] && DB_NAME=$(prompt "DB_DATABASE（业务库名，勿填数据库服务名）")
       [[ -z "$DB_NAME" ]] && die "DB_DATABASE 不能为空"
       [[ "$DB_PWD_FROM_CLI" != "1" && -z "$DB_PWD" ]] && prompt_secret_into "DB_PASSWORD" DB_PWD
       [[ -z "$DB_PWD" ]]  && die "DB_PASSWORD 不能为空"
@@ -790,9 +783,10 @@ cmd_add() {
   collect_interactive
 
   if [[ "$SITE_TYPE" = "laravel" && "${NEED_DB:-y}" = "y" ]]; then
+    [[ -z "${DB_CONNECTION:-}" ]] && DB_CONNECTION="$(_default_db_connection)"
+    DB_CONNECTION="$(_normalize_db_connection "$DB_CONNECTION")"
     [[ -z "${DB_NAME:-}" ]] && die "Laravel 默认启用数据库，请指定 --db-name 或在交互中填写 DB_DATABASE"
-    [[ "$DB_NAME" = "mysql" && "${DB_HOST:-mysql}" = "mysql" ]] \
-      && die "DB_DATABASE 不能为 mysql（与 DB_HOST=mysql 同时出现时多为填反）。库名请用业务名如 payment"
+    _validate_laravel_db_config
   fi
 
   # 执行前的「配置确认」（仅 TTY 且未 --yes 时弹出，顺序与提问顺序一致）
@@ -815,7 +809,7 @@ cmd_add() {
     if [[ "$SITE_TYPE" = "laravel" ]]; then
       printf "  %-18s %s\n" "PHP 容器" "$(_php_container_for_site "$DOMAIN")"
       if [[ "${NEED_DB:-y}" = "y" ]]; then
-        printf "  %-18s %s\n" "数据库" "${DB_HOST:-mysql} / ${DB_NAME:-?}"
+        printf "  %-18s %s\n" "数据库" "${DB_CONNECTION:-$(_default_db_connection)} @ ${DB_HOST:-$(_default_db_host "${DB_CONNECTION:-mysql}")} / ${DB_NAME:-?}"
         printf "  %-18s %s\n" "建库 / migrate / seed" "${CREATE_DB:-y} / ${RUN_MIGRATE:-y} / ${RUN_SEED:-y}"
       else
         printf "  %-18s %s\n" "数据库" "不配置（n）"
@@ -923,7 +917,7 @@ cmd_add() {
     echo ""
     hr; info "[4/6] 数据库"; echo ""
     if [[ "${NEED_DB:-y}" = "y" && "${CREATE_DB:-y}" = "y" && -n "${DB_NAME:-}" ]]; then
-      create_database "$DB_NAME" "$DB_PWD" "${DB_HOST:-mysql}"
+      create_database "$DB_NAME" "$DB_PWD" "${DB_HOST:-}" "${DB_CONNECTION:-$(_default_db_connection)}"
     else
       info "跳过"
     fi
@@ -1056,7 +1050,12 @@ cmd_update() {
     uid=$(id -u "${DEVOPS_USER}")
     gid=$(id -g "${DEVOPS_USER}")
     local cname; cname="$(_php_container_for_site "$DOMAIN")"
-    ensure_lnmp_php_laravel_extensions "$cname"
+    local _db_conn="mysql"
+    if [[ -f "${site_dir}/.env" ]]; then
+      _db_conn="$(grep -E '^DB_CONNECTION=' "${site_dir}/.env" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '[:space:]"'"'"'')"
+      [[ -z "$_db_conn" ]] && _db_conn="mysql"
+    fi
+    ensure_lnmp_php_laravel_extensions "$cname" "$_db_conn"
     ensure_composer_in_lnmp_php "$cname"
     docker exec -u "${uid}:${gid}" -e COMPOSER_CACHE_DIR=/tmp/composer-cache "$cname" \
       composer install \
