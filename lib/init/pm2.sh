@@ -27,14 +27,15 @@ EOF
 }
 
 _pm2_install_fnm_binary() {
-  local arch fnm_ver="${FNM_VERSION:-v1.38.1}" url tmpzip
+  local arch fnm_ver="${FNM_VERSION:-v1.39.0}" asset url tmpzip
   arch=$(uname -m)
   case "$arch" in
-    x86_64)  arch="x64" ;;
-    aarch64|arm64) arch="arm64" ;;
+    x86_64)        asset="fnm-linux.zip" ;;
+    aarch64|arm64) asset="fnm-arm64.zip" ;;
+    armv7l|armv6l) asset="fnm-arm32.zip" ;;
     *) die "不支持的架构: ${arch}" ;;
   esac
-  url="${GH_PROXY:+${GH_PROXY}/}https://github.com/Schniz/fnm/releases/download/${fnm_ver}/fnm-linux.${arch}.zip"
+  url="${GH_PROXY:+${GH_PROXY}/}https://github.com/Schniz/fnm/releases/download/${fnm_ver}/${asset}"
   mkdir -p "${FNM_DIR}"
   tmpzip="$(mktemp)"
   info "下载 fnm ${fnm_ver} ..."
