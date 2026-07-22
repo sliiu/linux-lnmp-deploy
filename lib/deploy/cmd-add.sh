@@ -642,6 +642,27 @@ _collect_frontend_source_interactive() {
   fi
 }
 
+# PM2：Git clone vs Webhook Gateway Release（CI 推送产物，不 clone）
+_collect_pm2_source_interactive() {
+  [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]] && return 0
+  local _i
+  menu_select "PM2 部署方式" \
+    "Webhook Gateway Release（CI 推送产物，不 clone 仓库）" \
+    "Git 仓库（clone 后在服务器 build + PM2 启动）"
+  _i=$MENU_SELECT_RESULT
+  if [[ "$_i" -eq 0 ]]; then
+    WEBHOOK_ENABLE=1
+    WEBHOOK_MODE=release
+    GIT_BRANCH=""
+  fi
+}
+
+# PM2 站点目录尚无可启动产物时跳过 setup_pm2（Webhook / 待首次推送场景）
+_pm2_site_has_launchable_code() {
+  local domain="$1" site_dir="${WWW_ROOT}/${domain}"
+  [[ -f "${site_dir}/package.json" || -f "${site_dir}/ecosystem.config.js" || -f "${site_dir}/ecosystem.config.cjs" ]]
+}
+
 collect_interactive() {
   # 1) 域名（决策性，最早问）
   [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
@@ -671,6 +692,8 @@ collect_interactive() {
 
   if [[ "$SITE_TYPE" = "frontend" ]]; then
     _collect_frontend_source_interactive
+  elif [[ "$SITE_TYPE" = "pm2" ]]; then
+    _collect_pm2_source_interactive
   fi
 
   # 3) Git / Webhook 仓库匹配
@@ -685,6 +708,16 @@ collect_interactive() {
     _webhook_collect_site_release_opts ""
     GIT_BRANCH=""
     FRONTEND_ROOT=""
+  elif [[ "$SITE_TYPE" = "pm2" && "${WEBHOOK_MODE:-}" = "release" ]]; then
+    [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）")
+    [[ -n "$GIT_REPO" ]] || die "Webhook Gateway Release 需填写仓库地址（用于匹配 CI 推送来源）"
+    [[ -z "$WEBHOOK_RELEASE_NAME" ]] && {
+      prompt "Release 名称（前缀匹配 CI 的 release/app/tag，如 gateway 匹配 gateway-v1.0.0）"
+      WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
+    }
+    [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
+    _webhook_collect_site_release_opts ""
+    GIT_BRANCH=""
   else
     [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" "")
     _offer_skip_git_if_code_present
@@ -913,8 +946,12 @@ cmd_add() {
     port="$(allocate_pm2_port "$DOMAIN" "${SITE_PM2_PORT:-8787}")"
     printf '%s\n' "$port" > "$(site_pm2_port_file "$DOMAIN")"
     chmod 644 "$(site_pm2_port_file "$DOMAIN")" 2>/dev/null || true
-    if _adding_pm2_release_webhook && [[ ! -f "${WWW_ROOT}/${DOMAIN}/package.json" ]]; then
+    if _adding_pm2_release_webhook && ! _pm2_site_has_launchable_code "$DOMAIN"; then
       warn "待 gateway-release webhook 推送产物后再启动 PM2（端口已预留: ${port}）"
+      warn "可先配置 ${WWW_ROOT}/${DOMAIN}/.env.production 与 .env.production.local"
+    elif ! _pm2_site_has_launchable_code "$DOMAIN"; then
+      warn "站点目录尚无 package.json / ecosystem 配置，跳过 PM2 启动"
+      warn "代码就绪后执行: deploy-site.sh update --domain=${DOMAIN}"
     else
       setup_pm2 "$DOMAIN"
     fi
