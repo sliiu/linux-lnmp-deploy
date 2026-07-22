@@ -802,6 +802,11 @@ docker exec lnmp-acme acme.sh --renew-all --server letsencrypt 2>/dev/null || tr
 docker exec lnmp-nginx nginx -s reload 2>/dev/null || true
 SH
   chmod +x /usr/local/bin/acme-renew.sh
+  if ! ensure_crontab; then
+    warn "未安装 crontab，已跳过 ACME 续期 cron。可稍后: dnf install -y cronie && systemctl enable --now crond"
+    warn "然后执行: echo '0 3 1 * * /usr/local/bin/acme-renew.sh >> /var/log/acme-renew.log 2>&1' | crontab -"
+    return 0
+  fi
   local cron_line="0 3 1 * * /usr/local/bin/acme-renew.sh >> /var/log/acme-renew.log 2>&1"
   local existing
   existing=$(crontab -l 2>/dev/null || true)

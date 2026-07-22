@@ -119,6 +119,7 @@ run_seed() {
 
 setup_crontab() {
   local domain="$1"
+  ensure_crontab || die "未安装 crontab（RHEL/Amazon: cronie；Debian/Ubuntu: cron）"
   local uid gid cron_log cname
   uid=$(id -u "${DEVOPS_USER}")
   gid=$(id -g "${DEVOPS_USER}")

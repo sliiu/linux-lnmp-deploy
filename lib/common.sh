@@ -182,3 +182,22 @@ _lv_ge() {
   if [[ $a1 -ne $b1 ]]; then [[ $a1 -gt $b1 ]]; return $?; fi
   [[ $a2 -ge $b2 ]]
 }
+
+# RHEL/Amazon Linux: cronie；Debian/Ubuntu: cron
+ensure_crontab() {
+  command -v crontab &>/dev/null && return 0
+  info "安装 cron（未找到 crontab）..."
+  if command -v dnf &>/dev/null; then
+    dnf install -y cronie 2>/dev/null || return 1
+    systemctl enable --now crond 2>/dev/null || true
+  elif command -v yum &>/dev/null; then
+    yum install -y cronie 2>/dev/null || return 1
+    systemctl enable --now crond 2>/dev/null || true
+  elif command -v apt-get &>/dev/null; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y cron 2>/dev/null || return 1
+    systemctl enable --now cron 2>/dev/null || true
+  else
+    return 1
+  fi
+  command -v crontab &>/dev/null
+}
