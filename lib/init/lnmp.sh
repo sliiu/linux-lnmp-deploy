@@ -182,21 +182,25 @@ lnmp_gen_compose() {
   local volumes_section=""
 
   if has_service "nginx"; then
-    local _nginx_deps="[php"
-    local _ev
-    while IFS= read -r _ev; do
-      [[ -z "$_ev" ]] && continue
-      _nginx_deps+=", $(_php_service_name "$_ev")"
-    done < <(_php_extra_list)
-    _nginx_deps+="]"
+    local _nginx_deps="" _nginx_dep_line=""
+    if has_service "php"; then
+      _nginx_deps="[php"
+      local _ev
+      while IFS= read -r _ev; do
+        [[ -z "$_ev" ]] && continue
+        _nginx_deps+=", $(_php_service_name "$_ev")"
+      done < <(_php_extra_list)
+      _nginx_deps+="]"
+      _nginx_dep_line="
+    depends_on: ${_nginx_deps}"
+    fi
     yaml+="
   nginx:
     image: ${NGINX_IMAGE}
     container_name: lnmp-nginx
     user: \"101:101\"
     security_opt: [\"no-new-privileges:true\"]
-    cap_add: [NET_BIND_SERVICE]
-    depends_on: ${_nginx_deps}
+    cap_add: [NET_BIND_SERVICE]${_nginx_dep_line}
     ports: [\"80:80\", \"443:443\"]
     volumes:
       - ${DATA_DIR}/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -412,7 +416,6 @@ install_lnmp() {
 
   if [[ "$component" != "all" ]]; then
     if [[ ",$LNMP_SERVICES," != *",$component,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},${component}"; fi
-    if [[ "$component" = "nginx" && ",$LNMP_SERVICES," != *",php,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},php"; fi
     if [[ "$component" = "phpmyadmin" && ",$LNMP_SERVICES," != *",mysql,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},mysql"; fi
   fi
 
