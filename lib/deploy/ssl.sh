@@ -127,6 +127,10 @@ issue_ssl() {
   fi
 
   if [[ $acme_exit -ne 0 && $acme_exit -ne 2 ]]; then
+    if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
+      warn "SSL 签发失败 (exit=${acme_exit})，站点 webhook 已注册，可稍后 deploy-site update 或手动签发"
+      return 1
+    fi
     die "SSL 签发失败 (exit=${acme_exit})。Let's Encrypt 对同一域名 7 天内正式证书约 5 张上限；遇 429 请等到日志中 retry after 之后再试，或临时加 --ssl-staging 使用测试 CA。https://letsencrypt.org/docs/rate-limits/"
   fi
   if [[ $acme_exit -eq 2 ]]; then
@@ -141,6 +145,10 @@ issue_ssl() {
     --key-file       "/acme.sh/${domain}/${domain}.key" \
     --fullchain-file "/acme.sh/${domain}/fullchain.cer" \
     --reloadcmd "true"; then
+    if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
+      warn "acme.sh --install-cert 失败，站点 webhook 已注册，可稍后重试 SSL"
+      return 1
+    fi
     die "acme.sh --install-cert 失败。排查: docker exec lnmp-acme acme.sh --list --config-home /acme.sh"
   fi
 
@@ -148,6 +156,10 @@ issue_ssl() {
 
   wait_container_running "lnmp-nginx" 30
   if ! docker exec lnmp-nginx nginx -s reload; then
+    if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
+      warn "nginx reload 失败（证书可能未就绪），站点 webhook 已注册"
+      return 1
+    fi
     die "nginx reload 失败（请检查证书路径与权限）"
   fi
   ok "SSL 证书已安装"

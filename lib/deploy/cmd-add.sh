@@ -663,6 +663,88 @@ _pm2_site_has_launchable_code() {
   [[ -f "${site_dir}/package.json" || -f "${site_dir}/ecosystem.config.js" || -f "${site_dir}/ecosystem.config.cjs" ]]
 }
 
+_nginx_reload_or_die() {
+  wait_container_running "lnmp-nginx" 45
+  docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
+  docker exec lnmp-nginx nginx -s reload
+}
+
+# Webhook Release 首次部署：无代码也应完整注册站点（.webhook / 类型 / 端口），打破「无代码→无法 webhook」死循环
+_cmd_add_webhook_release_site() {
+  local domain="$DOMAIN" port="" _fe_sub=""
+  WEBHOOK_RELEASE_ADD_DONE=1
+
+  write_site_type_file "$domain" "$SITE_TYPE"
+
+  if [[ "$SITE_TYPE" = "pm2" ]]; then
+    mkdir -p "${WWW_ROOT}/${domain}/.well-known/acme-challenge"
+    chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${domain}/.well-known" 2>/dev/null || true
+    apply_site_pm2_port_cli "$domain"
+    apply_site_pm2_cmd_cli "$domain"
+    port="$(allocate_pm2_port "$domain" "${SITE_PM2_PORT:-8787}")"
+    printf '%s\n' "$port" > "$(site_pm2_port_file "$domain")"
+    chmod 644 "$(site_pm2_port_file "$domain")" 2>/dev/null || true
+    if _pm2_site_has_launchable_code "$domain"; then
+      setup_pm2 "$domain"
+    else
+      warn "待 gateway-release webhook 推送产物后再启动 PM2（端口已预留: ${port}）"
+      warn "可先配置 ${WWW_ROOT}/${domain}/.env.production 与 .env.production.local"
+    fi
+  else
+    _fe_sub=""
+    fix_site_readable_for_nginx "$domain" "frontend" ""
+  fi
+
+  _webhook_save_on_add
+  WEBHOOK_SAVED_ON_ADD=1
+  ok "Webhook 站点已注册: $(site_webhook_file "$domain")"
+
+  echo ""
+  hr; info "[1/6] Nginx 配置（Webhook Release）"; echo ""
+  if [[ "$SITE_TYPE" = "pm2" ]]; then
+    gen_nginx_pm2 "$domain"
+    _nginx_reload_or_die
+    ok "Nginx 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$domain")）"
+  else
+    gen_nginx_frontend "$domain" ""
+    _nginx_reload_or_die
+    ok "Nginx 配置已生成（站点根待 Release 写入）"
+  fi
+
+  echo ""
+  hr; info "[3/6] SSL 证书"; echo ""
+  if container_ok "lnmp-acme"; then
+    SSL_SOFT_FAIL=1
+    if [[ "$SITE_TYPE" = "frontend" ]]; then
+      issue_ssl "$domain" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "" || true
+    else
+      issue_ssl "$domain" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "" || true
+    fi
+    unset SSL_SOFT_FAIL
+  else
+    warn "lnmp-acme 未运行，跳过 SSL 签发"
+  fi
+
+  echo ""
+  hr; info "[4/6] 跳过（Webhook Release 无数据库）"
+  hr; info "[5/6] 跳过（Webhook Release 无 PHP）"
+  hr; info "[6/6] 跳过（Webhook Release 无 crontab）"
+  echo ""
+  hr
+  if [[ "$SITE_TYPE" = "pm2" ]]; then
+    ok "PM2 Webhook Release 站点已注册"
+    info "目录: ${WWW_ROOT}/${domain}"
+    info "PM2 端口: $(pm2_port_for_site "$domain")（待 webhook 推送后启动）"
+    info "下一步: 配置 .env.production → $0 webhook setup → CI 推送 gateway-release"
+  else
+    ok "前端 Webhook Release 站点已注册"
+    info "目录: ${WWW_ROOT}/${domain}"
+    info "下一步: $0 webhook setup → 发布匹配的 Release 触发部署"
+  fi
+  info "回调: $(_webhook_public_callback_url)"
+  hr
+}
+
 collect_interactive() {
   # 1) 域名（决策性，最早问）
   [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
@@ -706,6 +788,7 @@ collect_interactive() {
     }
     [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
     _webhook_collect_site_release_opts ""
+    _webhook_collect_secret ""
     GIT_BRANCH=""
     FRONTEND_ROOT=""
   elif [[ "$SITE_TYPE" = "pm2" && "${WEBHOOK_MODE:-}" = "release" ]]; then
@@ -717,6 +800,7 @@ collect_interactive() {
     }
     [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
     _webhook_collect_site_release_opts ""
+    _webhook_collect_secret ""
     GIT_BRANCH=""
   else
     [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" "")
@@ -929,12 +1013,12 @@ cmd_add() {
     ok "代码部署完成"
   fi
 
-  if [[ "$SITE_TYPE" = "frontend" ]]; then
+  if _adding_webhook_release_site; then
+    _cmd_add_webhook_release_site
+  elif [[ "$SITE_TYPE" = "frontend" ]]; then
     [[ "$_release_wh" -eq 0 ]] && _fe_sub=$(effective_frontend_subdir "$DOMAIN")
     gen_nginx_frontend "$DOMAIN" "$_fe_sub"
-    wait_container_running "lnmp-nginx" 45
-    docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
-    docker exec lnmp-nginx nginx -s reload
+    _nginx_reload_or_die
     ok "Nginx 配置已生成"
     write_site_type_file "$DOMAIN" "frontend"
   elif [[ "$SITE_TYPE" = "pm2" ]]; then
@@ -946,37 +1030,36 @@ cmd_add() {
     port="$(allocate_pm2_port "$DOMAIN" "${SITE_PM2_PORT:-8787}")"
     printf '%s\n' "$port" > "$(site_pm2_port_file "$DOMAIN")"
     chmod 644 "$(site_pm2_port_file "$DOMAIN")" 2>/dev/null || true
-    if _adding_pm2_release_webhook && ! _pm2_site_has_launchable_code "$DOMAIN"; then
-      warn "待 gateway-release webhook 推送产物后再启动 PM2（端口已预留: ${port}）"
-      warn "可先配置 ${WWW_ROOT}/${DOMAIN}/.env.production 与 .env.production.local"
-    elif ! _pm2_site_has_launchable_code "$DOMAIN"; then
+    if ! _pm2_site_has_launchable_code "$DOMAIN"; then
       warn "站点目录尚无 package.json / ecosystem 配置，跳过 PM2 启动"
       warn "代码就绪后执行: deploy-site.sh update --domain=${DOMAIN}"
     else
       setup_pm2 "$DOMAIN"
     fi
     gen_nginx_pm2 "$DOMAIN"
-    wait_container_running "lnmp-nginx" 45
-    docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
-    docker exec lnmp-nginx nginx -s reload
+    _nginx_reload_or_die
     ok "Nginx 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$DOMAIN")）"
   fi
 
-  echo ""
-  hr; info "[3/6] SSL 证书"; echo ""
-  if container_ok "lnmp-acme"; then
-    if [[ "$SITE_TYPE" = "frontend" ]]; then
-      issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "${_fe_sub}"
-    elif [[ "$SITE_TYPE" = "pm2" ]]; then
-      issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" ""
+  if [[ "${WEBHOOK_RELEASE_ADD_DONE:-0}" -ne 1 ]]; then
+    echo ""
+    hr; info "[3/6] SSL 证书"; echo ""
+    if container_ok "lnmp-acme"; then
+      if [[ "$SITE_TYPE" = "frontend" ]]; then
+        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "${_fe_sub}"
+      elif [[ "$SITE_TYPE" = "pm2" ]]; then
+        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" ""
+      else
+        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "dist"
+      fi
     else
-      issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "dist"
+      warn "lnmp-acme 未运行，跳过 SSL 签发"
     fi
-  else
-    warn "lnmp-acme 未运行，跳过 SSL 签发"
   fi
 
-  if [[ "$SITE_TYPE" = "laravel" ]]; then
+  if [[ "${WEBHOOK_RELEASE_ADD_DONE:-0}" -eq 1 ]]; then
+    :
+  elif [[ "$SITE_TYPE" = "laravel" ]]; then
     echo ""
     hr; info "[4/6] 数据库"; echo ""
     if [[ "${NEED_DB:-y}" = "y" && "${CREATE_DB:-y}" = "y" && -n "${DB_NAME:-}" ]]; then
@@ -1020,6 +1103,9 @@ cmd_add() {
     info "目录: ${WWW_ROOT}/${DOMAIN}"
     info "PM2: $(pm2_app_name "$DOMAIN")  端口: $(pm2_port_for_site "$DOMAIN")"
     info "日志: su - ${DEVOPS_USER} -c 'pm2 logs $(pm2_app_name "$DOMAIN")'"
+    if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
+      info "请执行: $0 webhook setup（若尚未安装监听）"
+    fi
     hr
   else
     echo ""
@@ -1051,7 +1137,7 @@ cmd_add() {
     hr
   fi
 
-  _webhook_save_on_add
+  [[ "${WEBHOOK_SAVED_ON_ADD:-0}" -eq 1 ]] || _webhook_save_on_add
 }
 
 # ═══════════════════════════════════════════════

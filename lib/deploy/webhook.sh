@@ -23,6 +23,10 @@ _adding_pm2_release_webhook() {
   [[ "${SITE_TYPE:-}" = "pm2" && "${WEBHOOK_MODE:-}" = "release" && "${WEBHOOK_ENABLE:-0}" -eq 1 ]]
 }
 
+_adding_webhook_release_site() {
+  _adding_frontend_release_webhook || _adding_pm2_release_webhook
+}
+
 _webhook_history_file() { printf '%s/%s/history.tsv' "$WEBHOOK_HISTORY_DIR" "$1"; }
 _webhook_lock_file()    { printf '%s/%s/.deploy.lock' "$WEBHOOK_HISTORY_DIR" "$1"; }
 
