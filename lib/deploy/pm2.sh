@@ -63,7 +63,9 @@ _pm2_port_claimed_by_site() {
 }
 
 allocate_pm2_port() {
-  local domain="$1" start="${2:-3000}" port="$start" cur
+  local domain="$1" start port cur
+  start="${2:-3000}"
+  port="$start"
   cur="$(pm2_port_for_site "$domain" 2>/dev/null || true)"
   if [[ -n "$cur" && "$cur" =~ ^[0-9]+$ ]]; then
     printf '%s' "$cur"
