@@ -51,11 +51,36 @@ ZEOF
   done
   if [[ -n "$zsh_bin" ]]; then
     grep -qxF "$zsh_bin" /etc/shells 2>/dev/null || echo "$zsh_bin" >> /etc/shells
+    _install_zsh_bash_fallback "$zsh_bin"
     for u in root "${WHEEL_USER:-}" "${DEVOPS_USER:-}" "${CYBER_ORDINARY:-}" "${CYBER_AUDIT:-}" "${CYBER_SAFE:-}"; do
-      if [[ -n "$u" ]] && id "$u" &>/dev/null; then chsh -s "$zsh_bin" "$u" 2>/dev/null || true; fi
+      if [[ -n "$u" ]] && id "$u" &>/dev/null; then
+        usermod -s "$zsh_bin" "$u" 2>/dev/null || chsh -s "$zsh_bin" "$u" 2>/dev/null || true
+      fi
     done
   fi
   ok "Oh-My-Zsh 已安装"
+}
+
+# 交互式 bash 自动切到 zsh：覆盖 su/sudo 未走 login shell、安装后当前会话仍为 bash 等情况
+_install_zsh_bash_fallback() {
+  local zsh_bin="$1"
+  mkdir -p /etc/profile.d
+  cat > /etc/profile.d/lnmp-zsh.sh <<ZEOF
+# >>> lnmp-zsh init.sh >>>
+# 交互式 bash 自动 exec zsh（Oh-My-Zsh 已安装时）
+if [ -n "\${BASH_VERSION:-}" ] && [ -z "\${ZSH_VERSION:-}" ] \
+   && [ -z "\${LNMP_ZSH_EXEC:-}" ] \
+   && [ -z "\${BASH_EXECUTION_STRING:-}" ] \
+   && [[ \$- == *i* ]] \
+   && [ -d /usr/local/share/ohmyzsh ] \
+   && [ -x "${zsh_bin}" ]; then
+  export LNMP_ZSH_EXEC=1
+  export SHELL=${zsh_bin}
+  exec ${zsh_bin}
+fi
+# <<< lnmp-zsh init.sh <<<
+ZEOF
+  chmod 644 /etc/profile.d/lnmp-zsh.sh
 }
 
 _write_p10k_config() {
@@ -216,6 +241,7 @@ PEOF
 uninstall_zsh() {
   hr; info "卸载 Oh-My-Zsh"; echo ""
   /bin/rm -rf /usr/local/share/ohmyzsh
+  /bin/rm -f /etc/profile.d/lnmp-zsh.sh
   if [[ -f /etc/zshrc.bak ]]; then mv /etc/zshrc.bak /etc/zshrc; fi
   /bin/rm -f /etc/p10k.zsh /etc/zshenv
   local bash_bin="/bin/bash"

@@ -121,7 +121,13 @@ account_user_add_interactive() {
   _account_valid_login "$name" || die "登录名格式无效"
   id "$name" &>/dev/null && die "用户已存在"
 
-  prompt "Shell" "/bin/bash"
+  local _default_shell="/bin/bash"
+  if is_zsh_ok 2>/dev/null; then
+    for _z in /usr/bin/zsh /usr/local/bin/zsh /bin/zsh; do
+      if [[ -x "$_z" ]]; then _default_shell="$_z"; break; fi
+    done
+  fi
+  prompt "Shell" "$_default_shell"
   shell=$PROMPT_RESULT
   [[ -x "$shell" ]] || warn "Shell 可能不存在: ${shell}"
 
