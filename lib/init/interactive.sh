@@ -669,50 +669,58 @@ _interactive_install_one() {
 }
 
 _interactive_uninstall_one() {
-  local idx
-  menu_select "选择要卸载的组件（高危操作前会二次确认）" \
-    "LNMP - php"   "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin" \
-    "LNMP (全部)" "Docker" \
-    "PM2 (Node.js)" \
-    "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
-  idx=$MENU_SELECT_RESULT
+  local -a _labels _actions
+  local _ev idx component _danger_msg=""
 
-  # 高危项：标题→需要二次确认
-  local _danger_msg=""
-  case "$idx" in
-    0) _danger_msg="将停止 lnmp-php 与所有 lnmp-phpNN 额外容器" ;;
-    1) _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
-    2) _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
-    3) _danger_msg="将停止并移除 lnmp-redis 容器" ;;
-    4) _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
-    5) _danger_msg="将停止并移除 lnmp-acme 容器" ;;
-    6) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
-    7) _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
-    8) _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
-    9) _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
-    10) _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
+  _labels+=("LNMP - php（默认 lnmp-php；会一并停止所有额外 PHP）")
+  _actions+=(php)
+  while IFS= read -r _ev; do
+    [[ -z "$_ev" ]] && continue
+    _labels+=("LNMP - php ${_ev}（仅 lnmp-php$(_php_ver_no_dot "$_ev")）")
+    _actions+=("php-${_ev}")
+  done < <(_php_extra_list)
+
+  _labels+=(
+    "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin"
+    "LNMP (全部)" "Docker" "PM2 (Node.js)" "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
+  )
+  _actions+=(mysql postgres redis nginx acme phpmyadmin all docker pm2 ssh firewall bbr zsh saferm)
+
+  menu_select "选择要卸载的组件（高危操作前会二次确认）" "${_labels[@]}"
+  idx=$MENU_SELECT_RESULT
+  component="${_actions[$idx]}"
+
+  case "$component" in
+    php) _danger_msg="将停止 lnmp-php 与所有 lnmp-phpNN 额外容器，并清空 EXTRA_PHP_VERSIONS" ;;
+    php-*)
+      _ev="${component#php-}"
+      _danger_msg="将停止 lnmp-php$(_php_ver_no_dot "$_ev")，从 EXTRA_PHP_VERSIONS 移除 ${_ev}，并重建 compose"
+      ;;
+    mysql)    _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
+    postgres) _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
+    redis)    _danger_msg="将停止并移除 lnmp-redis 容器" ;;
+    nginx)    _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
+    acme)     _danger_msg="将停止并移除 lnmp-acme 容器" ;;
+    phpmyadmin) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
+    all)      _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
+    docker)   _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
+    pm2)      _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
+    ssh)      _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
   esac
   if [[ -n "$_danger_msg" ]]; then
     warn "$_danger_msg"
     confirm "确认继续？" "n" || { info "已取消"; return 0; }
   fi
 
-  case "$idx" in
-    0)  uninstall_lnmp "php" ;;
-    1)  uninstall_lnmp "mysql" ;;
-    2)  uninstall_lnmp "postgres" ;;
-    3)  uninstall_lnmp "redis" ;;
-    4)  uninstall_lnmp "nginx" ;;
-    5)  uninstall_lnmp "acme" ;;
-    6)  uninstall_lnmp "phpmyadmin" ;;
-    7)  uninstall_lnmp "all" ;;
-    8)  uninstall_docker ;;
-    9)  uninstall_pm2 ;;
-    10) uninstall_ssh ;;
-    11) uninstall_firewall ;;
-    12) uninstall_bbr ;;
-    13) uninstall_zsh ;;
-    14) uninstall_saferm ;;
+  case "$component" in
+    php|php-*|mysql|postgres|redis|nginx|acme|phpmyadmin|all) uninstall_lnmp "$component" ;;
+    docker)   uninstall_docker ;;
+    pm2)      uninstall_pm2 ;;
+    ssh)      uninstall_ssh ;;
+    firewall) uninstall_firewall ;;
+    bbr)      uninstall_bbr ;;
+    zsh)      uninstall_zsh ;;
+    saferm)   uninstall_saferm ;;
   esac
   conf_save
 }

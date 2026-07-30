@@ -91,7 +91,8 @@ usage() {
   ssh         SSH 安全策略
   lnmp        LNMP 全部容器
   nginx       Nginx 容器
-  php         PHP 容器
+  php         PHP 默认容器（lnmp-php；会一并卸掉所有额外 PHP）
+  php-X.Y     仅卸载额外 PHP（如 php-7.4 → lnmp-php74）
   mysql       MySQL 容器
   postgres    PostgreSQL 容器
   redis       Redis 容器
@@ -262,6 +263,7 @@ main() {
         lnmp)     uninstall_lnmp "all" ;;
         nginx)    uninstall_lnmp "nginx" ;;
         php)      uninstall_lnmp "php" ;;
+        php-*)    uninstall_lnmp "$target" ;;
         mysql)    uninstall_lnmp "mysql" ;;
         postgres) uninstall_lnmp "postgres" ;;
         redis)    uninstall_lnmp "redis" ;;
