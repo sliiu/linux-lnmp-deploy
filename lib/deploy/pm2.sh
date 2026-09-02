@@ -5,6 +5,35 @@
 site_type_file() { printf '%s/%s.site-type' "$NGINX_CONF" "$1"; }
 site_pm2_port_file() { printf '%s/%s.pm2-port' "$NGINX_CONF" "$1"; }
 site_pm2_cmd_file() { printf '%s/%s.pm2-cmd' "$NGINX_CONF" "$1"; }
+site_proxy_pass_file() { printf '%s/%s.proxy-pass' "$NGINX_CONF" "$1"; }
+
+write_site_proxy_pass() {
+  local domain="$1" url="$2"
+  mkdir -p "${NGINX_CONF}"
+  printf '%s\n' "$url" > "$(site_proxy_pass_file "$domain")"
+  chmod 644 "$(site_proxy_pass_file "$domain")" 2>/dev/null || true
+}
+
+proxy_pass_for_site() {
+  local domain="$1" f t
+  f="$(site_proxy_pass_file "$domain")"
+  if [[ -f "$f" ]]; then
+    t="$(head -n1 "$f" 2>/dev/null)"
+    t="${t#"${t%%[![:space:]]*}"}"
+    t="${t%"${t##*[![:space:]]}"}"
+    [[ -n "$t" ]] && { printf '%s' "$t"; return 0; }
+  fi
+  printf '%s' "${SITE_PROXY_PASS:-}"
+}
+
+apply_site_proxy_pass_cli() {
+  local domain="$1" v
+  [[ "${SITE_PROXY_PASS_CLI:-0}" -ne 1 ]] && return 0
+  v="$(_normalize_proxy_pass "${SITE_PROXY_PASS:-}")" || die "无效 --proxy-pass: ${SITE_PROXY_PASS:-<空>}"
+  write_site_proxy_pass "$domain" "$v"
+  SITE_PROXY_PASS="$v"
+  info "站点 ${domain} 反代上游：${v}"
+}
 
 write_site_type_file() {
   local domain="$1" stype="$2"
@@ -19,7 +48,7 @@ _site_type_for_domain() {
   if [[ -f "$f" ]]; then
     t="$(head -n1 "$f" 2>/dev/null | tr -d '[:space:]')"
     case "$t" in
-      laravel|frontend|pm2) printf '%s' "$t"; return 0 ;;
+      laravel|frontend|pm2|proxy) printf '%s' "$t"; return 0 ;;
     esac
   fi
   [[ -f "${WWW_ROOT}/${domain}/artisan" ]] && { printf 'laravel'; return 0; }

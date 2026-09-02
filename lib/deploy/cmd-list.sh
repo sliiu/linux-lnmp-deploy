@@ -60,6 +60,7 @@ _status_print_hints() {
     && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 php-fpm 异常，查看下方 Nginx error.log 中 upstream/fastcgi 报错")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "pm2" ]] && issues+=("502：多为 PM2 进程未运行或端口不匹配，检查 pm2 status 与 ${NGINX_CONF}/${d}.pm2-port")
+  [[ "$code_https" = "502" ]] && [[ "$site_type" = "proxy" ]] && issues+=("502：上游不可达，检查 ${NGINX_CONF}/${d}.proxy-pass 与目标服务")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "frontend" ]] && issues+=("404：确认构建产物在 ${WWW_ROOT}/${d}${fe_sub:+/}${fe_sub} 且含 index.html")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "laravel" ]] && issues+=("404：确认 ${WWW_ROOT}/${d}/public 存在且含 index.php")
   if [[ ${#issues[@]} -gt 0 ]]; then
@@ -175,6 +176,8 @@ cmd_status() {
       else
         warn "PM2 进程未运行（${_papp}）"
       fi
+    elif [[ "$site_type" = "proxy" ]]; then
+      info "反代上游: $(proxy_pass_for_site "$dom")"
     else
       [[ -f "${doc_host}/index.html" ]] && ok "前端 index.html: ${doc_host}/index.html" || warn "缺少 index.html（文档根: ${doc_host}）"
     fi
@@ -201,7 +204,7 @@ cmd_status() {
       _status_laravel_fpm_tail_hints "$dom"
     fi
 
-    if container_ok "lnmp-nginx"; then
+    if container_ok "lnmp-nginx" && [[ "$site_type" != "proxy" && "$site_type" != "pm2" ]]; then
       echo ""
       info "容器内可读性（uid 101 = nginx）:"
       if [[ "$site_type" = "laravel" ]]; then
@@ -267,7 +270,9 @@ cmd_list() {
     type="$(_site_type_for_domain "$name")"
     [[ "$type" = "frontend" && ! -d "${site_dir}" ]] && type="unknown"
 
-    if [[ -d "${site_dir}/.git" ]] || [[ -f "${site_dir}/artisan" ]] \
+    if [[ "$type" = "proxy" ]]; then
+      status="已部署"
+    elif [[ -d "${site_dir}/.git" ]] || [[ -f "${site_dir}/artisan" ]] \
       || { [[ -d "${site_dir}" ]] && [[ -n "$(ls -A "${site_dir}" 2>/dev/null)" ]]; }; then
       status="已部署"
     fi
@@ -292,10 +297,16 @@ cmd_list() {
       pm2_p="$(pm2_port_for_site "$name" 2>/dev/null || echo '-')"
       lv_v="-"
       php_v="-"
+    elif [[ "$type" = "proxy" ]]; then
+      lv_v="-"
+      php_v="-"
     fi
     if [[ "$type" = "pm2" ]]; then
       printf "  %-30s 类型:%-10s 端口:%-6s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
         "$name" "$type" "$pm2_p" "$status" "$ssl" "$cron"
+    elif [[ "$type" = "proxy" ]]; then
+      printf "  %-30s 类型:%-10s 上游:%-40s 状态:%-8s SSL:%-4s\n" \
+        "$name" "$type" "$(proxy_pass_for_site "$name")" "$status" "$ssl"
     else
       printf "  %-30s 类型:%-10s Laravel:%-6s PHP:%-8s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
         "$name" "$type" "$lv_v" "$php_v" "$status" "$ssl" "$cron"

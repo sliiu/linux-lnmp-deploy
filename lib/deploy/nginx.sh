@@ -355,6 +355,120 @@ NGINX
   fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
 }
 
+_normalize_proxy_pass() {
+  local u="${1:-}"
+  u="${u#"${u%%[![:space:]]*}"}"
+  u="${u%"${u##*[![:space:]]}"}"
+  [[ -n "$u" ]] || return 1
+  [[ "$u" != *://* ]] && u="http://${u}"
+  case "$u" in
+    http://*|https://*) ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$u"
+}
+
+_proxy_pass_for_nginx() {
+  local u="$1" scheme rest hostport path host port
+  scheme="${u%%://*}"
+  rest="${u#*://}"
+  if [[ "$rest" == */* ]]; then
+    hostport="${rest%%/*}"
+    path="/${rest#*/}"
+  else
+    hostport="$rest"
+    path=""
+  fi
+  if [[ "$hostport" == \[* ]]; then
+    printf '%s' "$u"
+    return 0
+  fi
+  host="${hostport%%:*}"
+  if [[ "$hostport" == *:* ]]; then
+    port="${hostport#*:}"
+  else
+    port=""
+  fi
+  if [[ "$host" = "127.0.0.1" || "$host" = "localhost" ]]; then
+    host="$(_docker_host_gateway)"
+  fi
+  if [[ -n "$port" ]]; then
+    printf '%s://%s:%s%s' "$scheme" "$host" "$port" "$path"
+  else
+    printf '%s://%s%s' "$scheme" "$host" "$path"
+  fi
+}
+
+gen_nginx_proxy() {
+  local domain="$1" raw="${2:-}" nginx_url host_hdr ssl_extra=""
+  [[ -n "$raw" ]] || raw="$(proxy_pass_for_site "$domain")"
+  raw="$(_normalize_proxy_pass "$raw")" || die "gen_nginx_proxy: 无效上游（${domain}）"
+  nginx_url="$(_proxy_pass_for_nginx "$raw")"
+  host_hdr='$host'
+  if [[ "$nginx_url" == https://* ]]; then
+    ssl_extra=$'        proxy_ssl_server_name on;\n'
+    host_hdr='$proxy_host'
+  fi
+
+  cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
+server {
+    listen 80;
+    server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
+    root ${CONTAINER_WWW}/${domain};
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CONTAINER_WWW}/${domain};
+        allow all;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    location / { return 301 https://\$host\$request_uri; }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name ${domain};
+    if (\$host != "${domain}") { return 444; }
+
+    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
+    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
+
+    client_max_body_size 100m;
+
+    add_header X-Frame-Options            "SAMEORIGIN"                        always;
+    add_header X-Content-Type-Options     "nosniff"                           always;
+    add_header X-XSS-Protection           "1; mode=block"                    always;
+    add_header Referrer-Policy            "strict-origin-when-cross-origin"  always;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root ${CONTAINER_WWW}/${domain};
+        allow all;
+        default_type "text/plain";
+        try_files \$uri =404;
+    }
+
+    location / {
+        proxy_pass         ${nginx_url};
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade \$http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host ${host_hdr};
+${ssl_extra}        proxy_set_header   X-Real-IP \$remote_addr;
+        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 86400s;
+        proxy_send_timeout 86400s;
+    }
+
+    location ~ /\.(?!well-known) { deny all; }
+}
+NGINX
+  fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
+}
+
 gen_nginx_frontend() {
   local domain="$1" sub="$2"
   local root_path="${CONTAINER_WWW}/${domain}"

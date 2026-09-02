@@ -71,10 +71,11 @@ usage() {
   --webhook-no-incremental  同 --webhook-incremental=n
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
   --rollback-index=N    rollback 序号（同 --rollback-to 数字形式）
-  --type=laravel|frontend|pm2  站点类型 [默认: laravel]
+  --type=laravel|frontend|pm2|proxy  站点类型 [默认: laravel]
   --pm2-port=端口       PM2 监听端口（留空或 - = 自动分配）[默认: 3000 起]
   --pm2-cmd=命令        PM2 启动命令（留空=自动检测 ecosystem / npm start）
   --pm2-build=y|n       PM2 部署时是否执行 build [y]
+  --proxy-pass=URL      proxy 类型：反代上游（如 http://127.0.0.1:8080；localhost 自动改 Docker 网关）
   --php-version=主版本   站点 PHP 版本（如 8.2 / 7.4），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
                        写入 ${NGINX_CONF}/<域名>.php-version；nginx fastcgi 与 composer/artisan/cron/horizon 自动路由到对应容器
   --app-name=名称       APP_NAME [Laravel]
@@ -127,6 +128,7 @@ usage() {
   $0 add --domain=x.com --git=   # 或省略 --git，配合事先放入 ${DATA_DIR:-/data/docker-lnmp}/www/x.com
   $0 add --domain=legacy.com --git=... --php-version=7.4   # 该站使用 lnmp-php74
   $0 add --domain=api.example.com --type=pm2 --git=git@github.com:org/node-api.git --pm2-port=3000
+  $0 add --domain=app.example.com --type=proxy --proxy-pass=http://127.0.0.1:8080
   $0 add --domain=api.example.com --type=laravel --db-connection=pgsql --db-name=app --db-password=secret
   $0 update --domain=api.example.com --pm2-build=y
 EOF

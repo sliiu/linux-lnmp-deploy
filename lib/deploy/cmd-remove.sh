@@ -14,6 +14,7 @@ cmd_remove() {
   rm -f "${NGINX_CONF}/${DOMAIN}.site-type" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.pm2-port" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.pm2-cmd" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.proxy-pass" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.webhook" 2>/dev/null || true
   stop_pm2_site "$DOMAIN"
   if [[ -f "${NGINX_CONF}/${DOMAIN}.conf" ]]; then

@@ -197,6 +197,7 @@ DB_PWD_FROM_CLI=0
 CREATE_DB="" RUN_MIGRATE="" RUN_SEED="" ADD_CRONTAB="" NEED_HORIZON=""
 FRONTEND_ROOT=""
 SITE_PM2_PORT="" SITE_PM2_PORT_CLI=0 SITE_PM2_CMD="" SITE_PM2_CMD_CLI=0 PM2_BUILD=""
+SITE_PROXY_PASS="" SITE_PROXY_PASS_CLI=0
 SSL_DNS="" CF_TOKEN="" FORCE_SSL="" SSL_STAGING=0
 ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
 AWS_ACCESS_KEY_ID="" AWS_SECRET_ACCESS_KEY="" TENCENT_SECRET_ID="" TENCENT_SECRET_KEY=""
@@ -249,6 +250,7 @@ reset_menu_deploy_state() {
   NEED_HORIZON=""
   FRONTEND_ROOT=""
   SITE_PM2_PORT="" SITE_PM2_PORT_CLI=0 SITE_PM2_CMD="" SITE_PM2_CMD_CLI=0 PM2_BUILD=""
+  SITE_PROXY_PASS="" SITE_PROXY_PASS_CLI=0
   SSL_DNS=""
   CF_TOKEN=""
   FORCE_SSL=""
@@ -393,6 +395,8 @@ parse_args() {
       --pm2-cmd)         shift; SITE_PM2_CMD="$1"; SITE_PM2_CMD_CLI=1 ;;
       --pm2-build=*)     PM2_BUILD="${1#*=}" ;;
       --pm2-build)       shift; PM2_BUILD="$1" ;;
+      --proxy-pass=*)    SITE_PROXY_PASS="${1#*=}"; SITE_PROXY_PASS_CLI=1 ;;
+      --proxy-pass)      shift; SITE_PROXY_PASS="$1"; SITE_PROXY_PASS_CLI=1 ;;
       --webhook=*)       WEBHOOK_MODE="${1#*=}"; WEBHOOK_ENABLE=1 ;;
       --webhook)         shift; WEBHOOK_MODE="$1"; WEBHOOK_ENABLE=1 ;;
       --webhook-release-name=*) WEBHOOK_RELEASE_NAME="${1#*=}" ;;
@@ -758,17 +762,19 @@ collect_interactive() {
     menu_select "站点类型" \
       "laravel (PHP 后端)" \
       "frontend (静态/SPA)" \
-      "pm2 (Node.js 应用)"
+      "pm2 (Node.js 应用)" \
+      "proxy (Nginx 反代)"
     _st_i=$MENU_SELECT_RESULT
     case "$_st_i" in
       1) SITE_TYPE="frontend" ;;
       2) SITE_TYPE="pm2" ;;
+      3) SITE_TYPE="proxy" ;;
       *) SITE_TYPE="laravel" ;;
     esac
   fi
   SITE_TYPE=${SITE_TYPE:-laravel}
   case "$SITE_TYPE" in
-    laravel|frontend|pm2) ;;
+    laravel|frontend|pm2|proxy) ;;
     *) SITE_TYPE="laravel" ;;
   esac
 
@@ -779,7 +785,10 @@ collect_interactive() {
   fi
 
   # 3) Git / Webhook 仓库匹配
-  if [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
+  if [[ "$SITE_TYPE" = "proxy" ]]; then
+    GIT_REPO=""
+    GIT_BRANCH=""
+  elif [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
     [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）")
     [[ -n "$GIT_REPO" ]] || die "Webhook Release 需填写仓库地址（用于匹配推送来源）"
     [[ -z "$WEBHOOK_RELEASE_NAME" ]] && {
@@ -857,6 +866,10 @@ collect_interactive() {
         done
       fi
     fi
+  elif [[ "$SITE_TYPE" = "proxy" ]]; then
+    [[ -z "$SITE_PROXY_PASS" ]] && SITE_PROXY_PASS=$(prompt "反代上游（如 http://127.0.0.1:8080）")
+    SITE_PROXY_PASS="$(_normalize_proxy_pass "${SITE_PROXY_PASS}")" || die "反代上游不能为空（如 http://127.0.0.1:8080）"
+    SITE_PROXY_PASS_CLI=1
   else
     if [[ "$SITE_TYPE" = "pm2" ]]; then
       [[ -z "$SITE_PM2_PORT" ]] && SITE_PM2_PORT=$(prompt "PM2 监听端口（留空=自动分配，从 3000 起）" "3000")
@@ -918,7 +931,10 @@ cmd_add() {
     hr; info "配置确认"; hr
     printf "  %-18s %s\n" "域名"   "$DOMAIN"
     printf "  %-18s %s\n" "类型"   "$SITE_TYPE"
-    if [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
+    if [[ "$SITE_TYPE" = "proxy" ]]; then
+      printf "  %-18s %s\n" "部署" "Nginx 反代（不 clone）"
+      printf "  %-18s %s\n" "反代上游" "${SITE_PROXY_PASS}"
+    elif [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
       printf "  %-18s %s\n" "部署"   "Webhook Release（不 clone）"
       printf "  %-18s %s\n" "仓库(匹配)" "${GIT_REPO}"
       printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
@@ -950,6 +966,8 @@ cmd_add() {
       printf "  %-18s %s\n" "PM2 端口" "${SITE_PM2_PORT:-自动分配}"
       printf "  %-18s %s\n" "PM2 命令" "${SITE_PM2_CMD:-自动检测}"
       printf "  %-18s %s\n" "构建" "${PM2_BUILD:-y}"
+    elif [[ "$SITE_TYPE" = "proxy" ]]; then
+      :
     else
       if [[ "${WEBHOOK_MODE:-}" = "release" ]]; then
         printf "  %-18s %s\n" "静态根" "${WWW_ROOT}/${DOMAIN}/（Release 产物直出）"
@@ -983,6 +1001,19 @@ cmd_add() {
   elif [[ "$SITE_TYPE" = "pm2" ]]; then
     info "PM2 站点：Nginx 反代在代码部署与 PM2 启动后生成"
     write_site_type_file "$DOMAIN" "pm2"
+  elif [[ "$SITE_TYPE" = "proxy" ]]; then
+    mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
+    chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
+    chmod a+rx "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
+    apply_site_proxy_pass_cli "$DOMAIN"
+    [[ -n "$(proxy_pass_for_site "$DOMAIN")" ]] || {
+      SITE_PROXY_PASS="$(_normalize_proxy_pass "${SITE_PROXY_PASS}")" || die "反代上游不能为空"
+      write_site_proxy_pass "$DOMAIN" "$SITE_PROXY_PASS"
+    }
+    gen_nginx_proxy "$DOMAIN"
+    _nginx_reload_or_die
+    ok "Nginx 反代已生成（→ $(proxy_pass_for_site "$DOMAIN")）"
+    write_site_type_file "$DOMAIN" "proxy"
   else
     if _adding_frontend_release_webhook; then
       info "前端站点：Webhook Release，Nginx 根目录 = 站点目录（待 Release 推送后写入产物）"
@@ -994,7 +1025,9 @@ cmd_add() {
   echo ""
   hr; info "[2/6] 部署代码"; echo ""
   local _fe_sub="" _release_wh=0
-  if _adding_frontend_release_webhook; then
+  if [[ "$SITE_TYPE" = "proxy" ]]; then
+    info "反代站点：跳过代码部署"
+  elif _adding_frontend_release_webhook; then
     _release_wh=1
     _fe_sub=""
     mkdir -p "${WWW_ROOT}/${DOMAIN}"
@@ -1047,7 +1080,7 @@ cmd_add() {
     if container_ok "lnmp-acme"; then
       if [[ "$SITE_TYPE" = "frontend" ]]; then
         issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "${_fe_sub}"
-      elif [[ "$SITE_TYPE" = "pm2" ]]; then
+      elif [[ "$SITE_TYPE" = "pm2" || "$SITE_TYPE" = "proxy" ]]; then
         issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" ""
       else
         issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "dist"
@@ -1107,6 +1140,17 @@ cmd_add() {
       info "请执行: $0 webhook setup（若尚未安装监听）"
     fi
     hr
+  elif [[ "$SITE_TYPE" = "proxy" ]]; then
+    echo ""
+    hr; info "[4/6] 跳过（反代无数据库）"
+    hr; info "[5/6] 跳过（反代无 PHP）"
+    hr; info "[6/6] 跳过（反代无 crontab）"
+    echo ""
+    hr
+    ok "反代站点部署完成"
+    info "访问: https://${DOMAIN}"
+    info "上游: $(proxy_pass_for_site "$DOMAIN")"
+    hr
   else
     echo ""
     hr; info "[4/6] 跳过（前端无数据库）"
@@ -1137,7 +1181,7 @@ cmd_add() {
     hr
   fi
 
-  [[ "${WEBHOOK_SAVED_ON_ADD:-0}" -eq 1 ]] || _webhook_save_on_add
+  [[ "${WEBHOOK_SAVED_ON_ADD:-0}" -eq 1 || "$SITE_TYPE" = "proxy" ]] || _webhook_save_on_add
 }
 
 # ═══════════════════════════════════════════════
@@ -1156,16 +1200,18 @@ cmd_update() {
   echo ""
   hr; info "更新站点: ${DOMAIN} (${site_type})"; echo ""
 
-  if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
-    _webhook_configure_site
-    [[ "${WEBHOOK_ONLY:-0}" -eq 1 ]] && { ok "Webhook 配置完成（未执行代码更新）"; return 0; }
-  elif [[ ! -f "$(site_webhook_file "$DOMAIN")" ]]; then
-    if confirm "为该站点配置 Webhook 自动部署？" "n"; then
-      WEBHOOK_ENABLE=1
+  if [[ "$site_type" != "proxy" ]]; then
+    if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
       _webhook_configure_site
-      if confirm "仅配置 Webhook，跳过本次代码更新？" "n"; then
-        ok "Webhook 配置完成（未执行代码更新）"
-        return 0
+      [[ "${WEBHOOK_ONLY:-0}" -eq 1 ]] && { ok "Webhook 配置完成（未执行代码更新）"; return 0; }
+    elif [[ ! -f "$(site_webhook_file "$DOMAIN")" ]]; then
+      if confirm "为该站点配置 Webhook 自动部署？" "n"; then
+        WEBHOOK_ENABLE=1
+        _webhook_configure_site
+        if confirm "仅配置 Webhook，跳过本次代码更新？" "n"; then
+          ok "Webhook 配置完成（未执行代码更新）"
+          return 0
+        fi
       fi
     fi
   fi
@@ -1179,7 +1225,9 @@ cmd_update() {
     warn_mysql_low_memory_compose_missing
   fi
 
-  if frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
+  if [[ "$site_type" = "proxy" ]]; then
+    :
+  elif frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
     warn "Webhook Release 站点：跳过 git 操作"
   elif [[ "${SKIP_GIT:-0}" -ne 1 && -d "${site_dir}/.git" ]]; then
     if [[ -n "${GIT_REF:-}" ]]; then
@@ -1285,6 +1333,20 @@ cmd_update() {
     if container_ok "lnmp-nginx"; then
       if docker exec lnmp-nginx nginx -t 2>&1; then
         docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload" || warn "Nginx reload 失败"
+      else
+        warn "Nginx 配置校验失败，未 reload"
+      fi
+    fi
+  elif [[ "$site_type" = "proxy" ]]; then
+    if [[ "${SITE_PROXY_PASS_CLI:-0}" -ne 1 && "${YES:-0}" -ne 1 ]]; then
+      SITE_PROXY_PASS=$(prompt "反代上游" "$(proxy_pass_for_site "$DOMAIN")")
+      SITE_PROXY_PASS_CLI=1
+    fi
+    apply_site_proxy_pass_cli "$DOMAIN"
+    gen_nginx_proxy "$DOMAIN"
+    if container_ok "lnmp-nginx"; then
+      if docker exec lnmp-nginx nginx -t 2>&1; then
+        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload（→ $(proxy_pass_for_site "$DOMAIN")）" || warn "Nginx reload 失败"
       else
         warn "Nginx 配置校验失败，未 reload"
       fi
