@@ -1399,19 +1399,31 @@ NGX
 
 _nginx_merge_webhook_proxy() {
   local conf="$1" hook_path="$2" port="$3"
-  local block_file tmp line inserted=0
+  local block_file tmp line inserted=0 last_brace=0 n=0
   _nginx_strip_webhook_proxy "$conf"
   block_file="$(mktemp)"
   tmp="$(mktemp)"
   _nginx_webhook_proxy_block "$hook_path" "$port" > "$block_file"
   while IFS= read -r line || [[ -n "$line" ]]; do
-    if [[ "$inserted" -eq 0 && "$line" =~ location\ ~\ /\. ]]; then
+    n=$((n + 1))
+    [[ "$line" == *'}'* ]] && last_brace=$n
+    if [[ "$inserted" -eq 0 && "$line" == *"location ~ /."* ]]; then
       cat "$block_file"
       inserted=1
     fi
     printf '%s\n' "$line"
   done < "$conf" > "$tmp"
-  [[ "$inserted" -eq 1 ]] || cat "$block_file" >> "$tmp"
+  if [[ "$inserted" -ne 1 ]]; then
+    if [[ "$last_brace" -gt 0 ]]; then
+      awk -v ins="$last_brace" -v blk="$block_file" '
+        NR==ins { while ((getline l < blk) > 0) print l; close(blk) }
+        { print }
+      ' "$tmp" > "${tmp}.2"
+      mv "${tmp}.2" "$tmp"
+    else
+      cat "$block_file" >> "$tmp"
+    fi
+  fi
   mv "$tmp" "$conf"
   rm -f "$block_file"
   fix_nginx_conf_d_file "$conf"
