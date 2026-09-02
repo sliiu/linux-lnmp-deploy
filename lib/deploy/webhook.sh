@@ -1381,11 +1381,12 @@ _nginx_strip_webhook_proxy() {
 }
 
 _nginx_webhook_proxy_block() {
-  local hook_path="$1" port="$2"
+  local hook_path="$1" port="$2" host
+  host="$(_docker_host_gateway)"
   cat <<NGX
     # deploy-site webhook-proxy BEGIN
     location ^~ ${hook_path} {
-        proxy_pass http://127.0.0.1:${port};
+        proxy_pass http://${host}:${port};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;

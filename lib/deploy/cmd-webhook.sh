@@ -210,7 +210,7 @@ _collect_webhook_setup_interactive() {
     "仅本机 127.0.0.1（默认）"
   _i=$MENU_SELECT_RESULT
   case "$_i" in
-    0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND=127.0.0.1 ;;
+    0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND="$(_docker_host_gateway)" ;;
     1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
     2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
   esac
@@ -363,7 +363,7 @@ cmd_webhook_setup() {
   new_proxy="${WEBHOOK_PROXY_DOMAIN:-}"
 
   if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
-    WEBHOOK_BIND=127.0.0.1
+    WEBHOOK_BIND="$(_docker_host_gateway)"
     [[ -n "$new_proxy" ]] || die "Nginx 反代需指定 --webhook-proxy-domain="
     if [[ "$old_mode" = "nginx" && -n "$old_domain" && "$old_domain" != "$new_proxy" ]]; then
       WEBHOOK_PROXY_DOMAIN="$old_domain"
