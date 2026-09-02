@@ -538,6 +538,48 @@ else:
 PY
 }
 
+# 与 init.sh GH_PROXY 相同：https://ghfast.top + / + https://github.com/...
+_webhook_gh_proxy_prefix() {
+  _webhook_load_listener_env
+  local p="${WEBHOOK_GH_PROXY:-${GH_PROXY:-}}"
+  p="${p%/}"
+  printf '%s' "$p"
+}
+
+_webhook_url_is_gh_proxied() {
+  local url="$1" prefix
+  prefix="$(_webhook_gh_proxy_prefix)"
+  [[ -n "$prefix" && "$url" == "$prefix/"* ]]
+}
+
+_webhook_with_gh_proxy() {
+  local url="$1" prefix
+  prefix="$(_webhook_gh_proxy_prefix)"
+  [[ -n "$prefix" && -n "$url" ]] || { printf '%s' "$url"; return 0; }
+  [[ "$url" == "$prefix/"* ]] && { printf '%s' "$url"; return 0; }
+  [[ -n "${WEBHOOK_HTTP_PROXY:-}" ]] && { printf '%s' "$url"; return 0; }
+  case "$url" in
+    https://github.com/*|http://github.com/*|https://objects.githubusercontent.com/*|https://release-assets.githubusercontent.com/*)
+      printf '%s/%s' "$prefix" "$url"
+      ;;
+    *)
+      printf '%s' "$url"
+      ;;
+  esac
+}
+
+_webhook_gh_proxy_release_url() {
+  local repo="$1" tag="$2" asset="$3" gh_dl proxied
+  [[ -n "$repo" && -n "$tag" && -n "$asset" ]] || return 1
+  [[ -n "$(_webhook_gh_proxy_prefix)" ]] || return 1
+  [[ -z "${WEBHOOK_HTTP_PROXY:-}" ]] || return 1
+  gh_dl="$(_webhook_github_release_asset_download_url "$repo" "$tag" "$asset")" || return 1
+  [[ -n "$gh_dl" ]] || return 1
+  proxied="$(_webhook_with_gh_proxy "$gh_dl")"
+  [[ "$proxied" != "$gh_dl" ]] || return 1
+  printf '%s' "$proxied"
+}
+
 # GitHub API 302 到 release-assets；国内 ECS 常在 200 后正文卡住
 _webhook_curl_proxy_args() {
   _webhook_load_listener_env
@@ -587,7 +629,10 @@ _webhook_download_url_one() {
   local hdr=() err rc=0 t0 t1 nbytes monitor_pid=0 stop_file fetch_url cdn_url curl_opts
   _webhook_load_listener_env
   fetch_url="$url"
-  if [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]]; then
+  if _webhook_url_is_gh_proxied "$url"; then
+    hdr=()
+    info "GitHub 代理: ${fetch_url%%\?*}"
+  elif [[ "$url" == *"api.github.com/"*"/releases/assets/"* ]]; then
     hdr=(-H "Accept: application/octet-stream")
     [[ -n "$token" ]] && hdr+=(-H "Authorization: Bearer ${token}")
     cdn_url="$(_webhook_resolve_github_release_cdn "$url" "$token")" || true
@@ -652,7 +697,7 @@ _webhook_download_try_urls() {
     fi
     [[ "$i" -lt "$n" ]] && warn "当前地址失败，尝试下一地址"
   done
-  warn "全部下载地址均失败；可在 ${NGINX_CONF}/<域名>.webhook 设置 asset_mirror_url（OSS），或在 ${WEBHOOK_LISTENER_ENV} 设置 WEBHOOK_HTTP_PROXY"
+  warn "全部下载地址均失败；可在 ${NGINX_CONF}/<域名>.webhook 设置 asset_mirror_url（OSS），或 init.sh 配置 GH_PROXY / listener.env 的 WEBHOOK_HTTP_PROXY"
   return 1
 }
 
@@ -744,7 +789,7 @@ PY
 _webhook_deploy_release() {
   local domain="$1" body_file="$2" release_name="${3:-}" release_tag="${4:-}" download_url="${5:-}"
   local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
-  local mirror asset_file dl_urls=()
+  local mirror asset_file dl_urls=() proxied
   wf="$(site_webhook_file "$domain")"
   asset_hint="$(_webhook_read_kv "$wf" asset_name)"
   token="$(_webhook_site_download_token "$domain")"
@@ -772,6 +817,8 @@ _webhook_deploy_release() {
   if [[ -n "$mirror" ]]; then
     dl_urls+=("$(_webhook_expand_mirror_url "$mirror" "$ver" "$asset_file")")
   fi
+  proxied="$(_webhook_gh_proxy_release_url "$(_webhook_read_kv "$wf" git_repo)" "$ver" "$asset_file")" || true
+  [[ -n "$proxied" ]] && dl_urls+=("$proxied")
   dl_urls+=("$download_url")
 
   tmp="$(mktemp -d)"
@@ -987,7 +1034,7 @@ PY
 _webhook_deploy_gateway_release() {
   local domain="$1" body_file="$2" release_name="${3:-}" release_tag="${4:-}" download_url="${5:-}"
   local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
-  local dl_urls=() mirror asset_file
+  local dl_urls=() mirror asset_file proxied
   [[ "$(_site_type_for_domain "$domain")" = "pm2" ]] || die "站点 ${domain} 非 pm2 类型，无法部署 gateway-release"
 
   wf="$(site_webhook_file "$domain")"
@@ -1015,6 +1062,8 @@ _webhook_deploy_gateway_release() {
   if [[ -n "$mirror" ]]; then
     dl_urls+=("$(_webhook_expand_mirror_url "$mirror" "$ver" "$asset_file")")
   fi
+  proxied="$(_webhook_gh_proxy_release_url "$(_webhook_read_kv "$wf" git_repo)" "$ver" "$asset_file")" || true
+  [[ -n "$proxied" ]] && dl_urls+=("$proxied")
   dl_urls+=("$download_url")
 
   tmp="$(mktemp -d)"
