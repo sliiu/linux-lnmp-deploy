@@ -62,6 +62,7 @@ usage() {
   --webhook-path=路径     setup：路径 [/hooks]
   --webhook-proxy-domain= setup：Nginx 反代域名（mode=nginx，本机仍 127.0.0.1）
   --webhook-public-mode=  setup：nginx | bind | local
+  --webhook-notify-url=   setup：异常通知 URL（企业微信/钉钉机器人，- 清除）
   --webhook-release-name=  release 模式：匹配的 Release 名称或 tag
   --webhook-secret=     webhook 密钥（留空则交互输入，更新时保留原值）
   --webhook-github-token=  release 模式：站点 GitHub Token（私有仓下载）

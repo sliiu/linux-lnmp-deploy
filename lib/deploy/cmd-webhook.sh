@@ -193,6 +193,7 @@ _collect_webhook_setup_interactive() {
   if [[ -f "$WEBHOOK_LISTENER_ENV" ]]; then
     info "已有 listener.env：mode=${WEBHOOK_PUBLIC_MODE:-local} ${WEBHOOK_BIND:-127.0.0.1}:${WEBHOOK_PORT:-9080}${WEBHOOK_PATH:-/hooks}"
     [[ -n "${WEBHOOK_PROXY_DOMAIN:-}" ]] && info "  反代域名: ${WEBHOOK_PROXY_DOMAIN}"
+    [[ -n "${WEBHOOK_NOTIFY_URL:-}" ]] && info "  异常通知: 已配置"
     info "可重新选择以下选项更新配置"
   fi
 
@@ -242,6 +243,16 @@ _collect_webhook_setup_interactive() {
     WEBHOOK_BIND=$PROMPT_RESULT
     prompt "监听端口" "${WEBHOOK_PORT:-9080}"
     WEBHOOK_PORT=$PROMPT_RESULT
+  fi
+
+  prompt "异常通知 URL（企业微信/钉钉机器人 webhook，留空保留，- 清除）" "${WEBHOOK_NOTIFY_URL:-}"
+  case "$PROMPT_RESULT" in
+    -) WEBHOOK_NOTIFY_URL=""; WEBHOOK_NOTIFY_URL_SET=1 ;;
+    "") ;;
+    *) WEBHOOK_NOTIFY_URL=$PROMPT_RESULT; WEBHOOK_NOTIFY_URL_SET=1 ;;
+  esac
+  if [[ -n "$WEBHOOK_NOTIFY_URL" && ! "$WEBHOOK_NOTIFY_URL" =~ ^https?:// ]]; then
+    die "WEBHOOK_NOTIFY_URL 须为 http(s) URL"
   fi
 }
 
@@ -337,6 +348,7 @@ cmd_webhook_list() {
   echo ""
   info "监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}（mode=${WEBHOOK_PUBLIC_MODE:-local}）"
   info "回调 URL: $(_webhook_public_callback_url)"
+  [[ -n "${WEBHOOK_NOTIFY_URL:-}" ]] && info "异常通知: 已配置" || info "异常通知: 未配置"
   systemctl is-active lnmp-deploy-webhook &>/dev/null && ok "systemd: lnmp-deploy-webhook 运行中" \
     || warn "systemd: lnmp-deploy-webhook 未运行（执行 webhook setup）"
   echo ""
@@ -354,6 +366,10 @@ cmd_webhook_setup() {
   old_domain="${WEBHOOK_PROXY_DOMAIN:-}"
 
   _collect_webhook_setup_interactive "$cli_reconfig"
+
+  if [[ -n "${WEBHOOK_NOTIFY_URL:-}" && ! "$WEBHOOK_NOTIFY_URL" =~ ^https?:// ]]; then
+    die "WEBHOOK_NOTIFY_URL 须为 http(s) URL"
+  fi
 
   case "${WEBHOOK_PUBLIC_MODE:-local}" in
     nginx|bind|local) ;;
@@ -396,6 +412,7 @@ cmd_webhook_setup() {
   _webhook_load_listener_env
   info "本机监听: ${WEBHOOK_BIND}:${WEBHOOK_PORT}${WEBHOOK_PATH}"
   info "回调 URL: $(_webhook_public_callback_url)"
+  [[ -n "${WEBHOOK_NOTIFY_URL:-}" ]] && info "异常通知: 已配置" || info "异常通知: 未配置"
   info "GitHub: 事件 release / 签名 X-Hub-Signature-256"
   info "Gitee:  事件 Release Hook / Push Hook(tag) / Header X-Gitee-Token=secret"
   info "CI:     POST JSON event=static-release|gateway-release / Authorization: Bearer <站点 .webhook 内 secret>"
@@ -413,6 +430,10 @@ cmd_webhook_handle() {
   trap 'rm -f '"$(printf '%q ' "$WEBHOOK_BODY_FILE" "${WEBHOOK_HEADERS_FILE:-}")"' 2>/dev/null || true' EXIT
   if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}" "${WEBHOOK_HEADERS_FILE:-}"; then
     warn "webhook handle 结束: payload 处理失败"
+    ops_notify "$(printf 'webhook 处理失败\n主机: %s\n站点: %s\n时间: %s\n日志: %s' \
+      "$(hostname -s 2>/dev/null || hostname || echo unknown)" \
+      "${_deploy_log_bound_domain:-?}" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "${LOG_FILE:-}")"
     return 1
   fi
   ok "webhook handle 结束"

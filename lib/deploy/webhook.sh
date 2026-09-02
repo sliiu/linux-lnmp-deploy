@@ -227,7 +227,7 @@ _webhook_site_download_token() {
 
 _webhook_load_listener_env() {
   local _pm="${WEBHOOK_PUBLIC_MODE:-}" _bind="${WEBHOOK_BIND:-}" _port="${WEBHOOK_PORT:-}" \
-        _path="${WEBHOOK_PATH:-}" _proxy="${WEBHOOK_PROXY_DOMAIN:-}"
+        _path="${WEBHOOK_PATH:-}" _proxy="${WEBHOOK_PROXY_DOMAIN:-}" _notify="${WEBHOOK_NOTIFY_URL:-}"
   WEBHOOK_PORT="${WEBHOOK_PORT:-9080}"
   WEBHOOK_BIND="${WEBHOOK_BIND:-127.0.0.1}"
   WEBHOOK_PATH="${WEBHOOK_PATH:-/hooks}"
@@ -246,6 +246,10 @@ _webhook_load_listener_env() {
   [[ -n "$_port" ]]  && WEBHOOK_PORT="$_port"
   [[ -n "$_path" ]]  && WEBHOOK_PATH="$_path"
   if [[ -n "$_proxy" ]]; then WEBHOOK_PROXY_DOMAIN="$_proxy"; fi
+  if [[ "${WEBHOOK_NOTIFY_URL_SET:-0}" = 1 ]]; then
+    WEBHOOK_NOTIFY_URL="$_notify"
+    [[ "$WEBHOOK_NOTIFY_URL" = "-" ]] && WEBHOOK_NOTIFY_URL=""
+  fi
 }
 
 _webhook_acquire_lock() {
@@ -620,8 +624,9 @@ _webhook_resolve_github_release_cdn() {
 }
 
 _webhook_curl_common_opts() {
-  local speed_time="${1:-60}"
-  printf '%s' "--http1.1 --connect-timeout 30 --max-time 1800 --retry 2 --retry-delay 3 --speed-time ${speed_time} --speed-limit 1024"
+  local speed_time="${1:-60}" extra=""
+  curl --help 2>/dev/null | grep -q -- '--retry-all-errors' && extra="--retry-all-errors"
+  printf '%s' "--http1.1 --connect-timeout 30 --max-time 1800 --retry 5 --retry-delay 5 ${extra} --speed-time ${speed_time} --speed-limit 1024 -C -"
 }
 
 _webhook_download_url_one() {
@@ -670,7 +675,7 @@ _webhook_download_url_one() {
     [[ "$fetch_url" == *"api.github.com/"*"/releases/assets/"* ]] \
       && wget_hdr+=(--header="Accept: application/octet-stream")
     [[ -n "${WEBHOOK_HTTP_PROXY:-}" ]] && wget_hdr+=(--execute="use_proxy=yes" --execute="https_proxy=${WEBHOOK_HTTP_PROXY}")
-    wget -q --timeout=30 --tries=2 "${wget_hdr[@]}" -O "$dest" "$fetch_url" || rc=$?
+    wget -q --timeout=30 --tries=5 --waitretry=5 -c "${wget_hdr[@]}" -O "$dest" "$fetch_url" || rc=$?
     _webhook_download_progress_stop "$monitor_pid" "$stop_file"
     [[ "$rc" -eq 0 ]] || return 1
     t1=$(date +%s)
@@ -683,6 +688,8 @@ _webhook_download_url_one() {
   fi
 }
 
+_webhook_notify() { ops_notify "$1"; }
+
 _webhook_download_try_urls() {
   local dest="$1" token="$2" speed_time="${3:-60}"
   shift 3
@@ -691,6 +698,7 @@ _webhook_download_try_urls() {
   for u in "$@"; do
     [[ -z "$u" ]] && continue
     i=$((i + 1))
+    [[ "$i" -gt 1 ]] && rm -f "$dest"
     info "下载 (${i}/${n}): ${u%%\?*}"
     if _webhook_download_url_one "$u" "$dest" "$token" "$speed_time"; then
       return 0
@@ -1384,6 +1392,13 @@ _webhook_process_payload() {
 }
 
 _webhook_write_listener_env() {
+  local _http_proxy _gh_proxy _notify _gh_token _ge_token
+  _webhook_load_listener_env
+  _http_proxy="${WEBHOOK_HTTP_PROXY:-}"
+  _gh_proxy="${WEBHOOK_GH_PROXY:-}"
+  _notify="${WEBHOOK_NOTIFY_URL:-}"
+  _gh_token="${WEBHOOK_GITHUB_TOKEN:-}"
+  _ge_token="${WEBHOOK_GITEE_TOKEN:-}"
   mkdir -p "$WEBHOOK_DIR"
   cat > "$WEBHOOK_LISTENER_ENV" <<EOF
 WEBHOOK_PORT=${WEBHOOK_PORT:-9080}
@@ -1391,12 +1406,12 @@ WEBHOOK_BIND=${WEBHOOK_BIND:-127.0.0.1}
 WEBHOOK_PATH=${WEBHOOK_PATH:-/hooks}
 WEBHOOK_PUBLIC_MODE=${WEBHOOK_PUBLIC_MODE:-local}
 WEBHOOK_PROXY_DOMAIN=${WEBHOOK_PROXY_DOMAIN:-}
-# 私有仓库 release 下载（可选）
-# WEBHOOK_GITHUB_TOKEN=
-# WEBHOOK_GITEE_TOKEN=
-# 国内 ECS 拉 GitHub release 易卡死，可设 HTTP 代理：
-# WEBHOOK_HTTP_PROXY=http://127.0.0.1:7890
 EOF
+  [[ -n "$_http_proxy" ]] && printf 'WEBHOOK_HTTP_PROXY=%s\n' "$_http_proxy" >> "$WEBHOOK_LISTENER_ENV"
+  [[ -n "$_gh_proxy" ]] && printf 'WEBHOOK_GH_PROXY=%s\n' "$_gh_proxy" >> "$WEBHOOK_LISTENER_ENV"
+  [[ -n "$_notify" ]] && printf 'WEBHOOK_NOTIFY_URL=%s\n' "$_notify" >> "$WEBHOOK_LISTENER_ENV"
+  [[ -n "$_gh_token" ]] && printf 'WEBHOOK_GITHUB_TOKEN=%s\n' "$_gh_token" >> "$WEBHOOK_LISTENER_ENV"
+  [[ -n "$_ge_token" ]] && printf 'WEBHOOK_GITEE_TOKEN=%s\n' "$_ge_token" >> "$WEBHOOK_LISTENER_ENV"
   chmod 600 "$WEBHOOK_LISTENER_ENV"
 }
 

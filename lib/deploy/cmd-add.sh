@@ -213,6 +213,8 @@ WEBHOOK_PORT=""
 WEBHOOK_PATH=""
 WEBHOOK_PROXY_DOMAIN=""
 WEBHOOK_PUBLIC_MODE=""
+WEBHOOK_NOTIFY_URL=""
+WEBHOOK_NOTIFY_URL_SET=0
 WEBHOOK_SETUP_CLI=0
 YES=0
 STATUS_ALL=0
@@ -286,6 +288,8 @@ reset_menu_deploy_state() {
   WEBHOOK_PATH=""
   WEBHOOK_PROXY_DOMAIN=""
   WEBHOOK_PUBLIC_MODE=""
+  WEBHOOK_NOTIFY_URL=""
+  WEBHOOK_NOTIFY_URL_SET=0
   WEBHOOK_SETUP_CLI=0
   YES=0
   STATUS_ALL=0
@@ -423,6 +427,8 @@ parse_args() {
       --webhook-proxy-domain)   shift; WEBHOOK_PROXY_DOMAIN="$1"; WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_SETUP_CLI=1 ;;
       --webhook-public-mode=*) WEBHOOK_PUBLIC_MODE="${1#*=}"; WEBHOOK_SETUP_CLI=1 ;;
       --webhook-public-mode)   shift; WEBHOOK_PUBLIC_MODE="$1"; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-notify-url=*) WEBHOOK_NOTIFY_URL="${1#*=}"; WEBHOOK_NOTIFY_URL_SET=1; WEBHOOK_SETUP_CLI=1 ;;
+      --webhook-notify-url)   shift; WEBHOOK_NOTIFY_URL="$1"; WEBHOOK_NOTIFY_URL_SET=1; WEBHOOK_SETUP_CLI=1 ;;
       --rollback-to=*)   ROLLBACK_TO="${1#*=}" ;;
       --rollback-to)     shift; ROLLBACK_TO="$1" ;;
       --rollback-index=*) ROLLBACK_INDEX="${1#*=}" ;;

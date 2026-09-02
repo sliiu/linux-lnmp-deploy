@@ -48,11 +48,29 @@ _deploy_log_out() {
   printf '%s\n' "$1"
 }
 
+ops_notify() {
+  local content="$1" url payload envf
+  envf="${DATA_DIR:-/data/docker-lnmp}/webhook/listener.env"
+  [[ -f "${CONF_FILE:-/etc/lnmp-env.conf}" ]] && source "${CONF_FILE:-/etc/lnmp-env.conf}" 2>/dev/null || true
+  [[ -f "$envf" ]] && source "$envf" 2>/dev/null || true
+  url="${WEBHOOK_NOTIFY_URL:-}"
+  [[ -n "$url" ]] || return 0
+  command -v python3 &>/dev/null && command -v curl &>/dev/null || return 0
+  payload="$(python3 -c 'import json,sys; print(json.dumps({"msgtype":"text","text":{"content":sys.argv[1]}},ensure_ascii=False))' "$content")" || return 0
+  curl -fsS --connect-timeout 8 --max-time 15 -H 'Content-Type: application/json' -d "$payload" "$url" >/dev/null 2>&1 || true
+}
+
 die() {
   if [[ "${DEPLOY_LOG_TEE:-0}" = "1" && -n "${LOG_FILE:-}" ]]; then
     printf '[%s] ✗ %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
   fi
   printf '✗ %s\n' "$*" >&2
+  if ! interactive_tty_ok; then
+    ops_notify "$(printf '部署异常\n主机: %s\n站点: %s\n错误: %s\n时间: %s\n日志: %s' \
+      "$(hostname -s 2>/dev/null || hostname || echo unknown)" \
+      "${_deploy_log_bound_domain:-${DOMAIN:-?}}" "$*" \
+      "$(date '+%Y-%m-%d %H:%M:%S')" "${LOG_FILE:-}")"
+  fi
   exit 1
 }
 info() { _deploy_log_out "  $*"; }
