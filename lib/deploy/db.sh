@@ -49,11 +49,11 @@ _validate_laravel_db_config() {
   case "$conn" in
     mysql)
       [[ "$db_name" = "mysql" && "$db_host" = "mysql" ]] \
-        && die "DB_DATABASE 不能为 mysql（与 DB_HOST=mysql 同时出现时多为填反）。库名请用业务名如 payment"
+        && { menu_fail "DB_DATABASE 不能为 mysql（与 DB_HOST=mysql 同时出现时多为填反）。库名请用业务名如 payment" || return 1; }
       ;;
     pgsql)
       [[ "$db_name" = "postgres" && "$db_host" = "postgres" ]] \
-        && die "DB_DATABASE 不能为 postgres（与 DB_HOST=postgres 同时出现时多为填反）。库名请用业务名如 payment"
+        && { menu_fail "DB_DATABASE 不能为 postgres（与 DB_HOST=postgres 同时出现时多为填反）。库名请用业务名如 payment" || return 1; }
       ;;
   esac
 }

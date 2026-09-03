@@ -42,13 +42,7 @@ _webhook_collect_site_release_opts() {
   old_inc="$(_webhook_normalize_incremental "$old_inc")"
   repo_lc="$(printf '%s' "${GIT_REPO:-}" | tr '[:upper:]' '[:lower:]')"
 
-  if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
-    prompt "Release 附件名关键字（子串匹配，不含版本号，如 slimppt-standalone；留空=第一个 asset）" "${old_asset:-}"
-    [[ -n "$PROMPT_RESULT" ]] && WEBHOOK_ASSET_NAME="$PROMPT_RESULT"
-    if [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]]; then
-      WEBHOOK_ASSET_NAME="$old_asset"
-    fi
-  fi
+  [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]] && WEBHOOK_ASSET_NAME="$old_asset"
 
   if [[ "$repo_lc" == *github.com* || "$repo_lc" == git@github.com:* ]]; then
     if [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]]; then
@@ -95,7 +89,7 @@ _webhook_collect_site_release_opts() {
 # 为已有站点写入/恢复 ${NGINX_CONF}/<域名>.webhook（update / webhook enable 共用）
 _webhook_configure_site() {
   local site_dir="${WWW_ROOT}/${DOMAIN}"
-  [[ -d "$site_dir" ]] || die "站点 ${DOMAIN} 不存在"
+  [[ -d "$site_dir" ]] || { menu_fail "站点 ${DOMAIN} 不存在" || return 1; }
 
   local st="laravel"
   [[ -f "${site_dir}/artisan" ]] || st="frontend"
@@ -131,11 +125,11 @@ _webhook_configure_site() {
     elif [[ -f "$wf_old" ]]; then
       GIT_REPO="$(_webhook_read_kv "$wf_old" git_repo)"
     else
-      prompt "Git 仓库地址（release 仅匹配用；tag 模式需可 pull）"
+      prompt_required "Git 仓库地址（release 仅匹配用；tag 模式需可 pull）"
       GIT_REPO=$PROMPT_RESULT
     fi
   }
-  [[ -n "$GIT_REPO" ]] || die "Git 仓库地址不能为空"
+  [[ -n "$GIT_REPO" ]] || { menu_fail "Git 仓库地址不能为空" || return 1; }
 
   if [[ "$WEBHOOK_MODE" = "release" && -z "$WEBHOOK_RELEASE_NAME" ]]; then
     while [[ -z "$WEBHOOK_RELEASE_NAME" ]]; do
@@ -186,6 +180,25 @@ _webhook_configure_site() {
   info "请执行: $0 webhook setup（若尚未安装监听）"
 }
 
+_webhook_prompt_notify_url() {
+  while true; do
+    prompt "异常通知 URL（企业微信/钉钉机器人 webhook，留空保留，- 清除）" "${WEBHOOK_NOTIFY_URL:-}"
+    case "$PROMPT_RESULT" in
+      -) WEBHOOK_NOTIFY_URL=""; WEBHOOK_NOTIFY_URL_SET=1; return 0 ;;
+      "") return 0 ;;
+      *)
+        if [[ "$PROMPT_RESULT" =~ ^https?:// ]]; then
+          WEBHOOK_NOTIFY_URL=$PROMPT_RESULT
+          WEBHOOK_NOTIFY_URL_SET=1
+          return 0
+        fi
+        warn "须为 http(s) URL"
+        interactive_tty_ok || die "WEBHOOK_NOTIFY_URL 须为 http(s) URL"
+        ;;
+    esac
+  done
+}
+
 _collect_webhook_setup_interactive() {
   local cli_only="${1:-0}"
   _webhook_load_listener_env
@@ -204,20 +217,39 @@ _collect_webhook_setup_interactive() {
     [[ "$need_mode" -eq 0 && "$need_domain" -eq 0 ]] && return 0
   fi
 
-  local _i
-  menu_select "Webhook 公网访问方式" \
-    "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
-    "直接绑定 0.0.0.0（外网直连端口）" \
-    "仅本机 127.0.0.1（默认）"
-  _i=$MENU_SELECT_RESULT
-  case "$_i" in
-    0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND="$(_docker_host_gateway)" ;;
-    1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
-    2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
-  esac
+  local _i _keep=0
+  if [[ -f "$WEBHOOK_LISTENER_ENV" && -n "${WEBHOOK_PUBLIC_MODE:-}" ]]; then
+    menu_select "Webhook 公网访问方式" \
+      "保持当前（${WEBHOOK_PUBLIC_MODE} ${WEBHOOK_BIND:-127.0.0.1}:${WEBHOOK_PORT:-9080}${WEBHOOK_PATH:-/hooks}）" \
+      "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
+      "直接绑定 0.0.0.0（外网直连端口）" \
+      "仅本机 127.0.0.1"
+    _i=$MENU_SELECT_RESULT
+    case "$_i" in
+      0) _keep=1 ;;
+      1) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND="$(_docker_host_gateway)" ;;
+      2) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
+      3) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
+    esac
+  else
+    menu_select "Webhook 公网访问方式" \
+      "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
+      "直接绑定 0.0.0.0（外网直连端口）" \
+      "仅本机 127.0.0.1"
+    _i=$MENU_SELECT_RESULT
+    case "$_i" in
+      0) WEBHOOK_PUBLIC_MODE=nginx; WEBHOOK_BIND="$(_docker_host_gateway)" ;;
+      1) WEBHOOK_PUBLIC_MODE=bind; WEBHOOK_BIND=0.0.0.0 ;;
+      2) WEBHOOK_PUBLIC_MODE=local; WEBHOOK_BIND=127.0.0.1 ;;
+    esac
+  fi
 
-  prompt "Webhook 路径" "${WEBHOOK_PATH:-/hooks}"
-  WEBHOOK_PATH=$PROMPT_RESULT
+  if [[ "$_keep" -eq 1 ]]; then
+    _webhook_prompt_notify_url
+    return 0
+  fi
+
+  WEBHOOK_PATH="${WEBHOOK_PATH:-/hooks}"
   [[ "$WEBHOOK_PATH" == /* ]] || die "WEBHOOK_PATH 须以 / 开头"
 
   if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
@@ -230,30 +262,20 @@ _collect_webhook_setup_interactive() {
       if [[ "$_i" -lt ${#doms[@]} ]]; then
         WEBHOOK_PROXY_DOMAIN="${doms[$_i]}"
       else
-        prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}"
+        prompt_required "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}"
         WEBHOOK_PROXY_DOMAIN=$PROMPT_RESULT
       fi
     else
-      prompt "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}"
+      prompt_required "Webhook 回调域名" "${WEBHOOK_PROXY_DOMAIN:-}"
       WEBHOOK_PROXY_DOMAIN=$PROMPT_RESULT
     fi
-    [[ -n "$WEBHOOK_PROXY_DOMAIN" ]] || die "反代域名不能为空"
+    [[ -n "$WEBHOOK_PROXY_DOMAIN" ]] || { menu_fail "反代域名不能为空" || return 1; }
   elif [[ "$WEBHOOK_PUBLIC_MODE" = "bind" ]]; then
-    prompt "监听地址（0.0.0.0 = 全部网卡）" "${WEBHOOK_BIND:-0.0.0.0}"
-    WEBHOOK_BIND=$PROMPT_RESULT
-    prompt "监听端口" "${WEBHOOK_PORT:-9080}"
-    WEBHOOK_PORT=$PROMPT_RESULT
+    WEBHOOK_BIND="${WEBHOOK_BIND:-0.0.0.0}"
+    WEBHOOK_PORT="${WEBHOOK_PORT:-9080}"
   fi
 
-  prompt "异常通知 URL（企业微信/钉钉机器人 webhook，留空保留，- 清除）" "${WEBHOOK_NOTIFY_URL:-}"
-  case "$PROMPT_RESULT" in
-    -) WEBHOOK_NOTIFY_URL=""; WEBHOOK_NOTIFY_URL_SET=1 ;;
-    "") ;;
-    *) WEBHOOK_NOTIFY_URL=$PROMPT_RESULT; WEBHOOK_NOTIFY_URL_SET=1 ;;
-  esac
-  if [[ -n "$WEBHOOK_NOTIFY_URL" && ! "$WEBHOOK_NOTIFY_URL" =~ ^https?:// ]]; then
-    die "WEBHOOK_NOTIFY_URL 须为 http(s) URL"
-  fi
+  _webhook_prompt_notify_url
 }
 
 cmd_webhook() {
@@ -288,7 +310,6 @@ cmd_webhook() {
           4) return 0 ;;
         esac
         echo ""
-        confirm "继续？" "y" || return 0
       done
       ;;
     *) die "未知 webhook 子命令: ${sub}（enable | disable | setup | serve | handle | list）" ;;
@@ -309,13 +330,13 @@ _webhook_reset_configure_state() {
 cmd_webhook_enable() {
   _webhook_reset_configure_state
   prompt_pick_domain "选择站点"
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
-  _webhook_configure_site
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 0; }
+  _webhook_configure_site || return 0
 }
 
 cmd_webhook_disable() {
   prompt_pick_domain "选择站点"
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 0; }
   rm -f "$(site_webhook_file "$DOMAIN")" 2>/dev/null || true
   ok "已禁用 ${DOMAIN} 的 webhook"
 }
@@ -365,10 +386,10 @@ cmd_webhook_setup() {
   old_mode="${WEBHOOK_PUBLIC_MODE:-local}"
   old_domain="${WEBHOOK_PROXY_DOMAIN:-}"
 
-  _collect_webhook_setup_interactive "$cli_reconfig"
+  _collect_webhook_setup_interactive "$cli_reconfig" || return 0
 
   if [[ -n "${WEBHOOK_NOTIFY_URL:-}" && ! "$WEBHOOK_NOTIFY_URL" =~ ^https?:// ]]; then
-    die "WEBHOOK_NOTIFY_URL 须为 http(s) URL"
+    menu_fail "WEBHOOK_NOTIFY_URL 须为 http(s) URL" || return 0
   fi
 
   case "${WEBHOOK_PUBLIC_MODE:-local}" in
@@ -380,7 +401,7 @@ cmd_webhook_setup() {
 
   if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
     WEBHOOK_BIND="$(_docker_host_gateway)"
-    [[ -n "$new_proxy" ]] || die "Nginx 反代需指定 --webhook-proxy-domain="
+    [[ -n "$new_proxy" ]] || { menu_fail "Nginx 反代需指定 --webhook-proxy-domain=" || return 0; }
     if [[ "$old_mode" = "nginx" && -n "$old_domain" && "$old_domain" != "$new_proxy" ]]; then
       WEBHOOK_PROXY_DOMAIN="$old_domain"
       _webhook_remove_nginx_proxy
@@ -430,10 +451,7 @@ cmd_webhook_handle() {
   trap 'rm -f '"$(printf '%q ' "$WEBHOOK_BODY_FILE" "${WEBHOOK_HEADERS_FILE:-}")"' 2>/dev/null || true' EXIT
   if ! _webhook_process_payload "$WEBHOOK_BODY_FILE" "${WEBHOOK_EVENT:-}" "${WEBHOOK_GH_SIG:-}" "${WEBHOOK_GITEE_TOKEN:-}" "${WEBHOOK_HEADERS_FILE:-}"; then
     warn "webhook handle 结束: payload 处理失败"
-    ops_notify "$(printf 'webhook 处理失败\n主机: %s\n站点: %s\n时间: %s\n日志: %s' \
-      "$(hostname -s 2>/dev/null || hostname || echo unknown)" \
-      "${_deploy_log_bound_domain:-?}" \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "${LOG_FILE:-}")"
+    ops_notify_exception "webhook 处理失败" "payload 处理失败"
     return 1
   fi
   ok "webhook handle 结束"
@@ -441,10 +459,10 @@ cmd_webhook_handle() {
 
 cmd_rollback() {
   prompt_pick_domain "选择要回退的站点"
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 0; }
   local hf entry backup_dir idx ver
   hf="$(_webhook_history_file "$DOMAIN")"
-  [[ -f "$hf" ]] || die "无部署历史（${hf}）"
+  [[ -f "$hf" ]] || { menu_fail "无部署历史（${hf}）" || return 0; }
 
   echo ""
   hr; info "部署历史: ${DOMAIN}"; hr
@@ -453,27 +471,31 @@ cmd_rollback() {
 
   if [[ -n "$ROLLBACK_TO" ]]; then
     if [[ "$ROLLBACK_TO" =~ ^[0-9]+$ ]]; then
-      entry="$(_webhook_history_entry "$DOMAIN" "$ROLLBACK_TO")" || die "无效序号"
+      entry="$(_webhook_history_entry "$DOMAIN" "$ROLLBACK_TO")" || { menu_fail "无效序号" || return 0; }
     else
       while IFS= read -r entry; do
         [[ "$entry" = *"|${ROLLBACK_TO}|"* || "$entry" = *"|${ROLLBACK_TO}" ]] && break
         entry=""
       done < "$hf"
-      [[ -n "$entry" ]] || die "未找到版本: ${ROLLBACK_TO}"
+      [[ -n "$entry" ]] || { menu_fail "未找到版本: ${ROLLBACK_TO}" || return 0; }
     fi
   elif [[ "$ROLLBACK_INDEX" -gt 0 ]]; then
-    entry="$(_webhook_history_entry "$DOMAIN" "$ROLLBACK_INDEX")" || die "无效序号"
+    entry="$(_webhook_history_entry "$DOMAIN" "$ROLLBACK_INDEX")" || { menu_fail "无效序号" || return 0; }
   elif [[ "${YES:-0}" -ne 1 ]]; then
-    prompt "回退到序号（见上表）" "1"
-    idx=$PROMPT_RESULT
-    entry="$(_webhook_history_entry "$DOMAIN" "$idx")" || die "无效序号"
+    while true; do
+      prompt "回退到序号（见上表）" "1"
+      idx=$PROMPT_RESULT
+      entry="$(_webhook_history_entry "$DOMAIN" "$idx")" && break
+      warn "无效序号"
+      interactive_tty_ok || die "无效序号"
+    done
   else
-    entry="$(_webhook_history_entry "$DOMAIN" "1")" || die "无历史记录"
+    entry="$(_webhook_history_entry "$DOMAIN" "1")" || { menu_fail "无历史记录" || return 0; }
   fi
 
   backup_dir="${entry##*|}"
   ver="${entry#*|}"; ver="${ver%%|*}"
-  [[ "${YES:-0}" -eq 1 ]] || ! confirm "确认回退到 ${ver}？" "n" || { warn "已取消"; return 0; }
+  [[ "${YES:-0}" -eq 0 ]] && ! confirm "确认回退到 ${ver}？" "n" && { warn "已取消"; return 0; }
 
   hr; info "回退 ${DOMAIN} → ${ver}"; echo ""
   _webhook_restore_backup "$DOMAIN" "$backup_dir"

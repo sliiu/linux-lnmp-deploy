@@ -13,13 +13,20 @@ prompt_secret_confirm_into() {
 }
 
 # 禁止 $(menu_multi)；调用后读 MENU_MULTI_RESULT（空格分隔的下标）
+# MENU_MULTI_DEFAULT：all（默认）| keep（空=空结果）| 1-based CSV（如 2,3）
 menu_multi() {
   local title="$1"; shift
   local -a items=("$@")
-  local input
+  local default_spec="${MENU_MULTI_DEFAULT:-all}" input hint
+  MENU_MULTI_DEFAULT=""
+  case "$default_spec" in
+    keep) hint="回车=保持当前" ;;
+    all)  hint="回车=全选" ;;
+    *)    hint="回车=推荐默认" ;;
+  esac
   if interactive_tty_ok; then
     _ui_tty ""
-    _ui_tty "  ${title} (逗号分隔, 如 1,3,5 | all=全选 | 回车=默认全选)"
+    _ui_tty "  ${title} (逗号分隔, 如 1,3,5 | all=全选 | ${hint})"
     _ui_tty ""
     local i
     for i in "${!items[@]}"; do
@@ -31,7 +38,7 @@ menu_multi() {
     printf '\n' >/dev/tty
   else
     echo ""
-    info "$title (逗号分隔, 如 1,3,5 | all=全选 | 回车=默认全选)"
+    info "$title (逗号分隔, 如 1,3,5 | all=全选 | ${hint})"
     echo ""
     local i
     for i in "${!items[@]}"; do
@@ -41,8 +48,28 @@ menu_multi() {
     read -rp "  选择: " input || input=""
   fi
   input=$(echo "$input" | tr -d ' ')
-  if [[ -z "$input" || "$input" = "all" ]]; then
+  if [[ "$input" = "all" ]]; then
     MENU_MULTI_RESULT=$(seq 0 $((${#items[@]} - 1)) | tr '\n' ' ')
+  elif [[ -z "$input" ]]; then
+    case "$default_spec" in
+      keep)
+        MENU_MULTI_RESULT=""
+        ;;
+      all)
+        MENU_MULTI_RESULT=$(seq 0 $((${#items[@]} - 1)) | tr '\n' ' ')
+        ;;
+      *)
+        local -a result=()
+        local p idx
+        IFS=',' read -ra parts <<< "$default_spec"
+        for p in "${parts[@]}"; do
+          [[ "$p" =~ ^[1-9][0-9]*$ ]] || continue
+          idx=$((p - 1))
+          if [[ $idx -ge 0 && $idx -lt ${#items[@]} ]]; then result+=("$idx"); fi
+        done
+        MENU_MULTI_RESULT="${result[*]}"
+        ;;
+    esac
   else
     local -a result=()
     IFS=',' read -ra parts <<< "$input"

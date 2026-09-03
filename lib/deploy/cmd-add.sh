@@ -275,6 +275,7 @@ reset_menu_deploy_state() {
   WEBHOOK_SITE_GITHUB_TOKEN=""
   WEBHOOK_SITE_GITEE_TOKEN=""
   WEBHOOK_ASSET_NAME=""
+  WEBHOOK_INCREMENTAL=""
   ROLLBACK_TO=""
   ROLLBACK_INDEX=0
   WEBHOOK_BODY_FILE=""
@@ -497,7 +498,8 @@ prompt_pick_domain() {
   local -a doms=()
   while IFS= read -r d; do doms+=("$d"); done < <(_list_deployed_domains)
   if [[ ${#doms[@]} -eq 0 ]]; then
-    DOMAIN=$(prompt "站点域名（当前无已部署站点）")
+    prompt "站点域名（当前无已部署站点）"
+    DOMAIN=$PROMPT_RESULT
     return 0
   fi
   local _items=("${doms[@]}" "手动输入...")
@@ -506,7 +508,8 @@ prompt_pick_domain() {
   if [[ "$_i" -lt ${#doms[@]} ]]; then
     DOMAIN="${doms[$_i]}"
   else
-    DOMAIN=$(prompt "站点域名")
+    prompt "站点域名"
+    DOMAIN=$PROMPT_RESULT
   fi
   deploy_log_bind_domain "${DOMAIN:-}"
 }
@@ -531,7 +534,8 @@ _collect_site_php_version_interactive() {
   if [[ "$_i" -eq 0 ]]; then
     SITE_PHP_VERSION=""; SITE_PHP_VERSION_CLI=1
   elif [[ "$_i" -eq $((${#vers[@]} - 1)) ]]; then
-    SITE_PHP_VERSION="$(prompt "PHP 主版本 (X.Y)" "$dv")"
+    prompt "PHP 主版本 (X.Y)" "$dv"
+    SITE_PHP_VERSION=$PROMPT_RESULT
     SITE_PHP_VERSION_CLI=1
   else
     local pick="${vers[$_i]}"
@@ -540,10 +544,18 @@ _collect_site_php_version_interactive() {
   fi
 }
 
-# SSL 校验方式菜单
+# SSL 校验方式：add 先问是否用默认；ssl 命令传 full 列出全部
 _collect_ssl_dns_interactive() {
+  local mode="${1:-short}" _i def="${ACME_SSL_DNS_DEFAULT:-webroot}"
   [[ -n "$SSL_DNS" ]] && return 0
-  local _i; menu_select "SSL 证书校验方式（默认 webroot；DNS 模式可签泛域名）" \
+  if [[ "$mode" != "full" ]]; then
+    menu_select "SSL 证书校验方式" \
+      "${def}（默认）" \
+      "其他方式（DNS API，可签泛域名）"
+    _i=$MENU_SELECT_RESULT
+    [[ "$_i" -eq 0 ]] && { SSL_DNS="$def"; return 0; }
+  fi
+  menu_select "选择 SSL 校验方式" \
     "webroot   (HTTP-01；最常见，需域名解析到本机)" \
     "dns_cf    (Cloudflare API Token)" \
     "dns_ali   (阿里云 DNS Ali_Key/Secret)" \
@@ -641,10 +653,10 @@ _collect_frontend_source_interactive() {
   [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]] && return 0
   local _i
   menu_select "前端部署方式" \
-    "Webhook Release（监听 Release 下载，不 clone 仓库）" \
-    "Git 仓库（clone 后使用 dist 等构建目录）"
+    "Git 仓库（clone 后使用 dist 等构建目录）" \
+    "Webhook Release（监听 Release 下载，不 clone 仓库）"
   _i=$MENU_SELECT_RESULT
-  if [[ "$_i" -eq 0 ]]; then
+  if [[ "$_i" -eq 1 ]]; then
     WEBHOOK_ENABLE=1
     WEBHOOK_MODE=release
     FRONTEND_ROOT=""
@@ -657,10 +669,10 @@ _collect_pm2_source_interactive() {
   [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]] && return 0
   local _i
   menu_select "PM2 部署方式" \
-    "Webhook Gateway Release（CI 推送产物，不 clone 仓库）" \
-    "Git 仓库（clone 后在服务器 build + PM2 启动）"
+    "Git 仓库（clone 后在服务器 build + PM2 启动）" \
+    "Webhook Gateway Release（CI 推送产物，不 clone 仓库）"
   _i=$MENU_SELECT_RESULT
-  if [[ "$_i" -eq 0 ]]; then
+  if [[ "$_i" -eq 1 ]]; then
     WEBHOOK_ENABLE=1
     WEBHOOK_MODE=release
     GIT_BRANCH=""
@@ -756,12 +768,13 @@ _cmd_add_webhook_release_site() {
 }
 
 collect_interactive() {
-  # 1) 域名（决策性，最早问）
-  [[ -z "$DOMAIN" ]] && DOMAIN=$(prompt "站点域名 (如 app.com)")
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  if [[ -z "$DOMAIN" ]]; then
+    prompt_required "站点域名 (如 app.com)"
+    DOMAIN=$PROMPT_RESULT
+  fi
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 1; }
   deploy_log_bind_domain "$DOMAIN"
 
-  # 2) 站点类型（与主菜单相同：直接 menu_select，勿预判 tty；误判时会静默默认 laravel）
   if [[ "${SITE_TYPE_CLI:-0}" -ne 1 ]]; then
     SITE_TYPE=""
     local _st_i
@@ -790,113 +803,96 @@ collect_interactive() {
     _collect_pm2_source_interactive
   fi
 
-  # 3) Git / Webhook 仓库匹配
   if [[ "$SITE_TYPE" = "proxy" ]]; then
     GIT_REPO=""
     GIT_BRANCH=""
   elif [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
-    [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）")
-    [[ -n "$GIT_REPO" ]] || die "Webhook Release 需填写仓库地址（用于匹配推送来源）"
+    if [[ -z "$GIT_REPO" ]]; then
+      prompt_required "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）"
+      GIT_REPO=$PROMPT_RESULT
+    fi
+    [[ -n "$GIT_REPO" ]] || { menu_fail "Webhook Release 需填写仓库地址（用于匹配推送来源）" || return 1; }
     [[ -z "$WEBHOOK_RELEASE_NAME" ]] && {
-      prompt "Release 名称（前缀匹配，如 slimppt 匹配 slimppt-v0.1.0）"
+      prompt_required "Release 名称（前缀匹配，如 slimppt 匹配 slimppt-v0.1.0）"
       WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
     }
-    [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
+    [[ -n "$WEBHOOK_RELEASE_NAME" ]] || { menu_fail "Release 名称不能为空" || return 1; }
     _webhook_collect_site_release_opts ""
     _webhook_collect_secret ""
     GIT_BRANCH=""
     FRONTEND_ROOT=""
   elif [[ "$SITE_TYPE" = "pm2" && "${WEBHOOK_MODE:-}" = "release" ]]; then
-    [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）")
-    [[ -n "$GIT_REPO" ]] || die "Webhook Gateway Release 需填写仓库地址（用于匹配 CI 推送来源）"
+    if [[ -z "$GIT_REPO" ]]; then
+      prompt_required "Git 仓库地址（仅 Webhook 匹配用，不会在服务器 clone）"
+      GIT_REPO=$PROMPT_RESULT
+    fi
+    [[ -n "$GIT_REPO" ]] || { menu_fail "Webhook Gateway Release 需填写仓库地址（用于匹配 CI 推送来源）" || return 1; }
     [[ -z "$WEBHOOK_RELEASE_NAME" ]] && {
-      prompt "Release 名称（前缀匹配 CI 的 release/app/tag，如 gateway 匹配 gateway-v1.0.0）"
+      prompt_required "Release 名称（前缀匹配 CI 的 release/app/tag，如 gateway 匹配 gateway-v1.0.0）"
       WEBHOOK_RELEASE_NAME=$PROMPT_RESULT
     }
-    [[ -n "$WEBHOOK_RELEASE_NAME" ]] || die "Release 名称不能为空"
+    [[ -n "$WEBHOOK_RELEASE_NAME" ]] || { menu_fail "Release 名称不能为空" || return 1; }
     _webhook_collect_site_release_opts ""
     _webhook_collect_secret ""
     GIT_BRANCH=""
   else
-    [[ -z "$GIT_REPO" ]] && GIT_REPO=$(prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" "")
-    _offer_skip_git_if_code_present
-    if [[ -n "$GIT_REPO" ]]; then
-      [[ -z "$GIT_BRANCH" ]] && GIT_BRANCH=$(prompt "Git 分支（留空=仓库默认）" "")
-    else
-      GIT_BRANCH=""
+    if [[ -z "$GIT_REPO" ]]; then
+      prompt "Git 仓库地址（留空=跳过 clone，使用 ${WWW_ROOT}/${DOMAIN} 现有代码）" ""
+      GIT_REPO=$PROMPT_RESULT
     fi
+    _offer_skip_git_if_code_present
+    GIT_BRANCH="${GIT_BRANCH:-}"
+    [[ -n "$GIT_REPO" ]] || GIT_BRANCH=""
   fi
 
   if [[ "$SITE_TYPE" = "laravel" ]]; then
-    # 4) PHP 版本（影响后续 Horizon 可行性）
     _collect_site_php_version_interactive
 
-    # 5) 数据库块：先决定是否需要 DB，再凭证，再动作预设
-    [[ -z "$NEED_DB" ]] && { confirm "配置数据库？" "y" && NEED_DB="y" || NEED_DB="n"; }
+    NEED_DB="${NEED_DB:-y}"
     if [[ "$NEED_DB" = "y" ]]; then
       _collect_db_connection_interactive
-      DB_HOST=${DB_HOST:-$(prompt "DB_HOST（数据库主机/容器名）" "$(_default_db_host "${DB_CONNECTION:-mysql}")")}
-      [[ -z "$DB_NAME" ]] && DB_NAME=$(prompt "DB_DATABASE（业务库名，勿填数据库服务名）")
-      [[ -z "$DB_NAME" ]] && die "DB_DATABASE 不能为空"
+      DB_HOST="${DB_HOST:-$(_default_db_host "${DB_CONNECTION:-mysql}")}"
+      if [[ -z "$DB_NAME" ]]; then
+        prompt_required "DB_DATABASE（业务库名，勿填数据库服务名）"
+        DB_NAME=$PROMPT_RESULT
+      fi
+      [[ -n "$DB_NAME" ]] || { menu_fail "DB_DATABASE 不能为空" || return 1; }
       [[ "$DB_PWD_FROM_CLI" != "1" && -z "$DB_PWD" ]] && prompt_secret_into "DB_PASSWORD" DB_PWD
-      [[ -z "$DB_PWD" ]]  && die "DB_PASSWORD 不能为空"
+      [[ -n "$DB_PWD" ]] || { menu_fail "DB_PASSWORD 不能为空" || return 1; }
       _collect_db_actions_interactive
     fi
 
-    # 6) Redis（基础依赖）
-    REDIS_HOST=${REDIS_HOST:-$(prompt "REDIS_HOST" "redis")}
-    REDIS_PORT=${REDIS_PORT:-$(prompt "REDIS_PORT" "6379")}
-    if [[ "$REDIS_PASSWORD_FROM_CLI" != "1" && -z "${REDIS_PASSWORD:-}" ]]; then
-      prompt_secret_into "REDIS_PASSWORD (留空=无)" REDIS_PASSWORD
-    fi
-
-    # 7) 队列后台 / 定时任务
+    REDIS_HOST="${REDIS_HOST:-redis}"
+    REDIS_PORT="${REDIS_PORT:-6379}"
     _collect_queue_supervisor_interactive
-
-    # 8) 应用名 + 自定义 ENV（最低优先级，放最后；轻打扰）
-    APP_NAME=${APP_NAME:-$(prompt "APP_NAME" "Laravel")}
-
-    if [[ ${#CUSTOM_ENV[@]} -eq 0 ]]; then
-      echo ""
-      info "自定义 ENV（一行 CSV：KEY=V[,KEY2=V2]，留空跳过；含逗号/空格的值改用 --env 多次传入）"
-      local _envline
-      _envline=$(prompt "ENV" "")
-      if [[ -n "$_envline" ]]; then
-        local IFS=','
-        local _kv
-        for _kv in $_envline; do
-          _kv="${_kv#"${_kv%%[![:space:]]*}"}"; _kv="${_kv%"${_kv##*[![:space:]]}"}"
-          [[ -z "$_kv" ]] && continue
-          [[ "$_kv" == *=* ]] || { warn "忽略无效项: $_kv（应为 KEY=VALUE）"; continue; }
-          CUSTOM_ENV+=("$_kv")
-        done
-      fi
-    fi
+    APP_NAME="${APP_NAME:-Laravel}"
   elif [[ "$SITE_TYPE" = "proxy" ]]; then
-    [[ -z "$SITE_PROXY_PASS" ]] && SITE_PROXY_PASS=$(prompt "反代上游（如 http://127.0.0.1:8080）")
-    SITE_PROXY_PASS="$(_normalize_proxy_pass "${SITE_PROXY_PASS}")" || die "反代上游不能为空（如 http://127.0.0.1:8080）"
+    if [[ -z "$SITE_PROXY_PASS" ]]; then
+      while true; do
+        prompt_required "反代上游（如 http://127.0.0.1:8080）"
+        SITE_PROXY_PASS="$(_normalize_proxy_pass "${PROMPT_RESULT}")" && break
+        warn "反代上游不能为空（如 http://127.0.0.1:8080）"
+        interactive_tty_ok || die "反代上游不能为空（如 http://127.0.0.1:8080）"
+      done
+    else
+      SITE_PROXY_PASS="$(_normalize_proxy_pass "${SITE_PROXY_PASS}")" \
+        || { menu_fail "反代上游不能为空（如 http://127.0.0.1:8080）" || return 1; }
+    fi
     SITE_PROXY_PASS_CLI=1
   else
     if [[ "$SITE_TYPE" = "pm2" ]]; then
-      [[ -z "$SITE_PM2_PORT" ]] && SITE_PM2_PORT=$(prompt "PM2 监听端口（留空=自动分配，从 3000 起）" "3000")
       [[ "$SITE_PM2_PORT" = "auto" || "$SITE_PM2_PORT" = "-" ]] && SITE_PM2_PORT=""
       [[ -n "$SITE_PM2_PORT" ]] && SITE_PM2_PORT_CLI=1
-      [[ -z "$SITE_PM2_CMD" ]] && SITE_PM2_CMD=$(prompt "PM2 启动命令（留空=自动检测 ecosystem / npm start）" "")
       [[ -n "$SITE_PM2_CMD" ]] && SITE_PM2_CMD_CLI=1
-      if [[ -z "${PM2_BUILD:-}" ]]; then
-        confirm "部署时执行 npm/pnpm/yarn build？" "y" && PM2_BUILD=y || PM2_BUILD=n
-      fi
-    elif [[ "${WEBHOOK_MODE:-}" != "release" ]]; then
-      [[ -z "$FRONTEND_ROOT" ]] && FRONTEND_ROOT=$(prompt "前端子目录（相对站点目录，留空则：有 dist 目录→dist，否则→站点根）" "")
+      PM2_BUILD="${PM2_BUILD:-y}"
     fi
   fi
 
-  # 9) SSL（最末尾，凭证一并校验）
   _collect_ssl_dns_interactive
   SSL_DNS="${SSL_DNS:-${ACME_SSL_DNS_DEFAULT:-webroot}}"
   case "$SSL_DNS" in
     webroot|dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) ;;
-    *) die "无效 SSL 模式: ${SSL_DNS}（webroot / dns_cf / dns_ali / dns_dp / dns_gd / dns_aws / dns_tencent）" ;;
+    *) menu_fail "无效 SSL 模式: ${SSL_DNS}（webroot / dns_cf / dns_ali / dns_dp / dns_gd / dns_aws / dns_tencent）" || return 1 ;;
   esac
   _collect_ssl_dns_creds_interactive
   if _is_dns_mode "$SSL_DNS"; then
@@ -906,9 +902,9 @@ collect_interactive() {
 
 _require_deploy_containers() {
   local site_type="${1:-${SITE_TYPE:-laravel}}"
-  container_ok "lnmp-nginx" || die "容器 lnmp-nginx 未运行，请先执行: init.sh install nginx"
+  container_ok "lnmp-nginx" || menu_fail "容器 lnmp-nginx 未运行，请先执行: init.sh install nginx" || return 1
   if [[ "$site_type" = "laravel" ]]; then
-    container_ok "lnmp-php" || die "容器 lnmp-php 未运行，请先执行: init.sh install php"
+    container_ok "lnmp-php" || menu_fail "容器 lnmp-php 未运行，请先执行: init.sh install php" || return 1
     ensure_php_fpm_slowlog_host_artifacts
     warn_php_fpm_slowlog_compose_missing
     ensure_php_fpm_wave_pool_host_artifacts
@@ -920,15 +916,15 @@ _require_deploy_containers() {
 }
 
 cmd_add() {
-  collect_interactive
+  collect_interactive || return 0
 
-  _require_deploy_containers "$SITE_TYPE"
+  _require_deploy_containers "$SITE_TYPE" || return 0
 
   if [[ "$SITE_TYPE" = "laravel" && "${NEED_DB:-y}" = "y" ]]; then
     [[ -z "${DB_CONNECTION:-}" ]] && DB_CONNECTION="$(_default_db_connection)"
     DB_CONNECTION="$(_normalize_db_connection "$DB_CONNECTION")"
-    [[ -z "${DB_NAME:-}" ]] && die "Laravel 默认启用数据库，请指定 --db-name 或在交互中填写 DB_DATABASE"
-    _validate_laravel_db_config
+    [[ -z "${DB_NAME:-}" ]] && { menu_fail "Laravel 默认启用数据库，请指定 --db-name 或在交互中填写 DB_DATABASE" || return 0; }
+    _validate_laravel_db_config || return 0
   fi
 
   # 执行前的「配置确认」（仅 TTY 且未 --yes 时弹出，顺序与提问顺序一致）
@@ -1013,7 +1009,8 @@ cmd_add() {
     chmod a+rx "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
     apply_site_proxy_pass_cli "$DOMAIN"
     [[ -n "$(proxy_pass_for_site "$DOMAIN")" ]] || {
-      SITE_PROXY_PASS="$(_normalize_proxy_pass "${SITE_PROXY_PASS}")" || die "反代上游不能为空"
+      SITE_PROXY_PASS="$(_normalize_proxy_pass "${SITE_PROXY_PASS}")" \
+        || { menu_fail "反代上游不能为空" || return 0; }
       write_site_proxy_pass "$DOMAIN" "$SITE_PROXY_PASS"
     }
     gen_nginx_proxy "$DOMAIN"
@@ -1195,10 +1192,10 @@ cmd_add() {
 # ═══════════════════════════════════════════════
 cmd_update() {
   prompt_pick_domain "选择要更新的站点"
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 0; }
 
   local site_dir="${WWW_ROOT}/${DOMAIN}"
-  [[ -d "$site_dir" ]] || die "站点 ${DOMAIN} 不存在（${site_dir}）"
+  [[ -d "$site_dir" ]] || { menu_fail "站点 ${DOMAIN} 不存在（${site_dir}）" || return 0; }
 
   local site_type
   site_type="$(_site_type_for_domain "$DOMAIN")"
@@ -1208,17 +1205,8 @@ cmd_update() {
 
   if [[ "$site_type" != "proxy" ]]; then
     if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
-      _webhook_configure_site
+      _webhook_configure_site || return 0
       [[ "${WEBHOOK_ONLY:-0}" -eq 1 ]] && { ok "Webhook 配置完成（未执行代码更新）"; return 0; }
-    elif [[ ! -f "$(site_webhook_file "$DOMAIN")" ]]; then
-      if confirm "为该站点配置 Webhook 自动部署？" "n"; then
-        WEBHOOK_ENABLE=1
-        _webhook_configure_site
-        if confirm "仅配置 Webhook，跳过本次代码更新？" "n"; then
-          ok "Webhook 配置完成（未执行代码更新）"
-          return 0
-        fi
-      fi
     fi
   fi
 
@@ -1274,16 +1262,11 @@ cmd_update() {
       setfacl -dR -m u:82:rwX "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     fi
 
-    if [[ -n "${RUN_MIGRATE:-}" ]]; then
-      if [[ "$RUN_MIGRATE" = "y" ]]; then
-        info "artisan migrate..."
-        docker_php_artisan "$DOMAIN" migrate --force
-      else
-        info "跳过 migrate（--run-migrate=n）"
-      fi
-    elif confirm "执行 migrate？" "y"; then
+    if [[ "${RUN_MIGRATE:-y}" = "y" ]]; then
       info "artisan migrate..."
       docker_php_artisan "$DOMAIN" migrate --force
+    else
+      info "跳过 migrate（--run-migrate=n）"
     fi
 
     local _lv; _lv="$(_laravel_min_for_site "$DOMAIN")"
@@ -1345,7 +1328,8 @@ cmd_update() {
     fi
   elif [[ "$site_type" = "proxy" ]]; then
     if [[ "${SITE_PROXY_PASS_CLI:-0}" -ne 1 && "${YES:-0}" -ne 1 ]]; then
-      SITE_PROXY_PASS=$(prompt "反代上游" "$(proxy_pass_for_site "$DOMAIN")")
+      prompt "反代上游" "$(proxy_pass_for_site "$DOMAIN")"
+      SITE_PROXY_PASS=$PROMPT_RESULT
       SITE_PROXY_PASS_CLI=1
     fi
     apply_site_proxy_pass_cli "$DOMAIN"

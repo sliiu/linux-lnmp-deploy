@@ -2,7 +2,7 @@
 
 cmd_remove() {
   prompt_pick_domain "选择要移除的站点"
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 0; }
 
   echo ""
   hr; info "移除站点: ${DOMAIN}"; echo ""

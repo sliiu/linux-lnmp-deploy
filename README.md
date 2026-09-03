@@ -53,7 +53,7 @@ sudo git -C /opt/alibaba-cloud-ecs-deployment pull --ff-only
 - `**init.sh**`：以 **root** 安装/配置 BBR、防火墙、Docker、LNMP 容器、SSH、用户与可选等保加固；
 写入 `/etc/lnmp-env.conf`；可选安装 **PM2 环境**（fnm + Node.js + pm2，见下文「PM2 环境」）、**saferm**（见下文「saferm」）。实现按领域拆在 `**lib/init/*.sh`**（如 `**config**`、`**lnmp**`、`**docker**`、`**pm2**`、`**saferm**` 等），由 `**init.sh**` 统一加载。
 - `**deploy-site.sh**`：以 **root** 在已有 LNMP 栈上 **新增/更新/删除/列举/状态/SSL** 站点：Nginx、可选 Git、SSL
-（acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、静态前端、或 **PM2 Node.js 应用**（Nginx 反代宿主机进程）。子命令实现在 `**lib/deploy/*.sh`**，由 `**deploy-site.sh**` 加载 `**lib/common.sh**` 与各 cmd 模块。
+（acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、静态前端、**PM2 Node.js 应用**（Nginx 反代宿主机进程）、**proxy** 反代、**Webhook** 自动部署与 **rollback**。子命令实现在 `**lib/deploy/*.sh`**，由 `**deploy-site.sh**` 加载 `**lib/common.sh**` 与各 cmd 模块。
 
 `**lib/common.sh**`：`die`、菜单、确认等共用函数，供两个入口脚本共用。
 
@@ -129,17 +129,20 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
   ```
 6. **更新 LNMP 容器镜像**（按 `/etc/lnmp-env.conf` 中的镜像名拉取并重建；`update` 会重写
   `docker-compose.yml` 后执行 `pull` + `up --force-recreate`）：
+  ```bash
+  sudo ./init.sh update lnmp
+  ```
 
 ### LNMP 版本与镜像（init.sh）
 
-- **交互向导 / 「安装单个组件」中的 LNMP**：会为已勾选组件提供 **预设镜像/版本**（PHP 主版本、Nginx、
-MySQL/MariaDB、Redis、acme.sh 等），每项末档一般为 **自定义**（完整 `镜像:TAG` 或 PHP 主版本号）。
+- **交互向导**：全新安装 / PM2 网关 / 「LNMP 全部」**不问**镜像、Alpine 源、PHP 版本/扩展、GitHub 代理、Docker 源、devops 用户名、Node 版本（沿用 `/etc/lnmp-env.conf`：PHP **8.3**、Node **22**、Alpine **阿里云**、未配置时代理 **ghfast.top**、镜像源 **DaoCloud + 阿里云**）。只问 MySQL/Postgres 密码与 ACME 邮箱。改镜像/版本请用 **「更新配置」**。安装**单个**容器时仍可选预设或自定义 `镜像:TAG`。
+- **全新安装回车默认**：模块 **Docker + LNMP**；LNMP 组件 **nginx + php + mysql + redis + acme**（不含 postgres / phpMyAdmin）。
 - **非交互**：除原有 `**--php-version=`**、`**--php-ext=**` 外，还可指定
 `**--nginx-image=**`、`**--mysql-image=**`、`**--redis-image=**`、`**--acme-image=**`（值须为
 Docker Hub 等可拉取的镜像引用，与 `docker-compose` 中 `image:` 一致）。
 - `**sudo ./init.sh status**`：在 LNMP 区域会按已启用服务打印当前配置的镜像与 PHP 版本。
-- **菜单「4) 更新配置」**：含 **LNMP 组件镜像**；若本机已有 `docker-compose.yml`，改完后会执行与
-`**update lnmp`** 相同的拉取与重建流程（未安装 LNMP 时仅写入配置，待后续 `install lnmp` 生效）。
+- **菜单「更新配置」**：含 **LNMP 组件镜像**；若本机已有 `docker-compose.yml`，改完后会执行与
+`**update lnmp`** 相同的拉取与重建流程（未安装 LNMP 时仅写入配置，待后续 `install lnmp` 生效）。安装 / 配置 / 卸载子菜单均循环至 **「返回主菜单」**。
 
 ### PM2 环境（init.sh）
 
@@ -154,10 +157,10 @@ sudo ./init.sh install pm2 --node-mirror=https://npmmirror.com/mirrors/node
 sudo ./init.sh uninstall pm2
 ```
 
-- **前提**：`install pm2` 若 `devops` 用户不存在会先创建；全新安装向导中勾选 **PM2** 时会询问 Node 主版本。
+- **前提**：`install pm2` 若 `devops` 用户不存在会先创建；全新安装 / PM2 网关勾选 **PM2** 时用 Node **22**（改版本走「更新配置」）。
 - **配置写入**：`NODE_VERSION`、`FNM_NODE_DIST_MIRROR` 会写入 `/etc/lnmp-env.conf`；`devops` 的 `~/.bashrc` 写入 fnm env 块（login shell 经 `~/.bash_profile` 加载）。
 - **镜像**：Node 二进制默认从 `FNM_NODE_DIST_MIRROR`（国内默认 npmmirror）拉取；npm 全局包默认 registry 为 `https://registry.npmmirror.com`。
-- **状态**：`sudo ./init.sh status` 显示 Node / pm2 版本；交互菜单 **「5) 查看状态」** 同理。
+- **状态**：`sudo ./init.sh status` 显示 Node / pm2 版本；交互菜单 **「查看状态」** 同理。
 - **GitHub**：下载 fnm 可走 `**--gh-proxy=**`（与 zsh / lnmp 相同）。
 
 ### saferm（安全删除）
@@ -229,15 +232,24 @@ saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
 
 ### 菜单项对照
 
-- **1 全新安装**：多选模块（含可选 **PM2**、**saferm**）后一次性执行。
-- **2 安装单个组件**：BBR / 防火墙 / Docker / Zsh / SSH / LNMP 全量或单容器 / **PM2** / **saferm** 等。
-- **3 卸载单个组件**：与上对应卸载；LNMP 全量卸载可选是否删数据目录；可卸载 **PM2**、**saferm**。
-- **4 更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**Node.js 版本（PM2）**、**LNMP 各组件镜像**（可触发单栈更新）、
-SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等。
-- **5 查看状态**：BBR、Docker、容器、**PM2 / Node.js**、SSH、等保标记等。
-- **6 账户管理**：用户/组、密码、authorized_keys、AllowUsers 与 `resync-allow`。
+选单：**回车 = 第 1 项**；非法输入会重问（不会悄悄落到第 1 项）。操作完成后直接回到当前菜单，无需再确认「返回」。
 
-### 账户相关 CLI
+- **查看状态**
+- **PM2 网关栈**：Docker + nginx + postgres + redis + acme + PM2（**不含 php / mysql**）
+- **全新安装**：多选模块（回车= Docker + LNMP；含可选 **PM2**、**saferm**、SSH、等保等）后一次性执行
+- **一键重装 LNMP**：沿用 `/etc/lnmp-env.conf`，跳过问询
+- **更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**Node.js 版本（PM2）**、**LNMP 各组件镜像**、SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等
+- **安装单个组件**：LNMP 全量或单容器 / Docker / **PM2** / devops / wheel / SSH / **saferm** 等
+- **账户管理**：见下节
+- **卸载单个组件**：高危项二次确认（默认 N）；firewall / BBR / zsh / saferm 同样确认
+
+### 账户相关
+
+交互：**改密码 / 删用户 / SSH 公钥 / 加组** 从 UID≥1000 用户列表选择；SSH 公钥选完用户后循环操作直至返回。校验失败只提示并回到菜单，不会退出整个 `init.sh`。
+
+- 新建用户：自动加入已启用的 **AllowUsers**；已装 Docker 时 devops/wheel 会加入 `docker` 组。
+- 删除 **DEVOPS_USER / WHEEL_USER / 等保** 账户会二次确认，并从 `/etc/lnmp-env.conf` 清除对应变量。
+- **AllowUsers 重建**：仅包含配置中的 root（若允许 root 密钥登录）、`WHEEL_USER`（未配置则不写入）、`DEVOPS_USER`、等保三权；**不会默认塞入不存在的 `admin`**。
 
 ```bash
 sudo ./init.sh account list          # 用户列表
@@ -253,7 +265,7 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 ### 注意事项（init.sh）
 
 - 修改 **SSH 端口** 前确认防火墙/安全组已放行新端口，避免锁死。
-- **install ssh** 会关闭密码登录、启用密钥；务必先保证 **AllowUsers** 中用户能密钥登录。
+- **install ssh** 会关闭密码登录、启用密钥；务必先保证 **AllowUsers** 中用户能密钥登录（列表来自当前 `DEVOPS_USER` / `WHEEL_USER` / 等保配置，见上节）。
 - **等保**流程会创建三权账户并可选择将普通用户设为 `DEVOPS_USER`。
 - `deploy-site.sh` 需存在于 `**/usr/local/bin/deploy-site.sh`** 且 devops 的 sudoers 才生效
 （脚本里写的是该路径）。
@@ -272,15 +284,16 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 `**--db-name`**（或交互填写），否则脚本会报错退出；不需要数据库时用 `**--need-db=n**`。
 - **数据库类型**：`**--db-connection=mysql|pgsql**`（默认按运行中的 `lnmp-mysql` / `lnmp-postgres` 自动检测；两者并存时交互可选）。PostgreSQL 默认 `DB_HOST=postgres`、`DB_PORT=5432`、`DB_USERNAME=postgres`；MySQL 默认 `mysql` / `3306` / `root`。`init.sh install postgres` 后可用 `pgsql`；建库通过 `psql` / `mysql` 自动执行。
 - **PHP 版本（每站点）**：`**--php-version=`**（如 `8.2`、`7.4`）须在 `**init.sh**` 所写配置里的 `**EXTRA_PHP_VERSIONS**` 中已声明；会写入 `**conf.d/<域名>.php-version**`，Nginx **fastcgi** 与 **composer / artisan / cron / Horizon** 路由到对应 `**lnmp-php`** + **无点号主版本** 容器（如 **7.4 → `lnmp-php74`**）。`**update**` 时可改该项以切换站点所用 PHP 镜像。
-- **Laravel SSE（长连接）**：环境变量 `**LARAVEL_SSE_PREFIXES`** 为全局默认前缀列表（空格或逗号分隔，默认 `**wave**`）；`**--sse-prefixes=**` 或与 `**update**` 联用写入 `**conf.d/<域名>.sse-prefixes**`；亦可事后编辑该文件。细节以 `**deploy-site.sh --help**` 为准。
+- **Laravel SSE（长连接）**：环境变量 `**LARAVEL_SSE_PREFIXES`** 为全局默认前缀列表（空格或逗号分隔，默认 `**wave**`）；`**--sse-prefixes=**` 写入 `**conf.d/<域名>.sse-prefixes**`；亦可事后编辑该文件。`**update**` 交互只展示当前规则，不追问修改。
 - **frontend**：Nginx 在 **代码就绪后**生成。未指定 `**--frontend-root`** 时：若站点目录下存在
-`**dist/**` 则用 `dist`，否则 **站点根目录**即静态根。可用 `**--frontend-root`** 显式指定子目录。
+`**dist/**` 则用 `dist`，否则 **站点根目录**即静态根。交互部署不问该字段（自动选择）。
 - **pm2**：Node.js 应用在 **宿主机**由 `**DEVOPS_USER**` 的 PM2 管理，`**lnmp-nginx**` 容器通过 Docker 网关 IP **反代**到宿主机监听端口（支持 WebSocket）。部署流程：Git clone/pull → 检测包管理器（pnpm / yarn / npm）→ `install` → 可选 `build` → PM2 启动/reload → 生成 Nginx 配置与 SSL。
   - **前提**：已执行 `**init.sh install pm2**`；仍需 **Docker + lnmp-nginx**（及签发证书时的 **lnmp-acme**）。
-  - **端口**：写入 `**conf.d/<域名>.pm2-port**`；`**--pm2-port**` 可指定，留空或 `-` 则从 **3000** 起自动分配（避开已占用端口与其它站点）。
-  - **启动命令**：写入 `**conf.d/<域名>.pm2-cmd**`；未指定时按顺序检测 `ecosystem.config.cjs` → `ecosystem.config.js` → `package.json` 的 `scripts.start`（`npm start`）；可用 `**--pm2-cmd**` 覆盖。
+  - **端口**：写入 `**conf.d/<域名>.pm2-port**`；`**--pm2-port**` 可指定，留空或 `-` 则从 **3000** 起自动分配。交互部署默认自动分配。
+  - **启动命令**：写入 `**conf.d/<域名>.pm2-cmd**`；未指定时按顺序检测 `ecosystem.config.cjs` → `ecosystem.config.js` → `package.json` 的 `scripts.start`（`npm start`）；可用 `**--pm2-cmd**` 覆盖。交互默认自动检测。
   - **进程名**：`lnmp-<域名中点换横线>`（如 `api.example.com` → `lnmp-api-example-com`）；启动时注入 `PORT`、`HOST=0.0.0.0`、`NODE_ENV=production`。
-- **构建**：`**--pm2-build=y|n**`（默认 y）；`package.json` 无 `build` 脚本则跳过。
+- **构建**：`**--pm2-build=y|n**`（默认 y）；交互默认执行 build。`package.json` 无 `build` 脚本则跳过。
+- **proxy**：Nginx 反代到已有上游（`**--proxy-pass=**`，如 `http://127.0.0.1:8080`）；不 clone 代码。
 - **Nginx**：反代块内置 `client_max_body_size 110m`（Gateway PPTX 上传）；`update` 或 webhook 部署后会 `nginx reload`。
 - **update**：`git pull`（若有 `.git`）→ 依赖安装 → build → `pm2 reload`；可 `**--pm2-port**` / `**--pm2-cmd**` / `**--pm2-build**` 更新行为。
   - **remove**：删除 PM2 进程及 `**.pm2-port**`、`**.pm2-cmd**`、`**.site-type**` 等元数据。
@@ -318,13 +331,24 @@ sudo chmod +x /usr/local/bin/deploy-site.sh
 
 - `**add**`：新站点；无参数时进入交互。
 - `**update**`：要求 `**www/<域名>/` 目录已存在**。若存在 `**.git`**：`git pull`（可选
-`**--git-branch**`）；若无 `.git`：跳过 Git 并提示。Laravel：**composer install**、可选 **migrate**、
-**optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**；**pm2**：依赖安装、build、**pm2 reload** 并刷新 Nginx 反代。自动化可加 `**--run-migrate=y|n`**（及同类 y/n）避免交互。
+`**--git-branch**` / `**--git-ref**`）；若无 `.git`：跳过 Git 并提示。Laravel：**composer install**、可选 **migrate**、
+**optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**；**pm2**：依赖安装、build、**pm2 reload** 并刷新 Nginx 反代。自动化可加 `**--run-migrate=y|n`**（及同类 y/n）避免交互。`**--webhook`** / `**--webhook-only**` 可写/只写 webhook 配置（交互 **update 不再追问**是否启用 webhook）。
+- `**webhook**`：`enable` / `disable` / `setup` / `list` 等。`setup` 已有 `listener.env` 时第一项为 **保持当前**（仍可改异常通知 URL）；首次默认 **Nginx 反代**，路径 `/hooks`，bind 时 **0.0.0.0:9080**。Release 未指定附件名则取第一个 asset。
+- `**rollback**`：回退到 webhook 部署前快照；确认默认 **N**。
 - `**remove**`：删除 Nginx 配置、SSL 目录、**.sse-prefixes**、crontab/Horizon、**PM2 进程**与 `**.pm2-port**` 等、可选删除代码目录。
 - `**list`**：列出 `conf.d` 下站点及类型、SSL、Cron、部署状态等；PM2 站点显示监听端口。
 - `**status**`：`**--domain=<域名>**` 检查该站证书、容器、**PM2 进程**、日志等；`**--all**` 遍历 `conf.d` 全部站点（概要）。
 - `**ssl**`：对已有站点重新签发/续期证书。
-- **（无参数）**：数字菜单（含站点运行状态一项），等价于选择上述功能。
+- **（无参数）**：数字菜单（列表 / 部署 / 更新 / Webhook / 回退 / 状态 / SSL / 移除）。做完一项直接回主菜单。
+
+### 交互约定（deploy-site.sh）
+
+- 选单：**回车 = 第 1 项（推荐）**；非法输入重问。
+- **add**：只问决策项（域名、类型、仓库、数据库名/密码/动作、队列、SSL）。Laravel 默认启用数据库。**不问** Git 分支（用仓库默认）、`DB_HOST`（按 mysql/postgres 容器名）、Redis 密码（默认空）、`APP_NAME`、自定义 ENV、前端子目录、PM2 端口/命令。SSL 先问是否用 `ACME_SSL_DNS_DEFAULT`（默认 webroot）。
+- **update**：Laravel 默认执行 migrate（`--run-migrate=n` 跳过）。
+- **frontend / pm2**：回车默认 **Git clone**；第二项才是 Webhook Release（不 clone）。
+- 站点类型含 **proxy**（仅反代，须填上游）。
+- 交互校验失败只提示并回菜单，不会退出整个脚本。
 
 ### 常用示例
 
@@ -399,7 +423,7 @@ su - devops -c 'pm2 logs lnmp-api-example-com'
 
 ### 主要参数（add/ssl 等）
 
-- `**--domain**`、`**--git**`（可空=跳过 Git）、`**--git-branch**`、`--type=laravel|frontend|pm2`
+- `**--domain**`、`**--git**`（可空=跳过 Git）、`**--git-branch**`、`--type=laravel|frontend|pm2|proxy`
 - **PM2**：`**--pm2-port**`（留空或 `-` = 自动分配）、`**--pm2-cmd**`、`**--pm2-build=y|n**`（默认 y）
 - `**--php-version**`：仅当 init 已为该主版本配置 `**EXTRA_PHP_VERSIONS**`（或该版本即为默认 `**lnmp-php**`）时有效（见上文）。
 - **SSE**：`**--sse-prefixes=**`、环境变量 `**LARAVEL_SSE_PREFIXES**`
@@ -410,6 +434,9 @@ su - devops -c 'pm2 logs lnmp-api-example-com'
 `**--create-db**`、`**--run-migrate**`、`**--run-seed**`（默认 y）、`**--add-crontab**`、
 `**--need-horizon**`（默认 y）
 - `**--frontend-root**`：相对站点目录；留空则按是否存在 `**dist/**` 自动选择（见上文）
+- `**--proxy-pass**`：`--type=proxy` 的上游 URL
+- `**webhook**`：`**--webhook=release|tag**`、`**--webhook-only**`、`**--webhook-proxy-domain**`、`**--webhook-notify-url**` 等（见 `--help`）
+- `**rollback**`：`**--rollback-to**` / `**--rollback-index**`
 - 自定义环境：`**--env=KEY=VALUE**`（可多次）
 - SSL：`**--dns**`（见上文 DNS 列表）、各云密钥、`**--force-ssl**`、`**--ssl-staging**`
 - `**remove**`：`**--yes**` 跳过部分确认
@@ -442,7 +469,7 @@ su - devops -c 'pm2 logs lnmp-api-example-com'
 2. `cd /opt/alibaba-cloud-ecs-deployment && sudo bash init.sh`（若已是 root 可省略 `sudo`），完成
   Docker、LNMP、devops、SSH、防火墙、ACME 邮箱等；**Node.js 站点**另勾选或执行 `install pm2`。
 3. 若使用 Git：为 devops 配置 SSH 公钥，保证能 clone/pull 私有仓库。
-4. `sudo bash deploy-site.sh add`（或带全参数）添加站点（Laravel / frontend / **pm2**）；浏览器访问 `https://域名` 验证。
+4. `sudo bash deploy-site.sh add`（或带全参数）添加站点（Laravel / frontend / **pm2** / **proxy**）；浏览器访问 `https://域名` 验证。
   `**deploy-site.sh` 移到其它目录执行时须有同级 `**lib/**`（或与「安装到系统路径」一节相同做法）；否则依赖 curl/wget 从 `**_LIB_RAW_BASE**` 拉取缺失文件。
 
 ---

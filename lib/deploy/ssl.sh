@@ -38,7 +38,8 @@ _collect_ssl_dns_creds_interactive() {
       ;;
     dns_ali)
       if [[ -z "${ALI_KEY:-}" ]]; then
-        ALI_KEY=$(prompt "阿里云 DNS AccessKey Id (Ali_Key)")
+        prompt_required "阿里云 DNS AccessKey Id (Ali_Key)"
+        ALI_KEY=$PROMPT_RESULT
       fi
       if [[ -z "${ALI_SECRET:-}" ]]; then
         prompt_secret_into "阿里云 DNS AccessKey Secret (Ali_Secret)" ALI_SECRET
@@ -46,7 +47,8 @@ _collect_ssl_dns_creds_interactive() {
       ;;
     dns_dp)
       if [[ -z "${DP_ID:-}" ]]; then
-        DP_ID=$(prompt "DNSPod API ID (DP_Id)")
+        prompt_required "DNSPod API ID (DP_Id)"
+        DP_ID=$PROMPT_RESULT
       fi
       if [[ -z "${DP_KEY:-}" ]]; then
         prompt_secret_into "DNSPod API Token (DP_Key)" DP_KEY
@@ -54,7 +56,8 @@ _collect_ssl_dns_creds_interactive() {
       ;;
     dns_gd)
       if [[ -z "${GD_KEY:-}" ]]; then
-        GD_KEY=$(prompt "GoDaddy API Key (GD_Key)")
+        prompt_required "GoDaddy API Key (GD_Key)"
+        GD_KEY=$PROMPT_RESULT
       fi
       if [[ -z "${GD_SECRET:-}" ]]; then
         prompt_secret_into "GoDaddy API Secret (GD_Secret)" GD_SECRET
@@ -62,7 +65,8 @@ _collect_ssl_dns_creds_interactive() {
       ;;
     dns_aws)
       if [[ -z "${AWS_ACCESS_KEY_ID:-}" ]]; then
-        AWS_ACCESS_KEY_ID=$(prompt "AWS Access Key ID")
+        prompt_required "AWS Access Key ID"
+        AWS_ACCESS_KEY_ID=$PROMPT_RESULT
       fi
       if [[ -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
         prompt_secret_into "AWS Secret Access Key" AWS_SECRET_ACCESS_KEY
@@ -70,7 +74,8 @@ _collect_ssl_dns_creds_interactive() {
       ;;
     dns_tencent)
       if [[ -z "${TENCENT_SECRET_ID:-}" ]]; then
-        TENCENT_SECRET_ID=$(prompt "腾讯云 SecretId")
+        prompt_required "腾讯云 SecretId"
+        TENCENT_SECRET_ID=$PROMPT_RESULT
       fi
       if [[ -z "${TENCENT_SECRET_KEY:-}" ]]; then
         prompt_secret_into "腾讯云 SecretKey" TENCENT_SECRET_KEY

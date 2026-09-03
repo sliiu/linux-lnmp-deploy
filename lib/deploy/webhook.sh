@@ -826,7 +826,7 @@ _webhook_deploy_release() {
     dl_urls+=("$(_webhook_expand_mirror_url "$mirror" "$ver" "$asset_file")")
   fi
   proxied="$(_webhook_gh_proxy_release_url "$(_webhook_read_kv "$wf" git_repo)" "$ver" "$asset_file")" || true
-  [[ -n "$proxied" ]] && dl_urls+=("$proxied")
+  [[ -z "$token" && -n "$proxied" ]] && dl_urls+=("$proxied")
   dl_urls+=("$download_url")
 
   tmp="$(mktemp -d)"
@@ -1071,7 +1071,7 @@ _webhook_deploy_gateway_release() {
     dl_urls+=("$(_webhook_expand_mirror_url "$mirror" "$ver" "$asset_file")")
   fi
   proxied="$(_webhook_gh_proxy_release_url "$(_webhook_read_kv "$wf" git_repo)" "$ver" "$asset_file")" || true
-  [[ -n "$proxied" ]] && dl_urls+=("$proxied")
+  [[ -z "$token" && -n "$proxied" ]] && dl_urls+=("$proxied")
   dl_urls+=("$download_url")
 
   tmp="$(mktemp -d)"
@@ -1457,6 +1457,9 @@ _nginx_webhook_proxy_block() {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         client_max_body_size 5m;
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 2400s;
+        proxy_read_timeout 2400s;
     }
     # deploy-site webhook-proxy END
 NGX
@@ -1601,11 +1604,16 @@ _webhook_run_python_server() {
     python3 - <<'PY'
 import os, subprocess, tempfile, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
+
+class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    daemon_threads = True
 
 SCRIPT = os.environ["WEBHOOK_SCRIPT"]
 PORT = int(os.environ.get("WEBHOOK_PORT", "9080"))
 BIND = os.environ.get("WEBHOOK_BIND", "127.0.0.1")
 PATH = os.environ.get("WEBHOOK_PATH", "/hooks")
+HANDLE_TIMEOUT = 2400
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -1627,22 +1635,33 @@ class Handler(BaseHTTPRequestHandler):
             event = self.headers.get("X-GitHub-Event") or self.headers.get("X-Gitee-Event") or ""
             gh_sig = self.headers.get("X-Hub-Signature-256") or self.headers.get("X-Hub-Signature") or ""
             gitee_token = self.headers.get("X-Gitee-Token") or ""
-            subprocess.Popen(
+            r = subprocess.run(
                 [SCRIPT, "webhook", "handle",
                  "--body-file", body_path,
                  "--headers-file", hdr_path,
                  "--event", event,
                  "--github-signature", gh_sig,
                  "--gitee-token", gitee_token],
-                start_new_session=True,
+                timeout=HANDLE_TIMEOUT,
             )
             body_path = hdr_path = None
-            self.send_response(202)
+            if r.returncode == 0:
+                self.send_response(200)
+                msg = b"deployed\n"
+            else:
+                self.send_response(500)
+                msg = b"deploy failed\n"
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"accepted, deploying in background\n")
+            self.wfile.write(msg)
+        except subprocess.TimeoutExpired:
+            sys.stderr.write("webhook handle timed out\n")
+            self.send_response(504)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"deploy timed out\n")
         except Exception as exc:
-            sys.stderr.write("webhook handle spawn failed: %s\n" % exc)
+            sys.stderr.write("webhook handle failed: %s\n" % exc)
             self.send_response(500)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
@@ -1660,6 +1679,6 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404); self.end_headers()
 
-HTTPServer((BIND, PORT), Handler).serve_forever()
+ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
 PY
 }

@@ -11,9 +11,25 @@ is_pm2_ok() {
 }
 
 collect_node_version() {
-  prompt "Node.js 主版本 (fnm)" "${NODE_VERSION:-22}"
-  NODE_VERSION=$PROMPT_RESULT
-  [[ "$NODE_VERSION" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "无效 Node 版本: ${NODE_VERSION}"
+  local idx
+  menu_select "Node.js 主版本（当前: ${NODE_VERSION:-22}）" \
+    "22 (推荐)" "20" "24" "18" "自定义"
+  idx=$MENU_SELECT_RESULT
+  case "$idx" in
+    0) NODE_VERSION="22" ;;
+    1) NODE_VERSION="20" ;;
+    2) NODE_VERSION="24" ;;
+    3) NODE_VERSION="18" ;;
+    4)
+      while true; do
+        prompt "Node.js 主版本 (fnm)" "${NODE_VERSION:-22}"
+        NODE_VERSION=$PROMPT_RESULT
+        [[ "$NODE_VERSION" =~ ^[0-9]+(\.[0-9]+)?$ ]] && break
+        warn "无效 Node 版本: ${NODE_VERSION}"
+        interactive_tty_ok || die "无效 Node 版本: ${NODE_VERSION}"
+      done
+      ;;
+  esac
 }
 
 _pm2_shell_block() {

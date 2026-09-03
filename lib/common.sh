@@ -56,8 +56,35 @@ ops_notify() {
   url="${WEBHOOK_NOTIFY_URL:-}"
   [[ -n "$url" ]] || return 0
   command -v python3 &>/dev/null && command -v curl &>/dev/null || return 0
-  payload="$(python3 -c 'import json,sys; print(json.dumps({"msgtype":"text","text":{"content":sys.argv[1]}},ensure_ascii=False))' "$content")" || return 0
+  payload="$(NOTIFY_URL="$url" python3 -c '
+import json, os, sys
+content = sys.argv[1]
+url = os.environ.get("NOTIFY_URL", "")
+if "dingtalk.com" in url:
+    body = {"msgtype": "markdown", "markdown": {"title": content.splitlines()[0][:80] if content else "部署异常", "text": content}}
+else:
+    body = {"msgtype": "markdown", "markdown": {"content": content}}
+print(json.dumps(body, ensure_ascii=False))
+' "$content")" || return 0
   curl -fsS --connect-timeout 8 --max-time 15 -H 'Content-Type: application/json' -d "$payload" "$url" >/dev/null 2>&1 || true
+}
+
+ops_notify_exception() {
+  local title="$1" err="$2" host site cmd args logtail md
+  host="$(hostname -s 2>/dev/null || hostname || echo unknown)"
+  site="${_deploy_log_bound_domain:-${DOMAIN:-—}}"
+  cmd="${DEPLOY_SESSION_CMD:-}"
+  args="${DEPLOY_SESSION_ARGS:-}"
+  logtail=""
+  if [[ -n "${LOG_FILE:-}" && -f "$LOG_FILE" ]]; then
+    logtail="$(tail -n 20 "$LOG_FILE" 2>/dev/null | sed 's/`/'"'"'/g')"
+  fi
+  md="$(printf '**%s**\n> <font color="warning">%s</font>\n\n- 主机: `%s`\n- 站点: `%s`\n- 时间: `%s`\n- pid: `%s`' \
+    "$title" "$err" "$host" "$site" "$(date '+%Y-%m-%d %H:%M:%S')" "$$")"
+  [[ -n "$cmd" ]] && md+=$(printf '\n- 命令: `%s %s`' "$cmd" "$args")
+  [[ -n "${LOG_FILE:-}" ]] && md+=$(printf '\n- 日志: `%s`' "$LOG_FILE")
+  [[ -n "$logtail" ]] && md+=$(printf '\n\n**日志尾部**\n<pre>%s</pre>' "$logtail")
+  ops_notify "$md"
 }
 
 die() {
@@ -66,10 +93,7 @@ die() {
   fi
   printf '✗ %s\n' "$*" >&2
   if ! interactive_tty_ok; then
-    ops_notify "$(printf '部署异常\n主机: %s\n站点: %s\n错误: %s\n时间: %s\n日志: %s' \
-      "$(hostname -s 2>/dev/null || hostname || echo unknown)" \
-      "${_deploy_log_bound_domain:-${DOMAIN:-?}}" "$*" \
-      "$(date '+%Y-%m-%d %H:%M:%S')" "${LOG_FILE:-}")"
+    ops_notify_exception "部署异常" "$*"
   fi
   exit 1
 }
@@ -132,6 +156,29 @@ prompt() {
   echo "$PROMPT_RESULT"
 }
 
+# 交互：warn 并 return 1（回到菜单）；非 TTY：die
+menu_fail() {
+  if interactive_tty_ok; then
+    warn "$1"
+    return 1
+  fi
+  die "$1"
+}
+
+# 循环直到非空；非 TTY 空输入则 die
+prompt_required() {
+  local msg="$1" default="${2:-}"
+  while true; do
+    prompt "$msg" "$default"
+    [[ -n "$PROMPT_RESULT" ]] && return 0
+    if interactive_tty_ok; then
+      warn "不能为空"
+    else
+      die "${msg} 不能为空"
+    fi
+  done
+}
+
 # 敏感输入：不回显到 stdout（禁止 $(prompt_secret)）
 prompt_secret() {
   local msg="$1" var=""
@@ -154,7 +201,7 @@ prompt_secret() {
 menu_select() {
   local title="$1"; shift
   local -a items=("$@")
-  local choice raw i
+  local choice raw i n="${#items[@]}"
   if interactive_tty_ok; then
     _ui_tty ""
     _ui_tty "  ${title}"
@@ -163,11 +210,6 @@ menu_select() {
       _ui_tty "    $((i + 1))) ${items[$i]}"
     done
     _ui_tty ""
-    _ui_tty "  回车或无效输入 = 第 1 项（推荐默认）"
-    _ui_tty ""
-    printf '  选择 [1-%s] (回车=第1项): ' "${#items[@]}" >/dev/tty
-    read -r raw </dev/tty 2>/dev/null || raw=""
-    printf '\n' >/dev/tty
   else
     echo ""
     info "$title"
@@ -176,16 +218,29 @@ menu_select() {
       info "    $((i + 1))) ${items[$i]}"
     done
     echo ""
-    info "回车或无效输入 = 第 1 项（推荐默认）"
-    echo ""
-    read -rp "  选择 [1-${#items[@]}] (回车=第1项): " raw || raw=""
   fi
-  if [[ "$raw" =~ ^[0-9]+$ ]]; then
-    choice=$((raw - 1))
-  else
-    choice=-1
-  fi
-  [[ $choice -ge 0 && $choice -lt ${#items[@]} ]] || choice=0
+  while true; do
+    if interactive_tty_ok; then
+      printf '  选择 [1-%s] (回车=第1项): ' "$n" >/dev/tty
+      read -r raw </dev/tty 2>/dev/null || raw=""
+      printf '\n' >/dev/tty
+    else
+      read -rp "  选择 [1-${n}] (回车=第1项): " raw || raw=""
+    fi
+    if [[ -z "$raw" ]]; then
+      choice=0
+      break
+    fi
+    if [[ "$raw" =~ ^[1-9][0-9]*$ ]]; then
+      choice=$((raw - 1))
+      [[ $choice -ge 0 && $choice -lt $n ]] && break
+    fi
+    if interactive_tty_ok; then
+      _ui_tty "  无效输入，请输入 1-${n}"
+    else
+      warn "无效输入，请输入 1-${n}"
+    fi
+  done
   MENU_SELECT_RESULT=$choice
 }
 

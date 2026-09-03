@@ -1,13 +1,20 @@
 # shellcheck shell=bash
 _ssh_build_allowusers_list() {
-  local allow="${WHEEL_USER:-admin} ${DEVOPS_USER:-devops}"
-  [[ -n "${CYBER_ORDINARY:-}" ]] && allow+=" ${CYBER_ORDINARY}"
-  [[ -n "${CYBER_AUDIT:-}" ]] && allow+=" ${CYBER_AUDIT}"
-  [[ -n "${CYBER_SAFE:-}" ]] && allow+=" ${CYBER_SAFE}"
-  if [[ "${ROOT_LOGIN:-prohibit-password}" != "no" ]]; then
-    allow="root ${allow}"
-  fi
-  echo "$allow"
+  local -a raw=() out=()
+  [[ "${ROOT_LOGIN:-prohibit-password}" != "no" ]] && raw+=(root)
+  [[ -n "${WHEEL_USER:-}" ]] && raw+=("$WHEEL_USER")
+  [[ -n "${DEVOPS_USER:-}" ]] && raw+=("$DEVOPS_USER")
+  [[ -n "${CYBER_ORDINARY:-}" ]] && raw+=("$CYBER_ORDINARY")
+  [[ -n "${CYBER_AUDIT:-}" ]] && raw+=("$CYBER_AUDIT")
+  [[ -n "${CYBER_SAFE:-}" ]] && raw+=("$CYBER_SAFE")
+  local x y seen
+  for x in "${raw[@]}"; do
+    [[ -n "$x" ]] || continue
+    seen=0
+    for y in "${out[@]}"; do [[ "$y" = "$x" ]] && { seen=1; break; }; done
+    [[ $seen -eq 0 ]] && out+=("$x")
+  done
+  echo "${out[*]}"
 }
 
 install_ssh() {
@@ -112,6 +119,7 @@ ensure_user_ssh_access() {
 # ═══════════════════════════════════════════════
 setup_devops_user() {
   hr; info "配置 devops 用户: ${DEVOPS_USER}"; echo ""
+  [[ -n "${DEVOPS_USER:-}" ]] || { warn "DEVOPS_USER 为空"; return 0; }
 
   getent group devops >/dev/null 2>&1 || groupadd devops
 
@@ -127,6 +135,8 @@ setup_devops_user() {
   fi
 
   usermod -aG devops "${DEVOPS_USER}" 2>/dev/null || true
+  _account_maybe_docker_group "${DEVOPS_USER}"
+  _ssh_allowusers_add_user "${DEVOPS_USER}"
 
   mkdir -p /usr/local/bin
   echo "%devops ALL=(ALL) NOPASSWD: /usr/local/bin/deploy-site.sh" \
@@ -140,10 +150,12 @@ setup_wheel_user() {
   hr; info "配置 wheel 管理员: ${WHEEL_USER}"; echo ""
   if [[ -z "$WHEEL_USER" ]]; then return 0; fi
 
+  getent group wheel >/dev/null 2>&1 || groupadd wheel
+
   if ! id "${WHEEL_USER}" &>/dev/null; then
     local pwd
     prompt_secret_confirm_into "${WHEEL_USER} 密码" pwd
-    adduser "${WHEEL_USER}" || die "创建用户 ${WHEEL_USER} 失败"
+    useradd -m -s /bin/bash "${WHEEL_USER}" || die "创建用户 ${WHEEL_USER} 失败"
     echo "${WHEEL_USER}:${pwd}" | chpasswd || die "设置密码失败"
     ok "${WHEEL_USER} 创建完成"
   elif confirm "${WHEEL_USER} 已存在，是否修改密码？" "n"; then
@@ -155,6 +167,8 @@ setup_wheel_user() {
 
   usermod -aG wheel "${WHEEL_USER}" || die "添加 wheel 组失败"
   usermod -aG devops "${WHEEL_USER}" 2>/dev/null || true
+  _account_maybe_docker_group "${WHEEL_USER}"
+  _ssh_allowusers_add_user "${WHEEL_USER}"
   mkdir -p /home/"${WHEEL_USER}"/.ssh
   chmod 700 /home/"${WHEEL_USER}"/.ssh
   chown -R "${WHEEL_USER}:${WHEEL_USER}" /home/"${WHEEL_USER}"/.ssh
@@ -185,7 +199,8 @@ setup_cyber_users() {
 
   for role in ordinary audit safe; do
     local name
-    name=$(prompt "${roles[$role]}用户名" "${defaults[$role]}")
+    prompt "${roles[$role]}用户名" "${defaults[$role]}"
+    name=$PROMPT_RESULT
     name=$(echo -n "$name" | tr -cd '[:alnum:]_')
     if [[ -z "$name" ]]; then name="${defaults[$role]}"; fi
     [[ "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]{0,31}$ ]] || { warn "用户名无效: $name"; continue; }
@@ -216,6 +231,8 @@ setup_cyber_users() {
 
     eval "${vars[$role]}='$name'"
 
+    _ssh_allowusers_add_user "$name"
+
     if [[ "$cyber_ssh_mode" = "root" ]]; then
       ensure_user_ssh_access "$name" root
     elif [[ "$cyber_ssh_mode" = "line" ]]; then
@@ -232,6 +249,7 @@ setup_cyber_users() {
   if [[ -n "${CYBER_ORDINARY:-}" ]]; then
     if confirm "将 ${CYBER_ORDINARY} 设为 devops 部署用户？" "y"; then
       DEVOPS_USER="$CYBER_ORDINARY"
+      setup_devops_user
     fi
   fi
 

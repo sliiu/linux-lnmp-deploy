@@ -110,7 +110,7 @@ apply_site_sse_prefixes_cli() {
   fi
 }
 
-# update：展示当前 SSE 规则并可选修改（未传 --sse-prefixes 且 stdin 为 TTY 且未 --yes 时）
+# update：展示当前 SSE 规则（改用 --sse-prefixes）
 interactive_sse_prefixes_maybe_for_update() {
   local domain="$1"
   [[ "${YES:-0}" -eq 1 ]] && return 0
@@ -126,24 +126,7 @@ interactive_sse_prefixes_maybe_for_update() {
   cur_resolved=$(_laravel_sse_prefixes_resolve "$domain")
   cur_one=$(printf '%s' "$cur_resolved" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   echo ""
-  info "SSE（fastcgi → php:9001） 来源:${src}  当前规则: ${cur_one:-<空>}"
-
-  if ! confirm "修改 SSE 路径规则？" "n"; then
-    return 0
-  fi
-
-  local newv
-  newv=$(prompt "新规则（空格/逗号分隔；- 表示删站点文件、改用全局）" "$cur_one")
-  if [[ "$newv" == "-" ]]; then
-    SITE_SSE_PREFIXES=""
-    SITE_SSE_PREFIXES_CLI=1
-    info "将删除站点专属 .sse-prefixes，改用全局默认"
-  elif [[ "$newv" == "$cur_one" ]]; then
-    info "与当前相同，跳过写入"
-  else
-    SITE_SSE_PREFIXES="$newv"
-    SITE_SSE_PREFIXES_CLI=1
-  fi
+  info "SSE（fastcgi → php:9001） 来源:${src}  当前规则: ${cur_one:-<空>}（改用 --sse-prefixes）"
 }
 
 # 输出一个 SSE location 块到 stdout；调用方负责拼接

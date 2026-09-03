@@ -2,21 +2,21 @@
 
 cmd_ssl() {
   prompt_pick_domain "选择要签发/续期的站点"
-  [[ -z "$DOMAIN" ]] && die "域名不能为空"
+  [[ -n "$DOMAIN" ]] || { menu_fail "域名不能为空" || return 0; }
 
   local site_dir="${WWW_ROOT}/${DOMAIN}"
-  [[ -d "$site_dir" ]] || die "站点 ${DOMAIN} 不存在"
+  [[ -d "$site_dir" ]] || { menu_fail "站点 ${DOMAIN} 不存在" || return 0; }
 
   local site_type
   site_type="$(_site_type_for_domain "$DOMAIN")"
 
-  container_ok "lnmp-acme" || die "lnmp-acme 未运行"
+  container_ok "lnmp-acme" || { menu_fail "lnmp-acme 未运行" || return 0; }
 
-  _collect_ssl_dns_interactive
+  _collect_ssl_dns_interactive full
   SSL_DNS="${SSL_DNS:-${ACME_SSL_DNS_DEFAULT:-webroot}}"
   case "$SSL_DNS" in
     webroot|dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) ;;
-    *) die "无效 SSL 模式: ${SSL_DNS}" ;;
+    *) menu_fail "无效 SSL 模式: ${SSL_DNS}" || return 0 ;;
   esac
   _collect_ssl_dns_creds_interactive
   if _is_dns_mode "$SSL_DNS"; then
@@ -50,14 +50,14 @@ usage() {
 
 选项:
   --domain=域名         站点域名
-  --sse-prefixes=列表   Laravel SSE：写入 ${NGINX_CONF}/<域名>.sse-prefixes（与 update 同用时跳过交互提示）。路径可含 {id} 自动生成正则；或 wave、~^/… 等。留空=删站点文件用全局
+  --sse-prefixes=列表   Laravel SSE：写入 ${NGINX_CONF}/<域名>.sse-prefixes（update 只展示当前规则，改用本参数）。路径可含 {id} 自动生成正则；或 wave、~^/… 等。留空=删站点文件用全局
   环境变量 LARAVEL_SSE_PREFIXES  无 per-site 文件时的默认（空格/逗号分隔，规则同上）[默认: wave]
   --git=地址            Git 仓库地址（留空或省略=跳过 clone/pull）
   --git-branch=名称     clone/pull 使用的分支或标签（留空=默认分支；无 --git 时忽略）
   --git-ref=名称        update 时 checkout 指定 tag/commit（不 pull）
   --webhook=release|tag  add/update 启用或恢复 webhook（静态=release，Laravel=tag）
   --webhook-only        与 update --webhook 联用：仅写 webhook 配置，不 pull/composer
-  --webhook-bind=地址   setup：监听地址（0.0.0.0）；默认 127.0.0.1
+  --webhook-bind=地址   setup：bind 模式监听地址 [0.0.0.0]
   --webhook-port=端口     setup：监听端口 [9080]
   --webhook-path=路径     setup：路径 [/hooks]
   --webhook-proxy-domain= setup：Nginx 反代域名（mode=nginx，本机仍 127.0.0.1）

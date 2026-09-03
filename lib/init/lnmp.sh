@@ -796,10 +796,23 @@ _install_php_extensions() {
 }
 
 _setup_acme_cron() {
-  cat > /usr/local/bin/acme-renew.sh <<'SH'
+  local common_sh="${SCRIPT_DIR}/lib/common.sh"
+  cat > /usr/local/bin/acme-renew.sh <<SH
 #!/bin/bash
-docker exec lnmp-acme acme.sh --renew-all --server letsencrypt 2>/dev/null || true
-docker exec lnmp-nginx nginx -s reload 2>/dev/null || true
+DATA_DIR="${DATA_DIR}"
+CONF_FILE="${CONF_FILE:-/etc/lnmp-env.conf}"
+DEPLOY_LOG_TEE=1
+# shellcheck disable=SC1091
+[[ -f "${common_sh}" ]] && . "${common_sh}"
+deploy_log_init ""
+rc=0
+docker exec lnmp-acme acme.sh --renew-all --server letsencrypt || rc=\$?
+if [[ "\$rc" -ne 0 && "\$rc" -ne 2 ]]; then
+  ops_notify_exception "ACME 续期失败" "acme.sh --renew-all exit=\${rc}"
+fi
+if ! docker exec lnmp-nginx nginx -s reload; then
+  ops_notify_exception "ACME 续期后 Nginx reload 失败" "docker exec lnmp-nginx nginx -s reload"
+fi
 SH
   chmod +x /usr/local/bin/acme-renew.sh
   if ! ensure_crontab; then

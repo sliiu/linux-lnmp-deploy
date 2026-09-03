@@ -130,7 +130,7 @@ cmd_status() {
       [[ "$bn" = "default" ]] && continue
       _domains+=("$bn")
     done
-    [[ ${#_domains[@]} -eq 0 ]] && die "未在 ${NGINX_CONF} 发现站点配置"
+    [[ ${#_domains[@]} -eq 0 ]] && { menu_fail "未在 ${NGINX_CONF} 发现站点配置" || return 0; }
   else
     _domains=("$DOMAIN")
   fi

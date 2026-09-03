@@ -89,8 +89,8 @@ main() {
     status) shift; parse_args "$@"; cmd_status ;;
     ssl)    shift; parse_args "$@"; cmd_ssl ;;
     "")
-      clear 2>/dev/null || true
       while true; do
+        clear 2>/dev/null || true
         hr
         printf "  多站点部署管理 v%s\n" "${VERSION}"
         hr
@@ -119,10 +119,6 @@ main() {
           8) ok "再见"; exit 0 ;;
         esac
         echo ""
-        if ! confirm "返回主菜单？" "y"; then
-          ok "再见"; exit 0
-        fi
-        clear 2>/dev/null || true
       done
       ;;
     *)

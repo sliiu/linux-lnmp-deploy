@@ -1,34 +1,50 @@
 # shellcheck shell=bash
+_collect_github_proxy_custom() {
+  while true; do
+    prompt "GitHub 代理地址 (如 https://ghfast.top；- 清空)"
+    GH_PROXY=$PROMPT_RESULT
+    if [[ "$GH_PROXY" = "-" ]]; then GH_PROXY=""; return 0; fi
+    if [[ "$GH_PROXY" =~ ^https?://[^[:space:]]+$ ]]; then
+      GH_PROXY="${GH_PROXY%/}"; return 0
+    fi
+    warn "无效 URL，请重新输入（http/https 开头）"
+  done
+}
+
 collect_github_proxy() {
   echo ""
   info "当前: ${GH_PROXY:-<官方直连>}"
   local idx
-  menu_select "GitHub 加速代理" \
-    "保持当前不变" \
-    "官方源（直连）" \
-    "ghfast.top（推荐国内）" \
-    "自定义"
-  idx=$MENU_SELECT_RESULT
-  case "$idx" in
-    0) return 0 ;;
-    1) GH_PROXY="" ;;
-    2) GH_PROXY="https://ghfast.top" ;;
-    3)
-      while true; do
-        prompt "GitHub 代理地址 (如 https://ghfast.top；- 清空)"
-        GH_PROXY=$PROMPT_RESULT
-        if [[ "$GH_PROXY" = "-" ]]; then GH_PROXY=""; return 0; fi
-        if [[ "$GH_PROXY" =~ ^https?://[^[:space:]]+$ ]]; then
-          GH_PROXY="${GH_PROXY%/}"; return 0
-        fi
-        warn "无效 URL，请重新输入（http/https 开头）"
-      done
-      ;;
-  esac
+  if [[ -n "${GH_PROXY:-}" ]]; then
+    menu_select "GitHub 加速代理" \
+      "保持当前不变" \
+      "官方源（直连）" \
+      "ghfast.top（推荐国内）" \
+      "自定义"
+    idx=$MENU_SELECT_RESULT
+    case "$idx" in
+      0) return 0 ;;
+      1) GH_PROXY="" ;;
+      2) GH_PROXY="https://ghfast.top" ;;
+      3) _collect_github_proxy_custom ;;
+    esac
+  else
+    menu_select "GitHub 加速代理" \
+      "ghfast.top（推荐国内）" \
+      "官方源（直连）" \
+      "自定义"
+    idx=$MENU_SELECT_RESULT
+    case "$idx" in
+      0) GH_PROXY="https://ghfast.top" ;;
+      1) GH_PROXY="" ;;
+      2) _collect_github_proxy_custom ;;
+    esac
+  fi
 }
 
 collect_docker_mirrors() {
   local sel
+  MENU_MULTI_DEFAULT="2,3"
   menu_multi "Docker 镜像源" "官方" "DaoCloud" "阿里云" "腾讯云" "自定义"
   sel=$MENU_MULTI_RESULT
   DOCKER_MIRRORS_STR=""
@@ -50,27 +66,28 @@ collect_docker_mirrors() {
 
 collect_alpine_mirror() {
   local idx
-  menu_select "PHP Alpine 源" "官方" "清华" "阿里云"
+  menu_select "PHP Alpine 源（当前: ${ALPINE_MIRROR:-官方}）" \
+    "阿里云（推荐国内）" "清华" "官方"
   idx=$MENU_SELECT_RESULT
   case "$idx" in
-    0) ALPINE_MIRROR="" ;;
+    0) ALPINE_MIRROR="mirrors.aliyun.com" ;;
     1) ALPINE_MIRROR="mirrors.tuna.tsinghua.edu.cn" ;;
-    2) ALPINE_MIRROR="mirrors.aliyun.com" ;;
+    2) ALPINE_MIRROR="" ;;
   esac
 }
 
 collect_php_version() {
   local idx
-  menu_select "PHP 版本（镜像 php:主版本-fpm-alpine）" \
-    "8.1" "8.2 (Laravel 12 最低)" "8.3 (推荐)" "8.4" "8.5" \
+  menu_select "PHP 版本（当前: ${PHP_VERSION:-8.3}）" \
+    "8.3 (推荐)" "8.4" "8.5" "8.2" "8.1" \
     "自定义主版本（如 8.3）"
   idx=$MENU_SELECT_RESULT
   case "$idx" in
-    0) PHP_VERSION="8.1" ;;
-    1) PHP_VERSION="8.2" ;;
-    2) PHP_VERSION="8.3" ;;
-    3) PHP_VERSION="8.4" ;;
-    4) PHP_VERSION="8.5" ;;
+    0) PHP_VERSION="8.3" ;;
+    1) PHP_VERSION="8.4" ;;
+    2) PHP_VERSION="8.5" ;;
+    3) PHP_VERSION="8.2" ;;
+    4) PHP_VERSION="8.1" ;;
     5)
       while true; do
         prompt "主版本号 (X.Y)" "${PHP_VERSION:-8.3}"
@@ -84,6 +101,9 @@ collect_php_version() {
 }
 
 collect_extra_php_versions() {
+  if [[ -z "${EXTRA_PHP_VERSIONS:-}" ]]; then
+    confirm "启用额外 PHP 版本（与默认 ${PHP_VERSION} 共存）？" "n" || return 0
+  fi
   echo ""
   info "额外 PHP 版本（与默认 ${PHP_VERSION} 共存，每版本独立 fpm 容器：lnmp-phpNN，与 compose 一致）"
   info "当前: ${EXTRA_PHP_VERSIONS:-<无>}"
@@ -99,8 +119,14 @@ collect_extra_php_versions() {
   _items+=("不启用 / 清空" "保持当前不变" "手动输入 CSV...")
 
   local sel
+  MENU_MULTI_DEFAULT=keep
   menu_multi "勾选要启用的额外 PHP 版本（同时选「保持当前」会忽略其他勾选）" "${_items[@]}"
   sel=$MENU_MULTI_RESULT
+
+  if [[ -z "$sel" ]]; then
+    info "保持原值不变: ${EXTRA_PHP_VERSIONS:-<无>}"
+    return 0
+  fi
 
   local _last1=$(( ${#_items[@]} - 1 ))
   local _last2=$(( ${#_items[@]} - 2 ))
@@ -165,7 +191,10 @@ collect_php_extensions() {
   echo ""
   info "当前已选: ${PHP_EXTENSIONS:-<空，默认全选>}"
   local sel
-  menu_multi "PHP 扩展（回车=全选；空选=保留当前不变）" "${all_exts[@]}"
+  if [[ -n "${PHP_EXTENSIONS:-}" ]]; then
+    MENU_MULTI_DEFAULT=keep
+  fi
+  menu_multi "PHP 扩展" "${all_exts[@]}"
   sel=$MENU_MULTI_RESULT
   # menu_multi 返回为空 → 仅可能是 items 全部不可解析；按"全选"语义已在内部默认；
   # 这里再做一次防御：用户若手动输入了非数字（如 -），保留当前值
@@ -251,6 +280,7 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
+  MENU_MULTI_DEFAULT="1,2,3,5,6"
   menu_multi "LNMP 组件（Laravel 需 php；PM2 网关仅需 nginx + acme，可选 postgres/redis）" "nginx" "php" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
   sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
@@ -275,15 +305,13 @@ collect_lnmp_services() {
 
 _collect_image() {
   local _varname="$1" _title="$2" _default="$3"; shift 3
-  local -a _options=("$@")
   local _cur="${!_varname:-$_default}"
-  _options+=("保持当前不变（${_cur}）" "自定义（完整 镜像:TAG）")
+  local -a _options=("保持当前不变（${_cur}）" "$@" "自定义（完整 镜像:TAG）")
   local _last=$(( ${#_options[@]} - 1 ))
-  local _keep=$(( ${#_options[@]} - 2 ))
   local _idx _val
   menu_select "${_title}（当前: ${_cur}）" "${_options[@]}"
   _idx=$MENU_SELECT_RESULT
-  if [[ "$_idx" -eq "$_keep" ]]; then
+  if [[ "$_idx" -eq 0 ]]; then
     return 0
   elif [[ "$_idx" -eq "$_last" ]]; then
     prompt "镜像:TAG" "$_cur"
@@ -334,15 +362,15 @@ collect_phpmyadmin_listen() {
   info "当前: ${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}"
   local _i
   menu_select "phpMyAdmin 监听地址（建议仅本机+SSH 隧道，避免直接暴露公网）" \
+    "保持当前（${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}）" \
     "127.0.0.1:8080（仅本机/SSH 隧道，推荐）" \
     "0.0.0.0:8080（公网可达；务必用防火墙限制源 IP）" \
-    "保持当前不变" \
     "自定义"
   _i=$MENU_SELECT_RESULT
   case "$_i" in
-    0) PHPMYADMIN_BIND="127.0.0.1"; PHPMYADMIN_PORT="8080" ;;
-    1) PHPMYADMIN_BIND="0.0.0.0";   PHPMYADMIN_PORT="8080" ;;
-    2) return 0 ;;
+    0) return 0 ;;
+    1) PHPMYADMIN_BIND="127.0.0.1"; PHPMYADMIN_PORT="8080" ;;
+    2) PHPMYADMIN_BIND="0.0.0.0";   PHPMYADMIN_PORT="8080" ;;
     3)
       prompt "监听地址" "${PHPMYADMIN_BIND:-127.0.0.1}"
       PHPMYADMIN_BIND=$PROMPT_RESULT
@@ -371,6 +399,11 @@ collect_lnmp_services_pm2_gateway() {
   info "PM2 网关栈：nginx + postgres + redis + acme（无 php / mysql）"
 }
 
+_apply_quiet_network_defaults() {
+  [[ -n "${GH_PROXY:-}" ]] || GH_PROXY="https://ghfast.top"
+  [[ -n "${DOCKER_MIRRORS_STR:-}" ]] || DOCKER_MIRRORS_STR="https://docker.m.daocloud.io,https://1hdd0hae.mirror.aliyuncs.com"
+}
+
 _interactive_pm2_gateway_install() {
   echo ""
   hr; info "PM2 网关栈（最小安装）"; hr; echo ""
@@ -378,17 +411,13 @@ _interactive_pm2_gateway_install() {
   info "不含 PHP / MySQL（deploy-site --type=pm2 反代宿主机 Node 进程）"
   echo ""
 
-  if ! is_docker_ok; then collect_docker_mirrors; fi
-  collect_github_proxy
-
-  prompt "devops 部署用户名" "${DEVOPS_USER:-devops}"
-  DEVOPS_USER=$PROMPT_RESULT
+  _apply_quiet_network_defaults
+  DEVOPS_USER="${DEVOPS_USER:-devops}"
+  NODE_VERSION="${NODE_VERSION:-22}"
 
   collect_lnmp_services_pm2_gateway
-  collect_lnmp_stack_images
   collect_postgres_password
   collect_acme_email
-  collect_node_version
 
   echo ""
   hr; info "配置确认"; hr
@@ -418,18 +447,14 @@ _interactive_pm2_gateway_install() {
 #  交互模式
 # ═══════════════════════════════════════════════
 interactive_setup() {
-  clear 2>/dev/null || true
-  hr
-  info "环境部署管理 v${VERSION}"
-  hr
-  echo ""
-
   conf_save
   conf_load
 
-  show_status
-
   while true; do
+    clear 2>/dev/null || true
+    hr
+    info "环境部署管理 v${VERSION}"
+    hr
     local _i
     menu_select "请选择操作" \
       "查看状态" \
@@ -442,6 +467,7 @@ interactive_setup() {
       "卸载单个组件" \
       "退出"
     _i=$MENU_SELECT_RESULT
+    echo ""
     case "$_i" in
       0) show_status ;;
       1) _interactive_pm2_gateway_install ;;
@@ -453,6 +479,7 @@ interactive_setup() {
       7) _interactive_uninstall_one ;;
       8) echo ""; ok "退出"; exit 0 ;;
     esac
+    echo ""
   done
 }
 
@@ -490,7 +517,8 @@ _interactive_full_install() {
   hr; info "完整安装向导"; hr; echo ""
 
   local sel
-  menu_multi "选择要安装的模块（推荐最少：Docker + LNMP；按高频排序）" \
+  MENU_MULTI_DEFAULT="2,3"
+  menu_multi "选择要安装的模块（回车=Docker + LNMP）" \
     "等保加固 (cyber 三权用户)" \
     "Docker (LNMP 前置)" \
     "LNMP (nginx + php + mysql + redis + acme)" \
@@ -502,6 +530,10 @@ _interactive_full_install() {
     "Wheel 管理员" \
     "saferm 安全删除"
   sel=$MENU_MULTI_RESULT
+  if [[ -z "$sel" ]]; then
+    warn "未选择任何模块"
+    return
+  fi
 
   local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_pm2=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
@@ -519,37 +551,25 @@ _interactive_full_install() {
   fi
 
   # ── 收集顺序：等保加固(cyber) → 账号 → 网络/源 → 基础设施(docker) → 应用(lnmp) → 系统加固(ssh) ──
+  _apply_quiet_network_defaults
+  DEVOPS_USER="${DEVOPS_USER:-devops}"
+  PHP_VERSION="${PHP_VERSION:-8.3}"
+  NODE_VERSION="${NODE_VERSION:-22}"
 
   # 0) 等保加固前置（cyber 内部含交互+创建账号；ordinary 可作为 devops 默认值）
   if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
 
-  # 1) 账号优先（LNMP 安装时 chown 需要 DEVOPS_USER 已确定）
-  prompt "devops 部署用户名" "${DEVOPS_USER:-devops}"
-  DEVOPS_USER=$PROMPT_RESULT
   if [[ $sel_wheel -eq 1 ]]; then
     prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"
     WHEEL_USER=$PROMPT_RESULT
   fi
 
-  # 2) 仅当真用得到 GitHub 时才问代理（zsh / lnmp / pm2 需要）
-  if [[ $sel_zsh -eq 1 || $sel_lnmp -eq 1 || $sel_pm2 -eq 1 || $sel_saferm -eq 1 ]]; then
-    collect_github_proxy
-  fi
-
-  # 3) Docker 镜像源（先于 LNMP，因为 LNMP 的 image pull 走它）
-  if [[ $sel_docker -eq 1 ]]; then collect_docker_mirrors; fi
-
-  # 4) LNMP 套件（components → images → php(默认/额外/扩展/源) → mysql → acme）
   if [[ $sel_lnmp -eq 1 ]]; then
-    collect_lnmp_services
-    collect_lnmp_stack_images
-    if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
+    LNMP_SERVICES="${LNMP_SERVICES:-nginx,php,mysql,redis,acme}"
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "postgres"; then collect_postgres_password; fi
     if has_service "acme"; then collect_acme_email; fi
   fi
-
-  if [[ $sel_pm2 -eq 1 ]]; then collect_node_version; fi
 
   # 5) SSH 安全策略（最后问：会改 sshd 配置，留给末尾减少变更冲突）
   if [[ $sel_ssh -eq 1 ]]; then collect_ssh_config; fi
@@ -612,175 +632,192 @@ _interactive_full_install() {
 }
 
 _interactive_install_one() {
-  local idx
-  menu_select "选择要安装的组件（按高频排序）" \
-    "LNMP (全部，推荐)" \
-    "LNMP - php" \
-    "LNMP - mysql" \
-    "LNMP - postgresql" \
-    "LNMP - redis" \
-    "LNMP - nginx" \
-    "LNMP - acme" \
-    "LNMP - phpMyAdmin" \
-    "Docker" \
-    "PM2 (Node.js)" \
-    "Devops 用户" \
-    "Wheel 管理员" \
-    "SSH 安全策略" \
-    "Firewalld" \
-    "BBR" \
-    "Oh-My-Zsh" \
-    "saferm 安全删除" \
-    "等保加固"
-  idx=$MENU_SELECT_RESULT
+  while true; do
+    local idx
+    menu_select "选择要安装的组件（按高频排序）" \
+      "LNMP (全部，推荐)" \
+      "LNMP - php" \
+      "LNMP - mysql" \
+      "LNMP - postgresql" \
+      "LNMP - redis" \
+      "LNMP - nginx" \
+      "LNMP - acme" \
+      "LNMP - phpMyAdmin" \
+      "Docker" \
+      "PM2 (Node.js)" \
+      "Devops 用户" \
+      "Wheel 管理员" \
+      "SSH 安全策略" \
+      "Firewalld" \
+      "BBR" \
+      "Oh-My-Zsh" \
+      "saferm 安全删除" \
+      "等保加固" \
+      "返回主菜单"
+    idx=$MENU_SELECT_RESULT
 
-  case "$idx" in
-    0)
-      prompt "devops 部署用户名（LNMP chown 需要）" "${DEVOPS_USER:-devops}"
-      DEVOPS_USER=$PROMPT_RESULT
-      collect_lnmp_services
-      collect_lnmp_stack_images
-      if has_service "php"; then collect_alpine_mirror; collect_php_version; collect_extra_php_versions; collect_php_extensions; fi
-      if has_service "mysql"; then collect_mysql_password; fi
-      if has_service "postgres"; then collect_postgres_password; fi
-      if has_service "acme"; then collect_acme_email; fi
-      install_lnmp
-      ;;
-    1)  collect_php_version; collect_extra_php_versions; collect_php_extensions; collect_alpine_mirror
-        LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
-    2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
-    3)  collect_postgres_image; collect_postgres_password; LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
-    4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
-    5)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
-    6)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
-    7)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
-    8)  collect_docker_mirrors; install_docker ;;
-    9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_node_version; install_pm2 ;;
-    10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
-    11) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
-    12) collect_ssh_config; install_ssh ;;
-    13) install_firewall ;;
-    14) install_bbr ;;
-    15) collect_github_proxy; install_zsh ;;
-    16) install_saferm ;;
-    17) setup_cyber_users ;;
-  esac
-  conf_save
+    case "$idx" in
+      0)
+        DEVOPS_USER="${DEVOPS_USER:-devops}"
+        collect_lnmp_services
+        PHP_VERSION="${PHP_VERSION:-8.3}"
+        if has_service "mysql"; then collect_mysql_password; fi
+        if has_service "postgres"; then collect_postgres_password; fi
+        if has_service "acme"; then collect_acme_email; fi
+        install_lnmp
+        ;;
+      1)  collect_php_version; collect_extra_php_versions
+          LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
+      2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
+      3)  collect_postgres_image; collect_postgres_password; LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
+      4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
+      5)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
+      6)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
+      7)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
+      8)  collect_docker_mirrors; install_docker ;;
+      9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_node_version; install_pm2 ;;
+      10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+      11) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
+      12) collect_ssh_config; install_ssh ;;
+      13) install_firewall ;;
+      14) install_bbr ;;
+      15) collect_github_proxy; install_zsh ;;
+      16) install_saferm ;;
+      17) setup_cyber_users ;;
+      18) return 0 ;;
+    esac
+    conf_save
+    echo ""
+  done
 }
 
 _interactive_uninstall_one() {
-  local -a _labels _actions
-  local _ev idx component _danger_msg=""
+  while true; do
+    local -a _labels=() _actions=()
+    local _ev idx component _danger_msg=""
 
-  _labels+=("LNMP - php（默认 lnmp-php；会一并停止所有额外 PHP）")
-  _actions+=(php)
-  while IFS= read -r _ev; do
-    [[ -z "$_ev" ]] && continue
-    _labels+=("LNMP - php ${_ev}（仅 lnmp-php$(_php_ver_no_dot "$_ev")）")
-    _actions+=("php-${_ev}")
-  done < <(_php_extra_list)
+    _labels+=("LNMP - php（默认 lnmp-php；会一并停止所有额外 PHP）")
+    _actions+=(php)
+    while IFS= read -r _ev; do
+      [[ -z "$_ev" ]] && continue
+      _labels+=("LNMP - php ${_ev}（仅 lnmp-php$(_php_ver_no_dot "$_ev")）")
+      _actions+=("php-${_ev}")
+    done < <(_php_extra_list)
 
-  _labels+=(
-    "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin"
-    "LNMP (全部)" "Docker" "PM2 (Node.js)" "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
-  )
-  _actions+=(mysql postgres redis nginx acme phpmyadmin all docker pm2 ssh firewall bbr zsh saferm)
+    _labels+=(
+      "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin"
+      "LNMP (全部)" "Docker" "PM2 (Node.js)" "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
+      "返回主菜单"
+    )
+    _actions+=(mysql postgres redis nginx acme phpmyadmin all docker pm2 ssh firewall bbr zsh saferm back)
 
-  menu_select "选择要卸载的组件（高危操作前会二次确认）" "${_labels[@]}"
-  idx=$MENU_SELECT_RESULT
-  component="${_actions[$idx]}"
+    menu_select "选择要卸载的组件（高危操作前会二次确认）" "${_labels[@]}"
+    idx=$MENU_SELECT_RESULT
+    component="${_actions[$idx]}"
+    [[ "$component" = "back" ]] && return 0
 
-  case "$component" in
-    php) _danger_msg="将停止 lnmp-php 与所有 lnmp-phpNN 额外容器，并清空 EXTRA_PHP_VERSIONS" ;;
-    php-*)
-      _ev="${component#php-}"
-      _danger_msg="将停止 lnmp-php$(_php_ver_no_dot "$_ev")，从 EXTRA_PHP_VERSIONS 移除 ${_ev}，并重建 compose"
-      ;;
-    mysql)    _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
-    postgres) _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
-    redis)    _danger_msg="将停止并移除 lnmp-redis 容器" ;;
-    nginx)    _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
-    acme)     _danger_msg="将停止并移除 lnmp-acme 容器" ;;
-    phpmyadmin) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
-    all)      _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
-    docker)   _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
-    pm2)      _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
-    ssh)      _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
-  esac
-  if [[ -n "$_danger_msg" ]]; then
-    warn "$_danger_msg"
-    confirm "确认继续？" "n" || { info "已取消"; return 0; }
-  fi
+    case "$component" in
+      php) _danger_msg="将停止 lnmp-php 与所有 lnmp-phpNN 额外容器，并清空 EXTRA_PHP_VERSIONS" ;;
+      php-*)
+        _ev="${component#php-}"
+        _danger_msg="将停止 lnmp-php$(_php_ver_no_dot "$_ev")，从 EXTRA_PHP_VERSIONS 移除 ${_ev}，并重建 compose"
+        ;;
+      mysql)      _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
+      postgres)   _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
+      redis)      _danger_msg="将停止并移除 lnmp-redis 容器" ;;
+      nginx)      _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
+      acme)       _danger_msg="将停止并移除 lnmp-acme 容器" ;;
+      phpmyadmin) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
+      all)        _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
+      docker)     _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
+      pm2)        _danger_msg="将卸载 PM2 / fnm / Node.js（devops 用户）" ;;
+      ssh)        _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
+      firewall)   _danger_msg="将停止并禁用 firewalld" ;;
+      bbr)        _danger_msg="将关闭 BBR" ;;
+      zsh)        _danger_msg="将卸载 Oh-My-Zsh" ;;
+      saferm)     _danger_msg="将卸载 saferm" ;;
+    esac
+    if [[ -n "$_danger_msg" ]]; then
+      warn "$_danger_msg"
+      confirm "确认继续？" "n" || { info "已取消"; echo ""; continue; }
+    fi
 
-  case "$component" in
-    php|php-*|mysql|postgres|redis|nginx|acme|phpmyadmin|all) uninstall_lnmp "$component" ;;
-    docker)   uninstall_docker ;;
-    pm2)      uninstall_pm2 ;;
-    ssh)      uninstall_ssh ;;
-    firewall) uninstall_firewall ;;
-    bbr)      uninstall_bbr ;;
-    zsh)      uninstall_zsh ;;
-    saferm)   uninstall_saferm ;;
-  esac
-  conf_save
+    case "$component" in
+      php|php-*|mysql|postgres|redis|nginx|acme|phpmyadmin|all) uninstall_lnmp "$component" ;;
+      docker)   uninstall_docker ;;
+      pm2)      uninstall_pm2 ;;
+      ssh)      uninstall_ssh ;;
+      firewall) uninstall_firewall ;;
+      bbr)      uninstall_bbr ;;
+      zsh)      uninstall_zsh ;;
+      saferm)   uninstall_saferm ;;
+    esac
+    conf_save
+    echo ""
+  done
 }
 
 _interactive_config() {
-  local idx
-  menu_select "选择要更新的配置（按高频排序）" \
-    "PHP 版本（额外，多版本共存）" \
-    "PHP 扩展" \
-    "PHP 版本（默认）" \
-    "LNMP 组件镜像" \
-    "Docker 镜像源" \
-    "Alpine 源" \
-    "GitHub 代理" \
-    "SSH 配置" \
-    "ACME 邮箱" \
-    "ACME SSL 默认 (deploy-site)" \
-    "Node.js 版本 (PM2)" \
-    "Devops 用户"
-  idx=$MENU_SELECT_RESULT
+  while true; do
+    local idx
+    menu_select "选择要更新的配置（按高频排序）" \
+      "PHP 版本（额外，多版本共存）" \
+      "PHP 扩展" \
+      "PHP 版本（默认）" \
+      "LNMP 组件镜像" \
+      "Docker 镜像源" \
+      "Alpine 源" \
+      "GitHub 代理" \
+      "SSH 配置" \
+      "ACME 邮箱" \
+      "ACME SSL 默认 (deploy-site)" \
+      "Node.js 版本 (PM2)" \
+      "Devops 用户" \
+      "返回主菜单"
+    idx=$MENU_SELECT_RESULT
 
-  case "$idx" in
-    0) collect_extra_php_versions
-       if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok && has_service "php"; then
-         update_lnmp
-       else
-         ok "已写入配置（安装 LNMP 后生效；可在主菜单 → 安装单个组件 → LNMP - php 重建）"
-       fi
-       ;;
-    1) collect_php_extensions
-       if has_service "php" && container_ok "lnmp-php"; then
-         _install_php_extensions
-       else
-         ok "已写入配置（lnmp-php 未运行，下次启动后通过此菜单或 LNMP - php 重建生效）"
-       fi
-       ;;
-    2) collect_php_version
-       if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok && has_service "php"; then
-         warn "默认 PHP 版本变更需重建 lnmp-php 容器（用同一菜单 → LNMP - php 单组件安装）"
-       fi
-       ;;
-    3) collect_lnmp_stack_images; if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok; then update_lnmp; else ok "已写入配置，安装 LNMP 后生效"; fi ;;
-    4) collect_docker_mirrors
-       if is_docker_ok; then _configure_docker_daemon; else ok "已写入配置（Docker 未安装，安装后自动应用）"; fi
-       ;;
-    5) collect_alpine_mirror; ok "已写入配置（PHP 扩展安装时生效）" ;;
-    6) collect_github_proxy ;;
-    7) collect_ssh_config; install_ssh ;;
-    8) collect_acme_email
-       if container_ok "lnmp-acme"; then
-         info "更新 acme.sh 注册账户邮箱..."
-         docker exec lnmp-acme acme.sh --register-account -m "$ACME_EMAIL" 2>/dev/null \
-           && ok "邮箱已更新" || warn "更新失败（首次签证书时也会自动注册）"
-       fi
-       ;;
-    9) collect_acme_ssl_dns_default ;;
-    10) collect_node_version; if is_pm2_ok; then install_pm2; else ok "已写入配置（执行「安装单个组件 → PM2」后生效）"; fi ;;
-    11) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
-  esac
-  conf_save
-  ok "配置已更新"
+    case "$idx" in
+      0) collect_extra_php_versions
+         if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok && has_service "php"; then
+           update_lnmp
+         else
+           ok "已写入配置（安装 LNMP 后生效；可在主菜单 → 安装单个组件 → LNMP - php 重建）"
+         fi
+         ;;
+      1) collect_php_extensions
+         if has_service "php" && container_ok "lnmp-php"; then
+           _install_php_extensions
+         else
+           ok "已写入配置（lnmp-php 未运行，下次启动后通过此菜单或 LNMP - php 重建生效）"
+         fi
+         ;;
+      2) collect_php_version
+         if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok && has_service "php"; then
+           warn "默认 PHP 版本变更需重建 lnmp-php 容器（用同一菜单 → LNMP - php 单组件安装）"
+         fi
+         ;;
+      3) collect_lnmp_stack_images; if [[ -f "$COMPOSE_FILE" ]] && is_docker_ok; then update_lnmp; else ok "已写入配置，安装 LNMP 后生效"; fi ;;
+      4) collect_docker_mirrors
+         if is_docker_ok; then _configure_docker_daemon; else ok "已写入配置（Docker 未安装，安装后自动应用）"; fi
+         ;;
+      5) collect_alpine_mirror; ok "已写入配置（PHP 扩展安装时生效）" ;;
+      6) collect_github_proxy ;;
+      7) collect_ssh_config; install_ssh ;;
+      8) collect_acme_email
+         if container_ok "lnmp-acme"; then
+           info "更新 acme.sh 注册账户邮箱..."
+           docker exec lnmp-acme acme.sh --register-account -m "$ACME_EMAIL" 2>/dev/null \
+             && ok "邮箱已更新" || warn "更新失败（首次签证书时也会自动注册）"
+         fi
+         ;;
+      9) collect_acme_ssl_dns_default ;;
+      10) collect_node_version; if is_pm2_ok; then install_pm2; else ok "已写入配置（执行「安装单个组件 → PM2」后生效）"; fi ;;
+      11) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+      12) return 0 ;;
+    esac
+    conf_save
+    ok "配置已更新"
+    echo ""
+  done
 }
 
