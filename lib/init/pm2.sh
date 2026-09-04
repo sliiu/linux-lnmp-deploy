@@ -38,7 +38,8 @@ _pm2_shell_block() {
 # >>> pm2 init.sh >>>
 export FNM_DIR="${FNM_DATA_DIR_REL}"
 export FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
-export PATH="${FNM_BIN_DIR}:\${PATH}"
+export PATH="${FNM_BIN_DIR}:\${HOME}/.local/share/fnm/aliases/default/bin:\${PATH}"
+mkdir -p "\${HOME}/.local/share/fnm" "\${HOME}/.local/state/fnm_multishells" 2>/dev/null || true
 command -v fnm >/dev/null 2>&1 && eval "\$(fnm env --shell ${shell})"
 # <<< pm2 init.sh <<<
 EOF
@@ -107,8 +108,8 @@ _pm2_prepare_devops_fnm_data() {
   local home
   home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
   [[ -n "$home" && -d "$home" ]] || die "devops 家目录不存在: ${DEVOPS_USER}"
-  mkdir -p "${home}/.local/share/fnm"
-  chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${home}/.local/share/fnm"
+  mkdir -p "${home}/.local/share/fnm" "${home}/.local/state/fnm_multishells"
+  chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${home}/.local"
 }
 
 _pm2_run_devops() {
@@ -177,7 +178,7 @@ uninstall_pm2() {
     [[ -f "$rc" ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "$rc" 2>/dev/null || true
     [[ -f "${home}/.zshrc" ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "${home}/.zshrc" 2>/dev/null || true
     [[ -f /etc/zshenv ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' /etc/zshenv 2>/dev/null || true
-    rm -rf "${home}/.local/share/fnm" "${home}/.fnm" 2>/dev/null || true
+    rm -rf "${home}/.local/share/fnm" "${home}/.local/state/fnm_multishells" "${home}/.fnm" 2>/dev/null || true
   fi
 
   systemctl disable pm2-"${DEVOPS_USER}" 2>/dev/null || true

@@ -256,10 +256,11 @@ devops_bash_c() {
   su - "${DEVOPS_USER}" -s /bin/bash -c "
 export FNM_DIR=\"\$HOME/.local/share/fnm\"
 export FNM_NODE_DIST_MIRROR=\"${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}\"
-export PATH=\"${_fnm}:\$PATH\"
+export PATH=\"${_fnm}:\$HOME/.local/share/fnm/aliases/default/bin:\$PATH\"
+mkdir -p \"\$HOME/.local/share/fnm\" \"\$HOME/.local/state/fnm_multishells\"
 if command -v fnm >/dev/null 2>&1; then
   eval \"\$(fnm env --shell bash)\"
-  fnm use default >/dev/null 2>&1 || true
+  fnm use default >/dev/null 2>&1 || fnm use ${NODE_VERSION:-22} >/dev/null 2>&1 || true
 fi
 $1
 "
