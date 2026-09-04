@@ -162,9 +162,9 @@ cmd_status() {
       _pport="$(pm2_port_for_site "$dom" 2>/dev/null || echo '?')"
       _papp="$(pm2_app_name "$dom")"
       info "PM2 应用: ${_papp}  端口: ${_pport}"
-      if su - "${DEVOPS_USER}" -c "pm2 describe '${_papp}' &>/dev/null"; then
+      if devops_bash_c "pm2 describe '${_papp}' &>/dev/null"; then
         ok "PM2 进程在线"
-        su - "${DEVOPS_USER}" -c "pm2 describe '${_papp}' 2>/dev/null" | sed -n '1,12p' | sed 's/^/  /' || true
+        devops_bash_c "pm2 describe '${_papp}' 2>/dev/null" | sed -n '1,12p' | sed 's/^/  /' || true
       else
         warn "PM2 进程未运行（${_papp}）"
       fi

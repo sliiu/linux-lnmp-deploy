@@ -251,6 +251,20 @@ menu_select() {
   MENU_SELECT_RESULT=$choice
 }
 
+devops_bash_c() {
+  local _fnm="${FNM_BIN_DIR:-/usr/local/fnm}"
+  su - "${DEVOPS_USER}" -s /bin/bash -c "
+export FNM_DIR=\"\$HOME/.local/share/fnm\"
+export FNM_NODE_DIST_MIRROR=\"${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}\"
+export PATH=\"${_fnm}:\$PATH\"
+if command -v fnm >/dev/null 2>&1; then
+  eval \"\$(fnm env --shell bash)\"
+  fnm use default >/dev/null 2>&1 || true
+fi
+$1
+"
+}
+
 _web_container() {
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-php$'; then
     printf 'lnmp-php'

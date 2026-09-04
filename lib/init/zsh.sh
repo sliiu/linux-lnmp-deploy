@@ -36,6 +36,11 @@ ZEOF
 
   cat > /etc/zshenv <<'ZEOF'
 zsh-newuser-install() { return 0 }
+# >>> pm2 init.sh >>>
+export FNM_DIR="$HOME/.local/share/fnm"
+export PATH="/usr/local/fnm:$PATH"
+command -v fnm >/dev/null 2>&1 && eval "$(fnm env --shell zsh)"
+# <<< pm2 init.sh <<<
 ZEOF
 
   _write_p10k_config

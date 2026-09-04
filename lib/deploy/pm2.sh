@@ -173,17 +173,17 @@ apply_site_pm2_cmd_cli() {
 
 _pm2_run_as_devops() {
   local site_dir="$1" cmd="$2"
-  su - "${DEVOPS_USER}" -c "cd '${site_dir}' && ${cmd}" \
+  devops_bash_c "cd '${site_dir}' && ${cmd}" \
     || die "PM2/Node 命令失败: ${cmd}"
 }
 
 ensure_pm2_runtime() {
   local node_v pm2_v
-  node_v="$(su - "${DEVOPS_USER}" -c 'command -v node' 2>/dev/null || true)"
+  node_v="$(devops_bash_c 'command -v node' 2>/dev/null || true)"
   [[ -n "$node_v" ]] || die "未找到 node（用户 ${DEVOPS_USER}）；请先执行 init.sh install pm2"
-  pm2_v="$(su - "${DEVOPS_USER}" -c 'command -v pm2' 2>/dev/null || true)"
+  pm2_v="$(devops_bash_c 'command -v pm2' 2>/dev/null || true)"
   [[ -n "$pm2_v" ]] || die "未找到 pm2（用户 ${DEVOPS_USER}）；请先执行 init.sh install pm2"
-  ok "Node: $(su - "${DEVOPS_USER}" -c 'node -v' 2>/dev/null || echo '?')  PM2: $(su - "${DEVOPS_USER}" -c 'pm2 -v' 2>/dev/null || echo '?')"
+  ok "Node: $(devops_bash_c 'node -v' 2>/dev/null || echo '?')  PM2: $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?')"
 }
 
 _pm2_detect_pkg_manager() {
@@ -241,14 +241,14 @@ setup_pm2() {
   _pm2_run_build "$domain"
 
   info "PM2 启动（端口 ${port}）..."
-  if su - "${DEVOPS_USER}" -c "pm2 describe '${app}' &>/dev/null"; then
-    su - "${DEVOPS_USER}" -c "cd '${site_dir}' && ${env_prefix} pm2 reload '${app}' --update-env" \
-      || su - "${DEVOPS_USER}" -c "cd '${site_dir}' && ${env_prefix} ${cmd}"
+  if devops_bash_c "pm2 describe '${app}' &>/dev/null"; then
+    devops_bash_c "cd '${site_dir}' && ${env_prefix} pm2 reload '${app}' --update-env" \
+      || devops_bash_c "cd '${site_dir}' && ${env_prefix} ${cmd}"
     ok "PM2 已 reload: ${app}"
   else
-    su - "${DEVOPS_USER}" -c "cd '${site_dir}' && ${env_prefix} ${cmd}" \
+    devops_bash_c "cd '${site_dir}' && ${env_prefix} ${cmd}" \
       || die "PM2 启动失败"
-    su - "${DEVOPS_USER}" -c "pm2 save" 2>/dev/null || true
+    devops_bash_c "pm2 save" 2>/dev/null || true
     ok "PM2 已启动: ${app}（监听 0.0.0.0:${port}）"
   fi
 }
@@ -265,11 +265,11 @@ reload_pm2_site() {
   _pm2_install_deps "$domain"
   _pm2_run_build "$domain"
 
-  if su - "${DEVOPS_USER}" -c "pm2 describe '${app}' &>/dev/null"; then
+  if devops_bash_c "pm2 describe '${app}' &>/dev/null"; then
     info "PM2 reload ${app}..."
-    su - "${DEVOPS_USER}" -c "cd '${site_dir}' && ${env_prefix} pm2 reload '${app}' --update-env" \
-      || su - "${DEVOPS_USER}" -c "cd '${site_dir}' && ${env_prefix} $(pm2_start_cmd_for_site "$domain")"
-    su - "${DEVOPS_USER}" -c "pm2 save" 2>/dev/null || true
+    devops_bash_c "cd '${site_dir}' && ${env_prefix} pm2 reload '${app}' --update-env" \
+      || devops_bash_c "cd '${site_dir}' && ${env_prefix} $(pm2_start_cmd_for_site "$domain")"
+    devops_bash_c "pm2 save" 2>/dev/null || true
     ok "PM2 已 reload"
   else
     warn "PM2 进程 ${app} 不存在，重新 setup..."
@@ -281,9 +281,9 @@ stop_pm2_site() {
   local domain="$1" app
   [[ "$(_site_type_for_domain "$domain")" = "pm2" ]] || return 0
   app="$(pm2_app_name "$domain")"
-  if su - "${DEVOPS_USER}" -c "pm2 describe '${app}' &>/dev/null"; then
-    su - "${DEVOPS_USER}" -c "pm2 delete '${app}'" 2>/dev/null || true
-    su - "${DEVOPS_USER}" -c "pm2 save" 2>/dev/null || true
+  if devops_bash_c "pm2 describe '${app}' &>/dev/null"; then
+    devops_bash_c "pm2 delete '${app}'" 2>/dev/null || true
+    devops_bash_c "pm2 save" 2>/dev/null || true
     ok "PM2 进程已删除: ${app}"
   fi
 }

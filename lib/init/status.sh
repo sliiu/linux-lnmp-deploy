@@ -23,7 +23,7 @@ show_status() {
   printf "  %-20s %s\n" "saferm" "$_s"
 
   if is_pm2_ok; then
-    _s="已安装 (Node $(su - "${DEVOPS_USER}" -c 'node -v' 2>/dev/null || echo '?'), pm2 $(su - "${DEVOPS_USER}" -c 'pm2 -v' 2>/dev/null || echo '?'))"
+    _s="已安装 (Node $(devops_bash_c 'node -v' 2>/dev/null || echo '?'), pm2 $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?'))"
   else
     _s="未安装"
   fi

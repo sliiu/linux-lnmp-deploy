@@ -7,7 +7,7 @@ FNM_DATA_DIR_REL='${HOME}/.local/share/fnm'
 is_pm2_ok() {
   [[ -x "${FNM_BIN_DIR}/fnm" ]] || [[ -x /usr/local/bin/fnm ]] || return 1
   id "${DEVOPS_USER:-devops}" &>/dev/null || return 1
-  su - "${DEVOPS_USER}" -c 'command -v node &>/dev/null && command -v pm2 &>/dev/null'
+  devops_bash_c 'command -v node &>/dev/null && command -v pm2 &>/dev/null'
 }
 
 collect_node_version() {
@@ -33,12 +33,13 @@ collect_node_version() {
 }
 
 _pm2_shell_block() {
+  local shell="${1:-bash}"
   cat <<EOF
 # >>> pm2 init.sh >>>
 export FNM_DIR="${FNM_DATA_DIR_REL}"
 export FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
 export PATH="${FNM_BIN_DIR}:\${PATH}"
-eval "\$(fnm env --shell bash)"
+command -v fnm >/dev/null 2>&1 && eval "\$(fnm env --shell ${shell})"
 # <<< pm2 init.sh <<<
 EOF
 }
@@ -66,18 +67,23 @@ _pm2_install_fnm_binary() {
 }
 
 _pm2_write_devops_shell() {
-  local home rc profile
+  local home rc profile zshrc
   home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
   [[ -n "$home" && -d "$home" ]] || die "devops 家目录不存在: ${DEVOPS_USER}"
   rc="${home}/.bashrc"
   profile="${home}/.bash_profile"
-  touch "$rc" "$profile"
-  chown "${DEVOPS_USER}:${DEVOPS_USER}" "$rc" "$profile"
-  sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "$rc" 2>/dev/null || true
+  zshrc="${home}/.zshrc"
+  touch "$rc" "$profile" "$zshrc"
+  chown "${DEVOPS_USER}:${DEVOPS_USER}" "$rc" "$profile" "$zshrc"
+  sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "$rc" "$zshrc" 2>/dev/null || true
   {
     printf '\n'
-    _pm2_shell_block
+    _pm2_shell_block bash
   } >> "$rc"
+  {
+    printf '\n'
+    _pm2_shell_block zsh
+  } >> "$zshrc"
   if ! grep -q 'source ~/.bashrc' "$profile" 2>/dev/null \
     && ! grep -q '\. ~/.bashrc' "$profile" 2>/dev/null; then
     cat >> "$profile" <<'EOF'
@@ -86,6 +92,13 @@ _pm2_write_devops_shell() {
 [[ -f ~/.bashrc ]] && . ~/.bashrc
 EOF
     chown "${DEVOPS_USER}:${DEVOPS_USER}" "$profile"
+  fi
+  if [[ -f /etc/zshenv ]]; then
+    sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' /etc/zshenv 2>/dev/null || true
+    {
+      printf '\n'
+      _pm2_shell_block zsh
+    } >> /etc/zshenv
   fi
   ok "已写入 ${DEVOPS_USER} shell 配置（fnm env）"
 }
@@ -99,13 +112,13 @@ _pm2_prepare_devops_fnm_data() {
 }
 
 _pm2_run_devops() {
-  su - "${DEVOPS_USER}" -c "$1" || die "devops 命令失败: $1"
+  devops_bash_c "$1" || die "devops 命令失败: $1"
 }
 
 _pm2_setup_startup() {
   local home line out
   home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
-  out="$(su - "${DEVOPS_USER}" -c "pm2 startup systemd -u ${DEVOPS_USER} --hp ${home}" 2>&1 || true)"
+  out="$(devops_bash_c "pm2 startup systemd -u ${DEVOPS_USER} --hp ${home}" 2>&1 || true)"
   line="$(printf '%s\n' "$out" | awk '/sudo env PATH=.*pm2 startup/ {sub(/^sudo /,""); print; exit}')"
   if [[ -n "$line" ]]; then
     eval "$line" && ok "PM2 systemd 开机自启已配置" || warn "PM2 startup 命令执行失败"
@@ -138,12 +151,12 @@ install_pm2() {
 
   info "安装 Node.js ${NODE_VERSION}（用户 ${DEVOPS_USER}）..."
   _pm2_run_devops "fnm install ${NODE_VERSION} && fnm default ${NODE_VERSION}"
-  ok "Node.js: $(su - "${DEVOPS_USER}" -c 'node -v' 2>/dev/null || echo '?')"
+  ok "Node.js: $(devops_bash_c 'node -v' 2>/dev/null || echo '?')"
 
   info "配置 npm 镜像并安装 pm2 ..."
   _pm2_run_devops "npm config set registry https://registry.npmmirror.com 2>/dev/null || true"
   _pm2_run_devops "npm install -g pm2@latest"
-  ok "pm2: $(su - "${DEVOPS_USER}" -c 'pm2 -v' 2>/dev/null || echo '?')"
+  ok "pm2: $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?')"
 
   _pm2_setup_startup
   _pm2_run_devops "pm2 save" 2>/dev/null || true
@@ -156,12 +169,14 @@ uninstall_pm2() {
   hr; info "卸载 PM2 环境"; echo ""
 
   if id "${DEVOPS_USER}" &>/dev/null; then
-    su - "${DEVOPS_USER}" -c "pm2 kill" 2>/dev/null || true
-    su - "${DEVOPS_USER}" -c "pm2 unstartup systemd" 2>/dev/null || true
+    devops_bash_c "pm2 kill" 2>/dev/null || true
+    devops_bash_c "pm2 unstartup systemd" 2>/dev/null || true
     local home rc
     home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
     rc="${home}/.bashrc"
     [[ -f "$rc" ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "$rc" 2>/dev/null || true
+    [[ -f "${home}/.zshrc" ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "${home}/.zshrc" 2>/dev/null || true
+    [[ -f /etc/zshenv ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' /etc/zshenv 2>/dev/null || true
     rm -rf "${home}/.local/share/fnm" "${home}/.fnm" 2>/dev/null || true
   fi
 
