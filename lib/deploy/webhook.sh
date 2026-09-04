@@ -729,7 +729,7 @@ _webhook_extract_archive() {
     *) die "不支持的压缩包: ${archive}" ;;
   esac
   local top
-  top="$(find "$dest" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1)"
+  top="$(find "$dest" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1 || true)"
   if [[ -n "$top" && "$(find "$dest" -mindepth 1 -maxdepth 1 | wc -l | tr -d ' ')" -eq 1 ]]; then
     shopt -s dotglob
     mv "$top"/* "$dest/" 2>/dev/null || true
@@ -769,8 +769,8 @@ PY
   fi
   if [[ -n "$asset_hint" ]]; then
     while IFS= read -r line; do
-      name="$(printf '%s' "$line" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
-      url="$(printf '%s' "$line" | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/')"
+      name="$(printf '%s' "$line" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
+      url="$(printf '%s' "$line" | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)"$/\1/' || true)"
       [[ -n "$url" && "$name" = *"$asset_hint"* ]] && { printf '%s' "$url"; return 0; }
     done < <(grep -oE '\{[^{}]*"browser_download_url"[^{}]*\}' "$body_file" 2>/dev/null || true)
   fi

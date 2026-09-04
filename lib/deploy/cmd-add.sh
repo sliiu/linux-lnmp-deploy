@@ -1253,7 +1253,7 @@ cmd_update() {
     local cname; cname="$(_php_container_for_site "$DOMAIN")"
     local _db_conn="mysql"
     if [[ -f "${site_dir}/.env" ]]; then
-      _db_conn="$(grep -E '^DB_CONNECTION=' "${site_dir}/.env" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '[:space:]"'"'"'')"
+      _db_conn="$(grep -E '^DB_CONNECTION=' "${site_dir}/.env" 2>/dev/null | head -n1 | cut -d= -f2- | tr -d '[:space:]"'"'"'' || true)"
       [[ -z "$_db_conn" ]] && _db_conn="mysql"
     fi
     ensure_lnmp_php_laravel_extensions "$cname" "$_db_conn"

@@ -58,7 +58,7 @@ uninstall_ssh() {
   hr; info "恢复 SSH 默认配置"; echo ""
   local sshd_conf="/etc/ssh/sshd_config"
   local latest_bak
-  latest_bak=$(ls -t "${sshd_conf}".bak.* 2>/dev/null | head -1)
+  latest_bak=$(ls -t "${sshd_conf}".bak.* 2>/dev/null | head -1 || true)
   if [[ -n "$latest_bak" ]]; then
     cp "$latest_bak" "$sshd_conf"
     systemctl restart sshd
@@ -74,7 +74,7 @@ ensure_user_ssh_access() {
   local mode="${2:-interactive}"
   local key_line="${3:-}"
   local home
-  home=$(getent passwd "$u" | cut -d: -f6)
+  home=$(getent passwd "$u" | cut -d: -f6 || true)
   [[ -n "$home" && -d "$home" ]] || { warn "跳过 ${u}：家目录无效"; return 0; }
 
   mkdir -p "${home}/.ssh"

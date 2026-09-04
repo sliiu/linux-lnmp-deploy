@@ -67,7 +67,7 @@ _pm2_install_fnm_binary() {
 
 _pm2_write_devops_shell() {
   local home rc profile
-  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6)"
+  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
   [[ -n "$home" && -d "$home" ]] || die "devops 家目录不存在: ${DEVOPS_USER}"
   rc="${home}/.bashrc"
   profile="${home}/.bash_profile"
@@ -92,7 +92,7 @@ EOF
 
 _pm2_prepare_devops_fnm_data() {
   local home
-  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6)"
+  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
   [[ -n "$home" && -d "$home" ]] || die "devops 家目录不存在: ${DEVOPS_USER}"
   mkdir -p "${home}/.local/share/fnm"
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${home}/.local/share/fnm"
@@ -104,7 +104,7 @@ _pm2_run_devops() {
 
 _pm2_setup_startup() {
   local home line out
-  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6)"
+  home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
   out="$(su - "${DEVOPS_USER}" -c "pm2 startup systemd -u ${DEVOPS_USER} --hp ${home}" 2>&1 || true)"
   line="$(printf '%s\n' "$out" | awk '/sudo env PATH=.*pm2 startup/ {sub(/^sudo /,""); print; exit}')"
   if [[ -n "$line" ]]; then
@@ -159,7 +159,7 @@ uninstall_pm2() {
     su - "${DEVOPS_USER}" -c "pm2 kill" 2>/dev/null || true
     su - "${DEVOPS_USER}" -c "pm2 unstartup systemd" 2>/dev/null || true
     local home rc
-    home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6)"
+    home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6 || true)"
     rc="${home}/.bashrc"
     [[ -f "$rc" ]] && sed -i '/# >>> pm2 init.sh >>>/,/# <<< pm2 init.sh <<</d' "$rc" 2>/dev/null || true
     rm -rf "${home}/.local/share/fnm" "${home}/.fnm" 2>/dev/null || true

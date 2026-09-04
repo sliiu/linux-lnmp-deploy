@@ -4,7 +4,7 @@ _account_valid_login() {
 }
 
 _ssh_config_read_allowusers() {
-  grep '^AllowUsers ' /etc/ssh/sshd_config 2>/dev/null | tail -1 | sed 's/^AllowUsers[[:space:]]\{1,\}//'
+  grep '^AllowUsers ' /etc/ssh/sshd_config 2>/dev/null | tail -1 | sed 's/^AllowUsers[[:space:]]\{1,\}//' || true
 }
 
 _ssh_config_set_allowusers_line() {
@@ -139,7 +139,7 @@ account_user_list_display() {
     [[ "$uid" -ge 1000 ]] || continue
     [[ "$name" = "nobody" ]] && continue
     local gs
-    gs=$(id -Gn "$name" 2>/dev/null | tr ' ' ',')
+    gs=$(id -Gn "$name" 2>/dev/null | tr ' ' ',' || true)
     printf "  %-18s %6s  %s\n" "$name" "$uid" "$gs"
   done < <(getent passwd | sort -t: -k3 -n)
   echo ""

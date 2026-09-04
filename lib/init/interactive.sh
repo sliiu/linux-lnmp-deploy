@@ -511,8 +511,11 @@ _interactive_oneclick_reinstall() {
 }
 
 _interactive_full_install() {
-  echo ""
-  hr; info "完整安装向导"; hr; echo ""
+  _ui_tty ""
+  _ui_tty "══════════════════════════════════════════════"
+  _ui_tty "  完整安装向导"
+  _ui_tty "══════════════════════════════════════════════"
+  _ui_tty ""
 
   local sel
   MENU_MULTI_DEFAULT="2,3"
