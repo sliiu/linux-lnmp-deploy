@@ -115,6 +115,13 @@ _ui_tty() {
   fi
 }
 
+_ui_wait_enter() {
+  interactive_tty_ok || return 0
+  printf '\n按回车返回菜单...' >/dev/tty
+  read -r _ </dev/tty 2>/dev/null || true
+  printf '\n' >/dev/tty
+}
+
 confirm() {
   local msg="${1:-确认？}" default="${2:-y}" ans=""
   local prompt_str="[Y/n]"; [[ "$default" != "y" ]] && prompt_str="[y/N]"

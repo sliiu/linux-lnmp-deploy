@@ -477,6 +477,7 @@ interactive_setup() {
       8) echo ""; ok "退出"; exit 0 ;;
     esac
     echo ""
+    _ui_wait_enter
   done
 }
 
