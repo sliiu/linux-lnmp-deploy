@@ -43,11 +43,13 @@ PHPINI
 
 _write_caddy_global() {
   mkdir -p "${DATA_DIR}/caddy/sites" "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config"
+  local _email=""
+  [[ -n "${ACME_EMAIL:-}" ]] && _email="	email ${ACME_EMAIL}
+"
   if has_service "php"; then
-    cat > "${DATA_DIR}/caddy/Caddyfile" <<'CADDY'
+    cat > "${DATA_DIR}/caddy/Caddyfile" <<CADDY
 {
-	email {$ACME_EMAIL}
-	frankenphp
+${_email}	frankenphp
 	servers {
 		protocols h1 h2 h3
 	}
@@ -56,10 +58,9 @@ _write_caddy_global() {
 import /etc/caddy/sites/*.caddy
 CADDY
   else
-    cat > "${DATA_DIR}/caddy/Caddyfile" <<'CADDY'
+    cat > "${DATA_DIR}/caddy/Caddyfile" <<CADDY
 {
-	email {$ACME_EMAIL}
-	servers {
+${_email}	servers {
 		protocols h1 h2 h3
 	}
 }
@@ -83,6 +84,27 @@ CADDY
 }
 CADDY
   [[ -f "${DATA_DIR}/caddy/sites/000-placeholder.caddy" ]] || printf '# placeholder\n' > "${DATA_DIR}/caddy/sites/000-placeholder.caddy"
+}
+
+_chown_caddy_volumes() {
+  mkdir -p "${DATA_DIR}/caddy/sites" "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config"
+  if has_service "php"; then
+    chown -R 33:33 "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config" 2>/dev/null || true
+    return 0
+  fi
+  has_service "caddy" || return 0
+  local ids u
+  u=$(docker image inspect "${CADDY_IMAGE:-caddy:2-alpine}" --format '{{.Config.User}}' 2>/dev/null || true)
+  case "$u" in
+    ""|root|0|0:0) return 0 ;;
+    [0-9]*:[0-9]*) ids="$u" ;;
+    [0-9]*) ids="${u}:${u}" ;;
+    *)
+      ids=$(docker run --rm --entrypoint sh "${CADDY_IMAGE:-caddy:2-alpine}" -c 'printf %s:%s "$(id -u)" "$(id -g)"' 2>/dev/null || true)
+      [[ "$ids" =~ ^[0-9]+:[0-9]+$ ]] || ids="1000:1000"
+      ;;
+  esac
+  chown -R "$ids" "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config" 2>/dev/null || true
 }
 
 _write_mysql_low_memory_conf() {
@@ -354,7 +376,6 @@ install_lnmp() {
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${DATA_DIR}/www" 2>/dev/null || true
   chmod g+s "${DATA_DIR}/www"
   mkdir -p "${DATA_DIR}/caddy/sites" "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config"
-  chown -R 33:33 "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config" 2>/dev/null || true
   chmod 755 "${DATA_DIR}/caddy/sites" 2>/dev/null || true
   chmod 755 "${DATA_DIR}/ssl" 2>/dev/null || true
   shopt -s nullglob
@@ -380,6 +401,10 @@ install_lnmp() {
   chown root:"${_dg}" "${DATA_DIR}" 2>/dev/null || true
   chmod 771 "${DATA_DIR}"
 
+  if has_service "caddy" && ! has_service "php"; then
+    _compose_up pull caddy >/dev/null 2>&1 || true
+  fi
+  _chown_caddy_volumes
   if has_service "php"; then
     local _ev _esub
     chown -R 33:33 "${DATA_DIR}/caddy/data" "${DATA_DIR}/caddy/config" 2>/dev/null || true
@@ -522,9 +547,7 @@ _wait_container() {
       && docker exec "$cname" true &>/dev/null && return 0
     sleep 2
   done
-  if [[ "$cname" = lnmp-php* || "$cname" = lnmp-caddy ]]; then
-    warn "${cname} 诊断提示: docker logs ${cname} 2>&1 | tail -n 40"
-  fi
+  docker logs --tail 40 "$cname" 2>&1 | sed 's/^/  /' || true
   die "容器 ${cname} 启动超时"
 }
 
