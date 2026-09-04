@@ -566,11 +566,18 @@ _interactive_full_install() {
   fi
 
   if [[ $sel_lnmp -eq 1 ]]; then
-    LNMP_SERVICES="${LNMP_SERVICES:-php,mysql,redis,acme}"
+    collect_lnmp_services
+    if has_service "php"; then
+      collect_php_version
+      collect_extra_php_versions
+    fi
+    collect_lnmp_stack_images
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "postgres"; then collect_postgres_password; fi
     if has_service "acme"; then collect_acme_email; fi
   fi
+
+  if [[ $sel_pm2 -eq 1 ]]; then collect_node_version; fi
 
   # 5) SSH 安全策略（最后问：会改 sshd 配置，留给末尾减少变更冲突）
   if [[ $sel_ssh -eq 1 ]]; then collect_ssh_config; fi
@@ -662,6 +669,11 @@ _interactive_install_one() {
         DEVOPS_USER="${DEVOPS_USER:-devops}"
         collect_lnmp_services
         PHP_VERSION="${PHP_VERSION:-8.3}"
+        if has_service "php"; then
+          collect_php_version
+          collect_extra_php_versions
+        fi
+        collect_lnmp_stack_images
         if has_service "mysql"; then collect_mysql_password; fi
         if has_service "postgres"; then collect_postgres_password; fi
         if has_service "acme"; then collect_acme_email; fi
