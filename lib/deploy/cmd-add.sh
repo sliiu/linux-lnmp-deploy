@@ -850,14 +850,19 @@ collect_interactive() {
       GIT_REPO=$PROMPT_RESULT
     fi
     _offer_skip_git_if_code_present
-    GIT_BRANCH="${GIT_BRANCH:-}"
+    if [[ -n "$GIT_REPO" && -z "$GIT_BRANCH" ]]; then
+      prompt "Git 分支（回车=仓库默认分支）" ""
+      GIT_BRANCH=$PROMPT_RESULT
+    fi
     [[ -n "$GIT_REPO" ]] || GIT_BRANCH=""
   fi
 
   if [[ "$SITE_TYPE" = "laravel" ]]; then
     _collect_site_php_version_interactive
 
-    NEED_DB="${NEED_DB:-y}"
+    if [[ -z "$NEED_DB" ]]; then
+      confirm "配置数据库？" "y" && NEED_DB=y || NEED_DB=n
+    fi
     if [[ "$NEED_DB" = "y" ]]; then
       _collect_db_connection_interactive
       DB_HOST="${DB_HOST:-$(_default_db_host "${DB_CONNECTION:-mysql}")}"
@@ -874,7 +879,10 @@ collect_interactive() {
     REDIS_HOST="${REDIS_HOST:-redis}"
     REDIS_PORT="${REDIS_PORT:-6379}"
     _collect_queue_supervisor_interactive
-    APP_NAME="${APP_NAME:-Laravel}"
+    if [[ -z "$APP_NAME" ]]; then
+      prompt "APP_NAME" "Laravel"
+      APP_NAME=$PROMPT_RESULT
+    fi
   elif [[ "$SITE_TYPE" = "proxy" ]]; then
     if [[ -z "$SITE_PROXY_PASS" ]]; then
       while true; do
@@ -891,9 +899,22 @@ collect_interactive() {
   else
     if [[ "$SITE_TYPE" = "pm2" ]]; then
       [[ "$SITE_PM2_PORT" = "auto" || "$SITE_PM2_PORT" = "-" ]] && SITE_PM2_PORT=""
+      if [[ -z "$SITE_PM2_PORT" ]]; then
+        prompt "PM2 端口（回车=自动分配）" ""
+        SITE_PM2_PORT=$PROMPT_RESULT
+      fi
       [[ -n "$SITE_PM2_PORT" ]] && SITE_PM2_PORT_CLI=1
+      if [[ -z "$SITE_PM2_CMD" ]]; then
+        prompt "PM2 启动命令（回车=自动检测）" ""
+        SITE_PM2_CMD=$PROMPT_RESULT
+      fi
       [[ -n "$SITE_PM2_CMD" ]] && SITE_PM2_CMD_CLI=1
-      PM2_BUILD="${PM2_BUILD:-y}"
+      if [[ -z "$PM2_BUILD" ]]; then
+        confirm "部署时执行构建（npm/pnpm/yarn build）？" "y" && PM2_BUILD=y || PM2_BUILD=n
+      fi
+    elif [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" != "release" && -z "$FRONTEND_ROOT" ]]; then
+      prompt "前端子目录（回车=自动 dist 优先）" ""
+      FRONTEND_ROOT=$PROMPT_RESULT
     fi
   fi
 
@@ -1235,6 +1256,10 @@ cmd_update() {
     if [[ -n "${GIT_REF:-}" ]]; then
       _git_fetch_checkout "${site_dir}" "${GIT_REF}"
     else
+      if [[ -z "${GIT_BRANCH:-}" ]]; then
+        prompt "Git 分支（回车=当前分支 pull）" ""
+        GIT_BRANCH=$PROMPT_RESULT
+      fi
       _git_pull_or_clone "${site_dir}" "" "${GIT_BRANCH:-}"
     fi
     ok "代码已更新"
@@ -1243,6 +1268,7 @@ cmd_update() {
   fi
 
   if [[ "$site_type" = "laravel" ]]; then
+    _collect_site_php_version_interactive
     apply_site_php_version_cli "$DOMAIN"
     ensure_site_php_container "$DOMAIN"
 
@@ -1270,7 +1296,10 @@ cmd_update() {
       setfacl -dR -m "u:${PHP_C_UID}:rwX" "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     fi
 
-    if [[ "${RUN_MIGRATE:-y}" = "y" ]]; then
+    if [[ -z "${RUN_MIGRATE}" ]]; then
+      confirm "执行 migrate？" "y" && RUN_MIGRATE=y || RUN_MIGRATE=n
+    fi
+    if [[ "$RUN_MIGRATE" = "y" ]]; then
       info "artisan migrate..."
       docker_php_artisan "$DOMAIN" migrate --force
     else

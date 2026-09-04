@@ -412,16 +412,30 @@ _interactive_pm2_gateway_install() {
   DEVOPS_USER="${DEVOPS_USER:-devops}"
   NODE_VERSION="${NODE_VERSION:-22}"
 
+  prompt "devops 用户名" "${DEVOPS_USER:-devops}"
+  DEVOPS_USER=$PROMPT_RESULT
+  collect_github_proxy
+  collect_docker_mirrors
+  collect_node_version
   collect_lnmp_services_pm2_gateway
+  collect_lnmp_stack_images
   collect_postgres_password
   collect_acme_email
+  collect_acme_ssl_dns_default
 
   echo ""
   hr; info "配置确认"; hr
+  printf "  %-20s %s\n" "GitHub 代理" "${GH_PROXY:-无}"
   printf "  %-20s %s\n" "Devops 用户" "$DEVOPS_USER"
+  printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"
   printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
+  printf "  %-20s %s\n" "Caddy 镜像" "$CADDY_IMAGE"
+  printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"
+  printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"
+  printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"
   printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"
   printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"
+  printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
   echo ""
   confirm "确认执行？" "y" || { warn "已取消"; return; }
 
@@ -560,6 +574,11 @@ _interactive_full_install() {
   # 0) 等保加固前置（cyber 内部含交互+创建账号；ordinary 可作为 devops 默认值）
   if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users skip-devops; fi
 
+  if [[ $sel_cyber -eq 0 ]]; then
+    prompt "devops 用户名" "${DEVOPS_USER:-devops}"
+    DEVOPS_USER=$PROMPT_RESULT
+  fi
+
   if [[ $sel_wheel -eq 1 ]]; then
     prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"
     WHEEL_USER=$PROMPT_RESULT
@@ -575,11 +594,16 @@ _interactive_full_install() {
     if has_service "php"; then
       collect_php_version
       collect_extra_php_versions
+      collect_php_extensions
+      collect_alpine_mirror
     fi
     collect_lnmp_stack_images
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "postgres"; then collect_postgres_password; fi
-    if has_service "acme"; then collect_acme_email; fi
+    if has_service "acme"; then
+      collect_acme_email
+      collect_acme_ssl_dns_default
+    fi
   fi
 
   if [[ $sel_pm2 -eq 1 ]]; then collect_node_version; fi
@@ -611,7 +635,10 @@ _interactive_full_install() {
     fi
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL" "已设置"; fi
     if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL" "已设置"; fi
-    if has_service "acme"; then printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"; fi
+    if has_service "acme"; then
+      printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"
+      printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
+    fi
   fi
   if [[ $sel_ssh -eq 1 ]]; then printf "  %-20s %s\n" "SSH" "root=${ROOT_LOGIN}, 端口=${SSH_PORT}"; fi
   if [[ $sel_wheel -eq 1 ]]; then printf "  %-20s %s\n" "Wheel 管理员" "$WHEEL_USER"; fi
@@ -677,23 +704,28 @@ _interactive_install_one() {
         if has_service "php"; then
           collect_php_version
           collect_extra_php_versions
+          collect_php_extensions
+          collect_alpine_mirror
         fi
         collect_lnmp_stack_images
         if has_service "mysql"; then collect_mysql_password; fi
         if has_service "postgres"; then collect_postgres_password; fi
-        if has_service "acme"; then collect_acme_email; fi
+        if has_service "acme"; then
+          collect_acme_email
+          collect_acme_ssl_dns_default
+        fi
         install_lnmp
         ;;
-      1)  collect_php_version; collect_extra_php_versions
+      1)  collect_php_version; collect_extra_php_versions; collect_php_extensions; collect_alpine_mirror
           LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
       2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
       3)  collect_postgres_image; collect_postgres_password; LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
       4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
       5)  collect_caddy_image; LNMP_SERVICES="${LNMP_SERVICES},caddy"; install_lnmp "caddy" ;;
-      6)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
+      6)  collect_acme_image; collect_acme_email; collect_acme_ssl_dns_default; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
       7)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
-      8)  collect_docker_mirrors; install_docker ;;
-      9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_node_version; install_pm2 ;;
+      8)  collect_github_proxy; collect_docker_mirrors; install_docker ;;
+      9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_github_proxy; collect_node_version; install_pm2 ;;
       10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
       11) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
       12) collect_ssh_config; install_ssh ;;
