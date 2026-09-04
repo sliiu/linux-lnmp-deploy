@@ -40,7 +40,7 @@ show_status() {
   echo ""
   info "LNMP 容器"
   echo ""
-  for c in nginx php mysql postgres redis acme phpmyadmin; do
+  for c in caddy php mysql postgres redis acme phpmyadmin; do
     if container_ok "$c"; then
       _s="运行中"
       if ! has_service "$c"; then
@@ -64,7 +64,7 @@ show_status() {
   done < <(_php_extra_list)
 
   echo ""
-  has_service "nginx" && printf "  %-20s %s\n" "Nginx 镜像" "${NGINX_IMAGE:-}"
+  has_service "caddy" && ! has_service "php" && printf "  %-20s %s\n" "Caddy 镜像" "${CADDY_IMAGE:-}"
   has_service "mysql" && printf "  %-20s %s\n" "MySQL 镜像" "${MYSQL_IMAGE:-}"
   has_service "postgres" && printf "  %-20s %s\n" "PostgreSQL 镜像" "${POSTGRES_IMAGE:-}"
   has_service "redis" && printf "  %-20s %s\n" "Redis 镜像" "${REDIS_IMAGE:-}"

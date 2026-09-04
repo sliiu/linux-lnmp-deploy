@@ -78,8 +78,8 @@ collect_alpine_mirror() {
 
 collect_php_version() {
   local idx
-  menu_select "PHP 版本（当前: ${PHP_VERSION:-8.3}）" \
-    "8.3 (推荐)" "8.4" "8.5" "8.2" "8.1" \
+  menu_select "PHP 版本（当前: ${PHP_VERSION:-8.3}，FrankenPHP 仅 8.2–8.5）" \
+    "8.3 (推荐)" "8.4" "8.5" "8.2" \
     "自定义主版本（如 8.3）"
   idx=$MENU_SELECT_RESULT
   case "$idx" in
@@ -87,14 +87,13 @@ collect_php_version() {
     1) PHP_VERSION="8.4" ;;
     2) PHP_VERSION="8.5" ;;
     3) PHP_VERSION="8.2" ;;
-    4) PHP_VERSION="8.1" ;;
-    5)
+    4)
       while true; do
         prompt "主版本号 (X.Y)" "${PHP_VERSION:-8.3}"
         PHP_VERSION=$PROMPT_RESULT
         [[ -z "$PHP_VERSION" ]] && PHP_VERSION="8.3"
-        [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] && break
-        warn "无效的 PHP 版本格式：${PHP_VERSION}（应为 8.3 / 7.4 形式），请重新输入"
+        if [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] && _php_franken_ok "$PHP_VERSION"; then break; fi
+        warn "无效版本：${PHP_VERSION}（FrankenPHP 仅支持 8.2–8.5）"
       done
       ;;
   esac
@@ -105,9 +104,9 @@ collect_extra_php_versions() {
     confirm "启用额外 PHP 版本（与默认 ${PHP_VERSION} 共存）？" "n" || return 0
   fi
   echo ""
-  info "额外 PHP 版本（与默认 ${PHP_VERSION} 共存，每版本独立 fpm 容器：lnmp-phpNN，与 compose 一致）"
+  info "额外 PHP 版本（与默认 ${PHP_VERSION} 共存，每版本独立 FrankenPHP 容器：lnmp-phpNN）"
   info "当前: ${EXTRA_PHP_VERSIONS:-<无>}"
-  local -a _cands=(5.6 7.0 7.1 7.2 7.3 7.4 8.0 8.1 8.2 8.3 8.4)
+  local -a _cands=(8.2 8.3 8.4 8.5)
   # 过滤已是默认版的项
   local -a _items=() _idx_ver=()
   local _c
@@ -152,7 +151,7 @@ collect_extra_php_versions() {
     if [[ "$_i" -eq "$_last1" ]]; then
       while true; do
         local v
-        prompt "EXTRA_PHP_VERSIONS（CSV，例 7.4,8.2；- 清空）" "${EXTRA_PHP_VERSIONS:-}"
+        prompt "EXTRA_PHP_VERSIONS（CSV，例 8.2,8.4；- 清空）" "${EXTRA_PHP_VERSIONS:-}"
         v=$PROMPT_RESULT
         if [[ "$v" = "-" ]]; then EXTRA_PHP_VERSIONS=""; return 0; fi
         v="${v//[[:space:]]/}"
@@ -160,8 +159,8 @@ collect_extra_php_versions() {
         IFS=',' read -ra _vs <<< "$v"
         for one in "${_vs[@]}"; do
           [[ -z "$one" ]] && continue
-          if ! [[ "$one" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            warn "无效 PHP 版本: $one（应为 7.4 / 8.2 形式），请重新输入整行"
+          if ! [[ "$one" =~ ^[0-9]+\.[0-9]+$ ]] || ! _php_franken_ok "$one"; then
+            warn "无效 PHP 版本: $one（FrankenPHP 仅 8.2–8.5），请重新输入整行"
             bad=1; break
           fi
           [[ "$one" = "$PHP_VERSION" ]] && { warn "已是默认 PHP 版本，跳过: $one"; continue; }
@@ -280,23 +279,21 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  MENU_MULTI_DEFAULT="1,2,3,5,6"
-  menu_multi "LNMP 组件（Laravel 需 php；PM2 网关仅需 nginx + acme，可选 postgres/redis）" "nginx" "php" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
+  MENU_MULTI_DEFAULT="1,2,4,5"
+  menu_multi "LNMP 组件（Laravel 选 php=FrankenPHP/Caddy；PM2 网关选 caddy + acme，可选 postgres/redis）" "caddy（无 PHP 时的 Web）" "php（FrankenPHP，含 Caddy）" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
   sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
-  local -a names=(nginx php mysql postgres redis acme phpmyadmin)
+  local -a names=(caddy php mysql postgres redis acme phpmyadmin)
   for idx in $sel; do
     LNMP_SERVICES+="${LNMP_SERVICES:+,}${names[$idx]}"
   done
-  # nginx 未选 php：PM2 / 纯反代 / 静态站可用；仅 Laravel 需要 php-fpm
-  if [[ ",$LNMP_SERVICES," = *",nginx,"* && ",$LNMP_SERVICES," != *",php,"* ]]; then
-    info "未选 php：适合 PM2 网关 / 纯反代 / 静态站；部署 Laravel 请另行勾选或安装 php"
+  if [[ ",$LNMP_SERVICES," = *",php,"* ]]; then
+    info "已选 php：对外 Web 为 FrankenPHP（Caddy），无需再选 caddy"
   fi
-  # acme webroot 模式需要 nginx 提供 .well-known 端点
-  if [[ ",$LNMP_SERVICES," = *",acme,"* && ",$LNMP_SERVICES," != *",nginx,"* ]]; then
-    warn "已选 acme 但未选 nginx：webroot 校验将不可用，仅 dns_* 模式可签证书"
+  if [[ ",$LNMP_SERVICES," != *",php,"* && ",$LNMP_SERVICES," != *",caddy,"* ]]; then
+    LNMP_SERVICES="caddy${LNMP_SERVICES:+,${LNMP_SERVICES}}"
+    info "未选 php：已自动加入 caddy 作为 Web 入口"
   fi
-  # phpmyadmin 选了 → 自动补 mysql（数据库后端必需）
   if [[ ",$LNMP_SERVICES," = *",phpmyadmin,"* && ",$LNMP_SERVICES," != *",mysql,"* ]]; then
     LNMP_SERVICES+=",mysql"
     info "已自动补充 mysql（phpMyAdmin 后端必需）"
@@ -326,9 +323,9 @@ _collect_image() {
   fi
 }
 
-collect_nginx_image() {
-  _collect_image NGINX_IMAGE "Nginx 镜像" "${NGINX_IMAGE:-nginx:stable-alpine}" \
-    "nginx:stable-alpine (推荐)" "nginx:alpine" "nginx:1.28-alpine" "nginx:1.26-alpine" "nginx:1.24-alpine"
+collect_caddy_image() {
+  _collect_image CADDY_IMAGE "Caddy 镜像（无 PHP 时使用）" "${CADDY_IMAGE:-caddy:2-alpine}" \
+    "caddy:2-alpine (推荐)" "caddy:2" "caddy:alpine"
 }
 
 collect_mysql_image() {
@@ -385,7 +382,7 @@ collect_phpmyadmin_listen() {
 }
 
 collect_lnmp_stack_images() {
-  has_service "nginx" && collect_nginx_image
+  has_service "caddy" && ! has_service "php" && collect_caddy_image
   has_service "mysql" && collect_mysql_image
   has_service "postgres" && collect_postgres_image
   has_service "redis" && collect_redis_image
@@ -395,8 +392,8 @@ collect_lnmp_stack_images() {
 
 # PM2 网关（SlimPPT api 等）：反代 + 数据库 + 缓存 + 证书，不含 php/mysql
 collect_lnmp_services_pm2_gateway() {
-  LNMP_SERVICES="nginx,postgres,redis,acme"
-  info "PM2 网关栈：nginx + postgres + redis + acme（无 php / mysql）"
+  LNMP_SERVICES="caddy,postgres,redis,acme"
+  info "PM2 网关栈：caddy + postgres + redis + acme（无 php / mysql）"
 }
 
 _apply_quiet_network_defaults() {
@@ -407,7 +404,7 @@ _apply_quiet_network_defaults() {
 _interactive_pm2_gateway_install() {
   echo ""
   hr; info "PM2 网关栈（最小安装）"; hr; echo ""
-  info "将安装：Docker → devops 用户 → nginx + postgres + redis + acme → PM2"
+  info "将安装：Docker → devops 用户 → caddy + postgres + redis + acme → PM2"
   info "不含 PHP / MySQL（deploy-site --type=pm2 反代宿主机 Node 进程）"
   echo ""
 
@@ -458,7 +455,7 @@ interactive_setup() {
     local _i
     menu_select "请选择操作" \
       "查看状态" \
-      "PM2 网关栈（Docker + nginx + postgres + redis + acme + PM2）" \
+      "PM2 网关栈（Docker + caddy + postgres + redis + acme + PM2）" \
       "全新安装（完整向导）" \
       "一键重装 LNMP（沿用上次配置，跳过所有问询）" \
       "更新配置（含 PHP 多版本、镜像源、SSH 等）" \
@@ -492,7 +489,7 @@ _interactive_oneclick_reinstall() {
   fi
   printf "  %-20s %s\n" "Devops 用户" "$DEVOPS_USER"
   printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
-  if has_service "nginx"; then printf "  %-20s %s\n" "Nginx 镜像" "$NGINX_IMAGE"; fi
+  if has_service "caddy" && ! has_service "php"; then printf "  %-20s %s\n" "Caddy 镜像" "$CADDY_IMAGE"; fi
   if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
   if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"; fi
   if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
@@ -521,7 +518,7 @@ _interactive_full_install() {
   menu_multi "选择要安装的模块（回车=Docker + LNMP）" \
     "等保加固 (cyber 三权用户)" \
     "Docker (LNMP 前置)" \
-    "LNMP (nginx + php + mysql + redis + acme)" \
+    "LNMP (php/FrankenPHP + mysql + redis + acme)" \
     "PM2 (Node.js + pm2，deploy-site 用)" \
     "SSH 安全策略 (改端口/禁 root)" \
     "Firewalld (防火墙)" \
@@ -565,7 +562,7 @@ _interactive_full_install() {
   fi
 
   if [[ $sel_lnmp -eq 1 ]]; then
-    LNMP_SERVICES="${LNMP_SERVICES:-nginx,php,mysql,redis,acme}"
+    LNMP_SERVICES="${LNMP_SERVICES:-php,mysql,redis,acme}"
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "postgres"; then collect_postgres_password; fi
     if has_service "acme"; then collect_acme_email; fi
@@ -581,7 +578,7 @@ _interactive_full_install() {
   if [[ $sel_docker -eq 1 ]]; then printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"; fi
   if [[ $sel_lnmp -eq 1 ]]; then
     printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
-    if has_service "nginx"; then printf "  %-20s %s\n" "Nginx 镜像" "$NGINX_IMAGE"; fi
+    if has_service "caddy" && ! has_service "php"; then printf "  %-20s %s\n" "Caddy 镜像" "$CADDY_IMAGE"; fi
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL 镜像" "$MYSQL_IMAGE"; fi
     if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"; fi
     if has_service "redis"; then printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"; fi
@@ -640,7 +637,7 @@ _interactive_install_one() {
       "LNMP - mysql" \
       "LNMP - postgresql" \
       "LNMP - redis" \
-      "LNMP - nginx" \
+      "LNMP - caddy" \
       "LNMP - acme" \
       "LNMP - phpMyAdmin" \
       "Docker" \
@@ -671,7 +668,7 @@ _interactive_install_one() {
       2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
       3)  collect_postgres_image; collect_postgres_password; LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
       4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
-      5)  collect_nginx_image; LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
+      5)  collect_caddy_image; LNMP_SERVICES="${LNMP_SERVICES},caddy"; install_lnmp "caddy" ;;
       6)  collect_acme_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
       7)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
       8)  collect_docker_mirrors; install_docker ;;
@@ -705,11 +702,11 @@ _interactive_uninstall_one() {
     done < <(_php_extra_list)
 
     _labels+=(
-      "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - nginx" "LNMP - acme" "LNMP - phpMyAdmin"
+      "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - caddy" "LNMP - acme" "LNMP - phpMyAdmin"
       "LNMP (全部)" "Docker" "PM2 (Node.js)" "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
       "返回主菜单"
     )
-    _actions+=(mysql postgres redis nginx acme phpmyadmin all docker pm2 ssh firewall bbr zsh saferm back)
+    _actions+=(mysql postgres redis caddy acme phpmyadmin all docker pm2 ssh firewall bbr zsh saferm back)
 
     menu_select "选择要卸载的组件（高危操作前会二次确认）" "${_labels[@]}"
     idx=$MENU_SELECT_RESULT
@@ -725,7 +722,7 @@ _interactive_uninstall_one() {
       mysql)      _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
       postgres)   _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
       redis)      _danger_msg="将停止并移除 lnmp-redis 容器" ;;
-      nginx)      _danger_msg="将停止并移除 lnmp-nginx 容器" ;;
+      caddy)      _danger_msg="将停止并移除 lnmp-caddy 容器" ;;
       acme)       _danger_msg="将停止并移除 lnmp-acme 容器" ;;
       phpmyadmin) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
       all)        _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
@@ -743,7 +740,7 @@ _interactive_uninstall_one() {
     fi
 
     case "$component" in
-      php|php-*|mysql|postgres|redis|nginx|acme|phpmyadmin|all) uninstall_lnmp "$component" ;;
+      php|php-*|mysql|postgres|redis|caddy|acme|phpmyadmin|all) uninstall_lnmp "$component" ;;
       docker)   uninstall_docker ;;
       pm2)      uninstall_pm2 ;;
       ssh)      uninstall_ssh ;;

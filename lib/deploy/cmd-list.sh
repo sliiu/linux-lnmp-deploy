@@ -31,34 +31,29 @@ _status_http_code() {
 
 # Laravel 且 HTTPS 异常时：本站 Nginx error + 宿主机 fpm-slow.log 尾部
 _status_laravel_fpm_tail_hints() {
-  local dom="$1"
+  local dom="$1" c
   echo ""
-  info "本站相关 Nginx error.log（含 server_name / Host）:"
-  docker exec lnmp-nginx sh -c "grep -F '${dom}' /var/log/nginx/error.log 2>/dev/null | tail -n 20" 2>/dev/null | sed 's/^/  /' || true
-  local _scn _ssub
-  _scn="$(_php_container_for_site "$dom")"
-  if [[ "$_scn" = "lnmp-php" ]]; then _ssub="php"; else _ssub="php-${_scn#lnmp-php}"; fi
-  [[ ! -s "${DATA_DIR}/${_ssub}/log/fpm-slow.log" ]] && return 0
-  echo ""
-  info "php-fpm 慢日志尾部（${DATA_DIR}/${_ssub}/log/fpm-slow.log）:"
-  tail -n 30 "${DATA_DIR}/${_ssub}/log/fpm-slow.log" 2>/dev/null | sed 's/^/  /' || true
+  info "本站相关容器日志:"
+  c="$(_web_container)"
+  docker logs --tail 20 "$c" 2>&1 | grep -F "${dom}" | tail -n 20 | sed 's/^/  /' || true
 }
 
 _status_print_hints() {
   local d="$1" code_http="$2" code_https="$3" site_type="$4" fe_sub="$5"
   local issues=()
-  container_ok "lnmp-nginx" || issues+=("lnmp-nginx 未运行，本机 80/443 无服务")
+  container_ok "$(_web_container)" || issues+=("$(_web_container) 未运行，本机 80/443 无服务")
   if [[ "$site_type" = "laravel" ]]; then
     local _spc; _spc="$(_php_container_for_site "$d")"
-    container_ok "$_spc" || issues+=("${_spc} 未运行，Laravel 将出现 502（FastCGI 不可达）")
+    container_ok "$_spc" || issues+=("${_spc} 未运行，Laravel 将出现 502")
   fi
-  [[ ! -f "${NGINX_CONF}/${d}.conf" ]] && issues+=("无 Nginx 配置 ${NGINX_CONF}/${d}.conf，请求可能落到默认站点")
+  local _cf; _cf="$(site_caddy_file "$d")"
+  [[ ! -f "$_cf" && ! -f "${NGINX_CONF}/${d}.conf" ]] && issues+=("无 Caddy 配置 ${_cf}，请求可能落到默认站点")
   [[ "$code_http" = "000" ]] && issues+=("HTTP 无响应：检查 docker 端口映射、本机防火墙、阿里云安全组是否放行 80")
-  [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" = "laravel" ]] \
-    && issues+=("HTTPS 无响应或超时：Laravel 探测为 GET /up（已放宽至 25s）；多为 php-fpm 卡住或池占满，见上方本站 error 与 fpm-slow.log；另查 storage/logs/laravel.log、MySQL/Redis")
-  [[ "$code_https" = "000" ]] && container_ok "lnmp-nginx" && [[ "$site_type" != "laravel" ]] \
-    && issues+=("HTTPS 无响应：检查 443、证书路径及 lnmp-nginx 内 /etc/nginx/ssl/${d}/")
-  [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 php-fpm 异常，查看下方 Nginx error.log 中 upstream/fastcgi 报错")
+  [[ "$code_https" = "000" ]] && container_ok "$(_web_container)" && [[ "$site_type" = "laravel" ]] \
+    && issues+=("HTTPS 无响应或超时：Laravel 探测为 GET /up（已放宽至 25s）；另查 storage/logs/laravel.log、MySQL/Redis")
+  [[ "$code_https" = "000" ]] && container_ok "$(_web_container)" && [[ "$site_type" != "laravel" ]] \
+    && issues+=("HTTPS 无响应：检查 443 与 Caddy 自动 HTTPS / tls 文件")
+  [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 FrankenPHP 异常，查看 docker logs $(_web_container)")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "pm2" ]] && issues+=("502：多为 PM2 进程未运行或端口不匹配，检查 pm2 status 与 ${NGINX_CONF}/${d}.pm2-port")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "proxy" ]] && issues+=("502：上游不可达，检查 ${NGINX_CONF}/${d}.proxy-pass 与目标服务")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "frontend" ]] && issues+=("404：确认构建产物在 ${WWW_ROOT}/${d}${fe_sub:+/}${fe_sub} 且含 index.html")
@@ -95,7 +90,7 @@ cmd_status() {
   echo ""
   hr; info "运行环境（Docker）"; echo ""
   local c _st
-  local _stack=(lnmp-nginx lnmp-php lnmp-redis lnmp-mysql lnmp-postgres)
+  local _stack=(lnmp-caddy lnmp-php lnmp-redis lnmp-mysql lnmp-postgres)
   while IFS= read -r c; do
     [[ -z "$c" || "$c" = "lnmp-php" ]] && continue
     _stack+=("$c")
@@ -109,28 +104,23 @@ cmd_status() {
     fi
   done
 
-  if ! container_ok "lnmp-nginx"; then
+  if ! container_ok "$(_web_container)"; then
     echo ""
-    warn "lnmp-nginx 未运行，无法在本机 curl 检测站点；请先启动 LNMP 栈"
+    warn "$(_web_container) 未运行，无法在本机 curl 检测站点；请先启动 LNMP 栈"
     echo ""
     return 0
   fi
 
   echo ""
-  info "Nginx 配置校验:"
-  docker exec lnmp-nginx nginx -t 2>&1 | sed 's/^/  /' || true
+  info "Caddy 配置校验:"
+  caddy_validate 2>&1 | sed 's/^/  /' || true
 
   local _domains=()
   if [[ "${STATUS_ALL:-0}" -eq 1 ]]; then
-    local conf
-    for conf in "${NGINX_CONF}"/*.conf; do
-      [[ -f "$conf" ]] || continue
-      local bn
-      bn=$(basename "$conf" .conf)
-      [[ "$bn" = "default" ]] && continue
-      _domains+=("$bn")
-    done
-    [[ ${#_domains[@]} -eq 0 ]] && { menu_fail "未在 ${NGINX_CONF} 发现站点配置" || return 0; }
+    while IFS= read -r bn; do
+      [[ -n "$bn" ]] && _domains+=("$bn")
+    done < <(_list_deployed_domains)
+    [[ ${#_domains[@]} -eq 0 ]] && { menu_fail "未发现站点配置" || return 0; }
   else
     _domains=("$DOMAIN")
   fi
@@ -150,10 +140,12 @@ cmd_status() {
       doc_host="${site_dir}/public"
     fi
 
-    if [[ -f "${NGINX_CONF}/${dom}.conf" ]]; then
-      ok "Nginx 配置: ${NGINX_CONF}/${dom}.conf"
+    if [[ -f "$(site_caddy_file "$dom")" ]]; then
+      ok "Caddy 配置: $(site_caddy_file "$dom")"
+    elif [[ -f "${NGINX_CONF}/${dom}.conf" ]]; then
+      warn "仍为旧 Nginx 配置: ${NGINX_CONF}/${dom}.conf（请 update 该站以生成 Caddyfile）"
     else
-      warn "缺少 Nginx 配置: ${NGINX_CONF}/${dom}.conf"
+      warn "缺少 Caddy 配置: $(site_caddy_file "$dom")"
     fi
 
     if [[ -d "$site_dir" ]]; then
@@ -204,18 +196,18 @@ cmd_status() {
       _status_laravel_fpm_tail_hints "$dom"
     fi
 
-    if container_ok "lnmp-nginx" && [[ "$site_type" != "proxy" && "$site_type" != "pm2" ]]; then
+    if container_ok "$(_web_container)" && [[ "$site_type" != "proxy" && "$site_type" != "pm2" ]]; then
       echo ""
-      info "容器内可读性（uid 101 = nginx）:"
+      info "容器内可读性:"
       if [[ "$site_type" = "laravel" ]]; then
-        docker exec lnmp-nginx sh -c "test -r '${CONTAINER_WWW}/${dom}/public/index.php'" 2>/dev/null && ok "可读 public/index.php" || warn "不可读 public/index.php（权限/属主，可执行: $0 update --domain=${dom}）"
+        docker exec "$(_web_container)" sh -c "test -r '${CONTAINER_WWW}/${dom}/public/index.php'" 2>/dev/null && ok "可读 public/index.php" || warn "不可读 public/index.php（权限/属主，可执行: $0 update --domain=${dom}）"
       else
-        docker exec lnmp-nginx sh -c "test -r '${CONTAINER_WWW}/${dom}${fe_sub:+/}${fe_sub}/index.html'" 2>/dev/null && ok "可读 index.html" || warn "不可读 index.html（文档根同上，可 update 修复权限）"
+        docker exec "$(_web_container)" sh -c "test -r '${CONTAINER_WWW}/${dom}${fe_sub:+/}${fe_sub}/index.html'" 2>/dev/null && ok "可读 index.html" || warn "不可读 index.html（文档根同上，可 update 修复权限）"
       fi
     fi
 
     if [[ "$site_type" = "laravel" ]]; then
-      local _scn _sver _ssub
+      local _scn _sver
       _scn="$(_php_container_for_site "$dom")"
       _sver="$(_php_ver_for_site "$dom")"
       if container_ok "$_scn"; then
@@ -226,16 +218,14 @@ cmd_status() {
         else
           warn "artisan 执行失败（依赖、.env、权限等，查看完整错误请手动: docker exec -u ... ${_scn} ... php artisan --version）"
         fi
-        if [[ "$_scn" = "lnmp-php" ]]; then _ssub="php"; else _ssub="php-${_scn#lnmp-php}"; fi
-        [[ -d "${DATA_DIR}/${_ssub}/log" ]] && info "php-fpm 慢日志（宿主机）: ${DATA_DIR}/${_ssub}/log/fpm-slow.log"
       else
-        warn "${_scn} 未运行（站点声明 PHP ${_sver:-默认}），FastCGI 不可达将 502"
+        warn "${_scn} 未运行（站点声明 PHP ${_sver:-默认}）"
       fi
     fi
 
     echo ""
-    info "lnmp-nginx 最近错误日志（全局，不仅本站）:"
-    docker exec lnmp-nginx sh -c 'tail -n 25 /var/log/nginx/error.log 2>/dev/null' 2>/dev/null | sed 's/^/  /' || warn "无法读取容器内 error.log"
+    info "$(_web_container) 最近日志:"
+    docker logs --tail 25 "$(_web_container)" 2>&1 | sed 's/^/  /' || warn "无法读取容器日志"
 
     if [[ "${STATUS_ALL:-0}" -ne 1 ]]; then
       _status_print_hints "$dom" "$code_http" "$code_https" "$site_type" "$fe_sub"
@@ -256,13 +246,9 @@ cmd_list() {
   echo ""
   hr; info "已部署站点"; hr; echo ""
 
-  local found=0
-  for conf in "${NGINX_CONF}"/*.conf; do
-    [[ -f "$conf" ]] || continue
-    local name
-    name=$(basename "$conf" .conf)
-    [[ "$name" = "default" ]] && continue
-
+  local found=0 name
+  while IFS= read -r name; do
+    [[ -z "$name" ]] && continue
     found=1
     local type="unknown" status="无代码"
     local site_dir="${WWW_ROOT}/${name}"
@@ -311,7 +297,7 @@ cmd_list() {
       printf "  %-30s 类型:%-10s Laravel:%-6s PHP:%-8s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
         "$name" "$type" "$lv_v" "$php_v" "$status" "$ssl" "$cron"
     fi
-  done
+  done < <(_list_deployed_domains)
 
   [[ $found -eq 0 ]] && info "暂无站点"
   echo ""

@@ -10,16 +10,15 @@ cmd_ssl() {
   local site_type
   site_type="$(_site_type_for_domain "$DOMAIN")"
 
-  container_ok "lnmp-acme" || { menu_fail "lnmp-acme 未运行" || return 0; }
-
   _collect_ssl_dns_interactive full
   SSL_DNS="${SSL_DNS:-${ACME_SSL_DNS_DEFAULT:-webroot}}"
   case "$SSL_DNS" in
     webroot|dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) ;;
     *) menu_fail "无效 SSL 模式: ${SSL_DNS}" || return 0 ;;
   esac
-  _collect_ssl_dns_creds_interactive
   if _is_dns_mode "$SSL_DNS"; then
+    container_ok "lnmp-acme" || { menu_fail "lnmp-acme 未运行（DNS-01 需要 acme.sh）" || return 0; }
+    _collect_ssl_dns_creds_interactive
     _acme_ssl_validate_dns_creds "$SSL_DNS"
   fi
 
@@ -43,7 +42,7 @@ usage() {
             已有站点可 --webhook=release|tag 恢复/更新 Webhook 配置；--webhook-only 仅写配置
   rollback  回退到历史部署版本（webhook/自动部署前会保留快照）
   webhook   Webhook 自动部署（enable | disable | setup | serve | list）
-  remove    移除站点（Nginx、SSL、crontab、Horizon、代码）
+  remove    移除站点（Caddy、SSL、crontab、Horizon、代码）
   list      列出已部署站点
   status    站点运行状态（本机 curl、容器、证书、日志；可加 --all）
   ssl       SSL 证书签发/续期
@@ -77,8 +76,8 @@ usage() {
   --pm2-cmd=命令        PM2 启动命令（留空=自动检测 ecosystem / npm start）
   --pm2-build=y|n       PM2 部署时是否执行 build [y]
   --proxy-pass=URL      proxy 类型：反代上游（如 http://127.0.0.1:8080；localhost 自动改 Docker 网关）
-  --php-version=主版本   站点 PHP 版本（如 8.2 / 7.4），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
-                       写入 ${NGINX_CONF}/<域名>.php-version；nginx fastcgi 与 composer/artisan/cron/horizon 自动路由到对应容器
+  --php-version=主版本   站点 PHP 版本（如 8.2 / 8.3），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
+                       写入 ${NGINX_CONF}/<域名>.php-version；Caddy / composer / artisan / cron / horizon 自动路由到对应容器
   --app-name=名称       APP_NAME [Laravel]
   --redis-host=         REDIS_HOST [redis]
   --redis-port=         REDIS_PORT [6379]

@@ -62,9 +62,10 @@ pm2_app_name() {
 
 # Nginx 容器访问宿主机 PM2 进程用的网关 IP
 _docker_host_gateway() {
-  local gw=""
-  if container_ok "lnmp-nginx"; then
-    gw="$(docker exec lnmp-nginx sh -c "ip route 2>/dev/null | awk '/default/ {print \$3; exit}'" 2>/dev/null || true)"
+  local gw="" c
+  c="$(_web_container)"
+  if container_ok "$c"; then
+    gw="$(docker exec "$c" sh -c "ip route 2>/dev/null | awk '/default/ {print \$3; exit}'" 2>/dev/null || true)"
   fi
   [[ -n "$gw" ]] && { printf '%s' "$gw"; return 0; }
   gw="$(ip -4 route show match 0/0 2>/dev/null | awk '{print $3; exit}')"

@@ -147,74 +147,10 @@ _lv_supports_horizon() {
   return 0
 }
 
-ensure_php_fpm_slowlog_host_artifacts() {
-  [[ -d "${DATA_DIR}/php" ]] || return 0
-  mkdir -p "${DATA_DIR}/php/fpm.d" "${DATA_DIR}/php/log"
-  if [[ ! -f "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" ]] || \
-     ! grep -q 'pm.max_requests' "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" 2>/dev/null; then
-    cat > "${DATA_DIR}/php/fpm.d/zz-slowlog.conf" <<'FPMCONF'
-; 与官方镜像 [www] 池合并（zz- 保证在 www.conf、zz-docker 之后加载）
-; 小内存 VPS 默认上限，可按机器内存调高
-[www]
-pm.max_children = 12
-pm.start_servers = 2
-pm.min_spare_servers = 1
-pm.max_spare_servers = 4
-pm.max_requests = 500
-slowlog = /var/log/php-fpm/fpm-slow.log
-request_slowlog_timeout = 5s
-FPMCONF
-  fi
-  : >>"${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
-  chown -R 82:82 "${DATA_DIR}/php/log" 2>/dev/null || true
-  chmod 755 "${DATA_DIR}/php/log" 2>/dev/null || true
-  chmod 664 "${DATA_DIR}/php/log/fpm-slow.log" 2>/dev/null || true
-}
-
-warn_php_fpm_slowlog_compose_missing() {
-  container_ok "lnmp-php" || return 0
-  [[ -f "${DATA_DIR}/docker-compose.yml" ]] || return 0
-  grep -q 'php/fpm.d/zz-slowlog.conf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
-  grep -q 'container_name: lnmp-php' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
-  warn "docker-compose 未挂载 php-fpm slowlog；请 init.sh 更新 LNMP 编排后执行: cd ${DATA_DIR} && docker compose up -d --force-recreate php"
-}
-
-ensure_php_fpm_wave_pool_host_artifacts() {
-  [[ -d "${DATA_DIR}/php" ]] || return 0
-  mkdir -p "${DATA_DIR}/php/fpm.d"
-  local _wpf="${DATA_DIR}/php/fpm.d/wave-pool.conf"
-  [[ -d "$_wpf" ]] && rm -rf "$_wpf"
-  if [[ ! -f "$_wpf" ]] || \
-     grep -qE '^pm\.max_children = 50$' "$_wpf" 2>/dev/null || \
-     grep -qE '^request_terminate_timeout = 0$' "$_wpf" 2>/dev/null; then
-    cat > "$_wpf" <<'FPMCONF'
-; SSE 专用池；Nginx fastcgi_pass php:9001；须监听 0.0.0.0 以便跨容器访问
-; 可按内存调整 pm.max_children（每个长连接占 1 worker）
-[wave]
-user = www-data
-group = www-data
-listen = 0.0.0.0:9001
-pm = dynamic
-pm.max_children = 8
-pm.start_servers = 1
-pm.min_spare_servers = 1
-pm.max_spare_servers = 3
-request_terminate_timeout = 14400
-clear_env = no
-catch_workers_output = yes
-slowlog = /var/log/php-fpm/fpm-slow.log
-request_slowlog_timeout = 5s
-FPMCONF
-  fi
-}
-
-warn_php_fpm_wave_pool_compose_missing() {
-  container_ok "lnmp-php" || return 0
-  [[ -f "${DATA_DIR}/docker-compose.yml" ]] || return 0
-  grep -q 'php/fpm.d/wave-pool.conf' "${DATA_DIR}/docker-compose.yml" 2>/dev/null && return 0
-  grep -q 'container_name: lnmp-php' "${DATA_DIR}/docker-compose.yml" 2>/dev/null || return 0
-  warn "docker-compose 未挂载 Wave FPM 池（wave-pool.conf）；请重新运行 init.sh 生成编排，或手动加入挂载后: cd ${DATA_DIR} && docker compose up -d --force-recreate php"
-}
+ensure_php_fpm_slowlog_host_artifacts() { return 0; }
+warn_php_fpm_slowlog_compose_missing() { return 0; }
+ensure_php_fpm_wave_pool_host_artifacts() { return 0; }
+warn_php_fpm_wave_pool_compose_missing() { return 0; }
 
 ensure_mysql_low_memory_host_artifacts() {
   [[ -d "${DATA_DIR}" ]] || return 0
@@ -297,29 +233,11 @@ ensure_composer_in_lnmp_php() {
   fi
   # 容器内可能既无 curl 也无 wget；优先 wget（alpine 自带 busybox wget），失败则装 curl
   docker exec -u root "$cname" sh -c \
-    "( command -v wget >/dev/null 2>&1 && wget -qO- https://getcomposer.org/installer ) \
-     || ( command -v curl >/dev/null 2>&1 && curl -fsSL https://getcomposer.org/installer ) \
-     || ( apk add --no-cache curl >/dev/null 2>&1 && curl -fsSL https://getcomposer.org/installer ) \
+    "( command -v curl >/dev/null 2>&1 && curl -fsSL https://getcomposer.org/installer ) \
+     || ( command -v wget >/dev/null 2>&1 && wget -qO- https://getcomposer.org/installer ) \
      | php -- --install-dir=/usr/local/bin --filename=composer --${want_major}" \
     || die "${cname} 内安装 Composer 失败"
   docker exec -u root "$cname" chmod 755 /usr/local/bin/composer 2>/dev/null || true
-}
-
-_php_ext_apk_retry_exec() {
-  local cname="$1" inner="$2"
-  local attempt=1 max=12 pause=5
-  sleep 2
-  while ((attempt <= max)); do
-    if docker exec -u root -e TERM=dumb "$cname" sh -c "$inner"; then
-      return 0
-    fi
-    if ((attempt < max)); then
-      warn "apk 锁或失败，${pause}s 后重试 (${attempt}/${max})..."
-      sleep "$pause"
-    fi
-    attempt=$((attempt + 1))
-  done
-  return 1
 }
 
 ensure_lnmp_php_laravel_extensions() {
@@ -333,58 +251,17 @@ ensure_lnmp_php_laravel_extensions() {
   if docker exec "$cname" php -r "$_req" 2>/dev/null; then
     return 0
   fi
-  info "尝试启用已编译的 PHP 扩展 (${cname} → docker-php-ext-enable)..."
-  docker exec -u root "$cname" sh -c \
-    'for e in bcmath pcntl zip gd pdo_mysql pdo_pgsql mysqli opcache dom mbstring curl xml intl fileinfo exif sockets redis; do docker-php-ext-enable "$e" 2>/dev/null || true; done'
-  if docker exec "$cname" php -r "$_req" 2>/dev/null; then
-    ok "PHP 扩展已可用（${cname}）"
-    docker restart "$cname"
-    wait_container_running "$cname" 45
-    return 0
-  fi
-  info "在 ${cname} 内编译安装扩展（与 init.sh 默认一致，含 pdo_mysql + pecl redis）..."
-  [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
-  local alpine_sed=""
-  [[ -n "${ALPINE_MIRROR:-}" ]] && alpine_sed="sed -i 's|dl-cdn.alpinelinux.org|${ALPINE_MIRROR}|g' /etc/apk/repositories && apk update && "
-  local php_ver gd_args redis_pkg
-  php_ver="$(_php_runtime_ver_in_container "$cname")"; : "${php_ver:=8.3}"
-  gd_args="--with-freetype --with-jpeg --with-webp"
-  _lv_ge "$php_ver" "7.4" || gd_args="--with-freetype-dir=/usr --with-jpeg-dir=/usr --with-png-dir=/usr --with-webp-dir=/usr"
-  if   ! _lv_ge "$php_ver" "7.2"; then redis_pkg="redis-4.3.0"
-  elif ! _lv_ge "$php_ver" "7.4"; then redis_pkg="redis-5.3.7"
-  else redis_pkg=""; fi
-  local apk_deps="libpng-dev libwebp-dev freetype-dev libjpeg-turbo-dev libxml2-dev curl-dev build-base linux-headers autoconf libzip-dev icu-dev oniguruma-dev"
-  [[ $need_pgsql -eq 1 ]] && apk_deps+=" libpq-dev"
-  local install_list="pdo_mysql opcache mysqli curl gd xml dom pcntl bcmath sockets mbstring zip exif fileinfo"
-  [[ $need_pgsql -eq 1 ]] && install_list="pdo_pgsql ${install_list}"
-  local cmd="${alpine_sed}apk add --no-cache ${apk_deps}"
-  cmd+=" && docker-php-ext-configure gd ${gd_args}"
-  if _lv_ge "$php_ver" "7.2"; then
-    install_list+=" intl"
-    cmd+=" && docker-php-ext-configure intl"
-  else
-    warn "PHP ${php_ver} 镜像下 intl 编译可能因 icu 版本不兼容而失败，自动跳过 intl"
-  fi
-  cmd+=" && docker-php-ext-install -j\$(nproc) ${install_list}"
-  cmd+=" && if ! php -m 2>/dev/null | grep -q '^redis$'; then pecl install ${redis_pkg:-redis} || true; fi"
-  cmd+=" && docker-php-ext-enable redis 2>/dev/null || true"
-  cmd+=" && apk del --no-cache build-base linux-headers autoconf"
-  cmd="sleep 2; ${cmd}"
-  _php_ext_apk_retry_exec "$cname" "$cmd" \
-    || die "PHP 扩展安装失败，请在主机执行 init.sh「更新配置 → PHP 扩展」或 docker restart ${cname} 后重试"
+  local _ipe="bcmath pcntl gd zip redis"
+  [[ $need_pgsql -eq 1 ]] && _ipe+=" pdo_pgsql" || _ipe+=" pdo_mysql"
+  info "安装 Laravel 所需 PHP 扩展（${cname}）..."
+  docker exec -u root "$cname" install-php-extensions ${_ipe} \
+    || die "PHP 扩展安装失败（${cname}）"
   docker restart "$cname"
   wait_container_running "$cname" 45
-  if [[ $need_pgsql -eq 1 ]]; then
-    docker exec "$cname" php -m | grep -q pdo_pgsql || die "pdo_pgsql 仍未加载，请 init.sh install postgres 或更新 PHP 扩展后重试"
-    docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_pgsql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
-      || die "Laravel (PostgreSQL) 所需扩展仍未齐全，请检查 ${cname}"
-  else
-    docker exec "$cname" php -m | grep -q pdo_mysql || die "pdo_mysql 仍未加载，请检查 ${cname}"
-    docker exec "$cname" php -r 'foreach (["bcmath","pcntl","gd","zip","pdo_mysql","redis"] as $e) { if (!extension_loaded($e)) exit(1); } exit(0);' 2>/dev/null \
-      || die "Laravel 所需扩展仍未齐全，请检查 ${cname} 或重新部署 PHP 容器"
-  fi
-  docker exec "$cname" php -m | grep -q '^redis$' || die "redis 扩展仍未加载，请检查 ${cname} 或 pecl"
+  docker exec "$cname" php -r "$_req" 2>/dev/null \
+    || die "Laravel 所需扩展仍未齐全，请检查 ${cname}"
   ok "PHP 扩展就绪（${cname}）"
+  return 0
 }
 
 wait_container_running() {
@@ -421,11 +298,11 @@ fix_nginx_conf_d_file() {
 }
 
 normalize_nginx_conf_d() {
-  mkdir -p "${NGINX_CONF}"
+  mkdir -p "${NGINX_CONF}" "${CADDY_SITES:-${DATA_DIR}/caddy/sites}"
   chmod 755 "${DATA_DIR}/nginx" "${NGINX_CONF}" 2>/dev/null || true
   local f
   shopt -s nullglob
-  for f in "${NGINX_CONF}"/*.conf; do
+  for f in "${NGINX_CONF}"/*.conf "${CADDY_SITES:-${DATA_DIR}/caddy/sites}"/*.caddy; do
     fix_nginx_conf_d_file "$f"
   done
   shopt -u nullglob
@@ -469,12 +346,12 @@ normalize_nginx_cache_dir() {
   chmod -R 755 "${DATA_DIR}/nginx/cache" 2>/dev/null || true
 }
 
-# PHP-FPM 为 PHP_C_UID:PHP_C_GID（82:82），除 public 外还要能读 app/vendor 等；storage/bootstrap/cache 保持与 setup_laravel 一致的 rwX
+# FrankenPHP/Caddy 为 PHP_C_UID:PHP_C_GID（33:33）；storage/bootstrap/cache 需可写
 fix_laravel_readable_for_web() {
   local base="$1"
   local envf="${base}/.env"
   [[ -d "$base" ]] || { info "  [跳过] fix_laravel_readable_for_web：目录不存在 ${base}"; return 0; }
-  info "  执行 fix_laravel_readable_for_web（PHP ${PHP_C_UID} / Nginx ${NGINX_C_UID} 可读、storage 可写、.env）…"
+  info "  执行 fix_laravel_readable_for_web（PHP/Caddy ${PHP_C_UID} 可读、storage 可写、.env）…"
   if [[ -d "${base}/public" ]]; then
     chmod a+rx "${base}/public" 2>/dev/null || true
     chmod -R a+rX "${base}/public" 2>/dev/null || true
@@ -503,7 +380,7 @@ fix_laravel_readable_for_web() {
   ok "  fix_laravel_readable_for_web 已执行"
 }
 
-# 容器内 nginx 为 101:101；前端见上；Laravel 整站需同时满足 php-fpm(82) 可读代码
+# 容器内 Caddy/FrankenPHP 为 33:33
 fix_site_readable_for_nginx() {
   local domain="$1" site_type="$2" fe_sub="${3:-}"
   info "执行 fix_site_readable_for_nginx：${domain}（类型: ${site_type}）…"

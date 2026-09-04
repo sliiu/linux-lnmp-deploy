@@ -9,6 +9,7 @@ DATA_DIR="${LNMP_DATA_DIR:-/data/docker-lnmp}"
 CONTAINER_WWW="${CONTAINER_WWW:-${DATA_DIR}/www}"
 WWW_ROOT="${DATA_DIR}/www"
 NGINX_CONF="${DATA_DIR}/nginx/conf.d"
+CADDY_SITES="${DATA_DIR}/caddy/sites"
 SSL_DIR="${DATA_DIR}/ssl"
 # 无 per-site 文件时的全局默认 SSE 前缀（空格分隔）；每站点可写 ${NGINX_CONF}/<域名>.sse-prefixes 覆盖
 LARAVEL_SSE_PREFIXES="${LARAVEL_SSE_PREFIXES:-wave}"
@@ -17,11 +18,10 @@ mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 export DEPLOY_LOG_TEE=1
 export DEPLOY_SESSION_CMD="$0"
 export DEPLOY_SESSION_ARGS="$*"
-readonly NGINX_C_UID=101
-readonly NGINX_C_GID=101
-# PHP-FPM 容器内 uid（与 init.sh docker-compose 中 php 镜像默认 www-data 82 一致）
-readonly PHP_C_UID=82
-readonly PHP_C_GID=82
+readonly NGINX_C_UID=33
+readonly NGINX_C_GID=33
+readonly PHP_C_UID=33
+readonly PHP_C_GID=33
 
 # ═══════════════════════════════════════════════
 #  lib 加载（本地优先，缺失时从 Gitee 自动下载）
@@ -101,7 +101,7 @@ main() {
           "更新站点" \
           "Webhook 自动部署" \
           "回退站点版本" \
-          "站点运行状态（含证书 / FPM / nginx 日志）" \
+          "站点运行状态（含证书 / Caddy 日志）" \
           "SSL 证书签发/续期" \
           "移除站点" \
           "退出"

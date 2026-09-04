@@ -153,15 +153,10 @@ _webhook_configure_site() {
   ok "Webhook 已配置: ${DOMAIN} (${WEBHOOK_MODE})"
   if [[ "$WEBHOOK_MODE" = "release" ]]; then
     info "静态产物将解压到 ${WWW_ROOT}/${DOMAIN}/（站点根，不用 dist）"
-    if [[ "$st" = "frontend" ]] && container_ok "lnmp-nginx"; then
-      gen_nginx_frontend "$DOMAIN" "" || warn "Nginx 配置写入失败"
+    if [[ "$st" = "frontend" ]] && container_ok "$(_web_container)"; then
+      gen_nginx_frontend "$DOMAIN" "" || warn "Caddy 配置写入失败"
       fix_site_readable_for_nginx "$DOMAIN" "frontend" "" || true
-      if docker exec lnmp-nginx nginx -t 2>&1; then
-        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已切换为站点根目录" \
-          || warn "Nginx reload 失败"
-      else
-        warn "Nginx 配置测试失败，请检查 ${NGINX_CONF}/${DOMAIN}.conf"
-      fi
+      _caddy_reload_soft "Caddy 已切换为站点根目录"
     fi
   fi
   info "Secret: ${sec}"
@@ -221,7 +216,7 @@ _collect_webhook_setup_interactive() {
   if [[ -f "$WEBHOOK_LISTENER_ENV" && -n "${WEBHOOK_PUBLIC_MODE:-}" ]]; then
     menu_select "Webhook 公网访问方式" \
       "保持当前（${WEBHOOK_PUBLIC_MODE} ${WEBHOOK_BIND:-127.0.0.1}:${WEBHOOK_PORT:-9080}${WEBHOOK_PATH:-/hooks}）" \
-      "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
+      "Caddy 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
       "直接绑定 0.0.0.0（外网直连端口）" \
       "仅本机 127.0.0.1"
     _i=$MENU_SELECT_RESULT
@@ -233,7 +228,7 @@ _collect_webhook_setup_interactive() {
     esac
   else
     menu_select "Webhook 公网访问方式" \
-      "Nginx 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
+      "Caddy 反代（推荐：HTTPS 域名 → 本机 127.0.0.1）" \
       "直接绑定 0.0.0.0（外网直连端口）" \
       "仅本机 127.0.0.1"
     _i=$MENU_SELECT_RESULT
@@ -401,7 +396,7 @@ cmd_webhook_setup() {
 
   if [[ "$WEBHOOK_PUBLIC_MODE" = "nginx" ]]; then
     WEBHOOK_BIND="$(_docker_host_gateway)"
-    [[ -n "$new_proxy" ]] || { menu_fail "Nginx 反代需指定 --webhook-proxy-domain=" || return 0; }
+    [[ -n "$new_proxy" ]] || { menu_fail "Caddy 反代需指定 --webhook-proxy-domain=" || return 0; }
     if [[ "$old_mode" = "nginx" && -n "$old_domain" && "$old_domain" != "$new_proxy" ]]; then
       WEBHOOK_PROXY_DOMAIN="$old_domain"
       _webhook_remove_nginx_proxy

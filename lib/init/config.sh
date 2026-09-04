@@ -16,7 +16,8 @@ conf_load() {
   CYBER_ORDINARY="${CYBER_ORDINARY:-}"
   CYBER_AUDIT="${CYBER_AUDIT:-}"
   CYBER_SAFE="${CYBER_SAFE:-}"
-  LNMP_SERVICES="${LNMP_SERVICES:-nginx,php,mysql,redis,acme}"
+  LNMP_SERVICES="${LNMP_SERVICES:-php,mysql,redis,acme}"
+  CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
   NGINX_IMAGE="${NGINX_IMAGE:-nginx:stable-alpine}"
   MYSQL_IMAGE="${MYSQL_IMAGE:-mysql:8.0}"
   POSTGRES_IMAGE="${POSTGRES_IMAGE:-postgres:16-alpine}"
@@ -30,6 +31,23 @@ conf_load() {
   [[ -f "$CONF_FILE" ]] && source "$CONF_FILE" 2>/dev/null || true
   ACME_SSL_DNS_DEFAULT="${ACME_SSL_DNS_DEFAULT:-webroot}"
   CONTAINER_WWW="${CONTAINER_WWW:-${DATA_DIR}/www}"
+  CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
+  _normalize_lnmp_web_services
+}
+
+_normalize_lnmp_web_services() {
+  local s=",${LNMP_SERVICES}," had_nginx=0 had_php=0
+  [[ "$s" = *",nginx,"* ]] && had_nginx=1
+  [[ "$s" = *",php,"* ]] && had_php=1
+  [[ $had_nginx -eq 0 ]] && return 0
+  s="${s//,nginx,/,}"
+  if [[ $had_php -eq 0 && "$s" != *",caddy,"* ]]; then
+    s=",caddy${s}"
+  fi
+  s="${s//,,/,}"
+  s="${s#,}"
+  s="${s%,}"
+  LNMP_SERVICES="$s"
 }
 
 conf_save() {
@@ -52,6 +70,7 @@ CYBER_ORDINARY=${CYBER_ORDINARY}
 CYBER_AUDIT=${CYBER_AUDIT}
 CYBER_SAFE=${CYBER_SAFE}
 LNMP_SERVICES=${LNMP_SERVICES}
+CADDY_IMAGE=${CADDY_IMAGE}
 NGINX_IMAGE=${NGINX_IMAGE}
 MYSQL_IMAGE=${MYSQL_IMAGE}
 POSTGRES_IMAGE=${POSTGRES_IMAGE}

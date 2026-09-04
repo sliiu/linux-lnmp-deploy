@@ -369,9 +369,7 @@ _webhook_restore_backup() {
     local fe=""
     gen_nginx_frontend "$domain" ""
     fix_site_readable_for_nginx "$domain" "frontend" ""
-    if container_ok "lnmp-nginx"; then
-      docker exec lnmp-nginx nginx -t 2>&1 && docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
-    fi
+    _caddy_reload_soft "Caddy 已 reload"
   fi
 }
 
@@ -856,9 +854,7 @@ _webhook_deploy_release() {
 
   gen_nginx_frontend "$domain" ""
   fix_site_readable_for_nginx "$domain" "frontend" ""
-  if container_ok "lnmp-nginx"; then
-    docker exec lnmp-nginx nginx -t 2>&1 && docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
-  fi
+  _caddy_reload_soft "Caddy 已 reload"
   ok "站点 ${domain} 已更新到 release ${ver}"
 }
 
@@ -1116,9 +1112,7 @@ _webhook_deploy_gateway_release() {
   PM2_BUILD=n reload_pm2_site "$domain"
   gen_nginx_pm2 "$domain"
   fix_site_readable_for_nginx "$domain" "pm2" ""
-  if container_ok "lnmp-nginx"; then
-    docker exec lnmp-nginx nginx -t 2>&1 && docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
-  fi
+  _caddy_reload_soft "Caddy 已 reload"
   ok "站点 ${domain} 已更新到 gateway release ${ver}"
 }
 
@@ -1438,144 +1432,90 @@ _webhook_public_callback_url() {
   return 0
 }
 
-_nginx_strip_webhook_proxy() {
+_caddy_strip_webhook_proxy() {
   local conf="$1"
   [[ -f "$conf" ]] || return 0
   sed -i '/# deploy-site webhook-proxy BEGIN/,/# deploy-site webhook-proxy END/d' "$conf"
 }
 
-_nginx_webhook_proxy_block() {
+_caddy_webhook_proxy_block() {
   local hook_path="$1" port="$2" host
   host="$(_docker_host_gateway)"
-  cat <<NGX
-    # deploy-site webhook-proxy BEGIN
-    location ^~ ${hook_path} {
-        proxy_pass http://${host}:${port};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-        client_max_body_size 5m;
-        proxy_connect_timeout 10s;
-        proxy_send_timeout 2400s;
-        proxy_read_timeout 2400s;
-    }
-    # deploy-site webhook-proxy END
-NGX
+  cat <<CADDY
+	# deploy-site webhook-proxy BEGIN
+	handle ${hook_path}* {
+		reverse_proxy ${host}:${port}
+	}
+	# deploy-site webhook-proxy END
+CADDY
 }
 
-_nginx_merge_webhook_proxy() {
+_caddy_merge_webhook_proxy() {
   local conf="$1" hook_path="$2" port="$3"
-  local block_file tmp line inserted=0 last_brace=0 n=0
-  _nginx_strip_webhook_proxy "$conf"
-  block_file="$(mktemp)"
+  local block tmp
+  _caddy_strip_webhook_proxy "$conf"
+  block="$(_caddy_webhook_proxy_block "$hook_path" "$port")"
   tmp="$(mktemp)"
-  _nginx_webhook_proxy_block "$hook_path" "$port" > "$block_file"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    n=$((n + 1))
-    [[ "$line" == *'}'* ]] && last_brace=$n
-    if [[ "$inserted" -eq 0 && "$line" == *"location ~ /."* ]]; then
-      cat "$block_file"
+  if awk -v blk="$block" '
+    BEGIN { inserted=0 }
+    /^[^{\n]+ \{/ && !inserted {
+      print
+      printf "%s", blk
       inserted=1
-    fi
-    printf '%s\n' "$line"
-  done < "$conf" > "$tmp"
-  if [[ "$inserted" -ne 1 ]]; then
-    if [[ "$last_brace" -gt 0 ]]; then
-      awk -v ins="$last_brace" -v blk="$block_file" '
-        NR==ins { while ((getline l < blk) > 0) print l; close(blk) }
-        { print }
-      ' "$tmp" > "${tmp}.2"
-      mv "${tmp}.2" "$tmp"
-    else
-      cat "$block_file" >> "$tmp"
-    fi
+      next
+    }
+    { print }
+    END { if (!inserted) printf "%s", blk }
+  ' "$conf" > "$tmp"; then
+    mv "$tmp" "$conf"
+  else
+    rm -f "$tmp"
+    printf '%s\n' "$block" >> "$conf"
   fi
-  mv "$tmp" "$conf"
-  rm -f "$block_file"
   fix_nginx_conf_d_file "$conf"
 }
 
-_webhook_gen_standalone_nginx() {
+_webhook_gen_standalone_caddy() {
   local domain="$1" hook_path="$2" port="$3"
-  local conf="${NGINX_CONF}/${domain}.conf"
-  local block
-  block="$(_nginx_webhook_proxy_block "$hook_path" "$port")"
-  ensure_placeholder_cert "$domain"
-  cat > "$conf" <<NGINX
-server {
-    listen 80;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-${block}
-
-    location / { return 404; }
-}
-
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-
-    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
-    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-${block}
-
-    location / { return 404; }
-}
-NGINX
-  fix_nginx_conf_d_file "$conf"
+  mkdir -p "${CADDY_SITES:-${DATA_DIR}/caddy/sites}"
+  local body
+  body="$(_caddy_webhook_proxy_block "$hook_path" "$port")
+	respond 404
+"
+  _caddy_write_site "$domain" "$body"
 }
 
 _webhook_apply_nginx_proxy() {
   local domain="$1"
   local hook_path="${WEBHOOK_PATH:-/hooks}"
   local port="${WEBHOOK_PORT:-9080}"
-  local conf="${NGINX_CONF}/${domain}.conf"
-  mkdir -p "${WWW_ROOT}/${domain}/.well-known/acme-challenge"
+  local conf
+  conf="$(site_caddy_file "$domain")"
+  mkdir -p "${WWW_ROOT}/${domain}"
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${domain}" 2>/dev/null || true
   if [[ -f "$conf" ]]; then
-    info "在已有 Nginx 配置 ${conf} 中注入 Webhook 反代"
-    _nginx_merge_webhook_proxy "$conf" "$hook_path" "$port"
+    info "在已有 Caddy 配置 ${conf} 中注入 Webhook 反代"
+    _caddy_merge_webhook_proxy "$conf" "$hook_path" "$port"
   else
-    info "生成 Webhook 专用 Nginx 配置 ${conf}"
-    _webhook_gen_standalone_nginx "$domain" "$hook_path" "$port"
+    info "生成 Webhook 专用 Caddy 配置 ${conf}"
+    _webhook_gen_standalone_caddy "$domain" "$hook_path" "$port"
     warn "新域名请执行: $0 ssl --domain=${domain} 签发证书"
   fi
-  normalize_nginx_conf_d
-  if container_ok "lnmp-nginx"; then
-    docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
-    docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload"
+  if container_ok "$(_web_container)"; then
+    caddy_validate || die "Caddy 配置校验失败"
+    caddy_reload 2>/dev/null && ok "Caddy 已 reload"
   fi
 }
 
 _webhook_remove_nginx_proxy() {
   local domain="${WEBHOOK_PROXY_DOMAIN:-}"
   [[ -n "$domain" ]] || return 0
-  local conf="${NGINX_CONF}/${domain}.conf"
+  local conf
+  conf="$(site_caddy_file "$domain")"
   [[ -f "$conf" ]] || return 0
-  _nginx_strip_webhook_proxy "$conf"
+  _caddy_strip_webhook_proxy "$conf"
   fix_nginx_conf_d_file "$conf"
-  normalize_nginx_conf_d
-  container_ok "lnmp-nginx" && docker exec lnmp-nginx nginx -s reload 2>/dev/null || true
+  container_ok "$(_web_container)" && caddy_reload 2>/dev/null || true
 }
 
 _webhook_write_systemd_unit() {

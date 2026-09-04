@@ -244,6 +244,53 @@ menu_select() {
   MENU_SELECT_RESULT=$choice
 }
 
+_web_container() {
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-php$'; then
+    printf 'lnmp-php'
+  elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-caddy$'; then
+    printf 'lnmp-caddy'
+  else
+    printf 'lnmp-php'
+  fi
+}
+
+_web_bin() {
+  local c="${1:-$(_web_container)}"
+  if docker exec "$c" command -v frankenphp >/dev/null 2>&1; then
+    printf 'frankenphp'
+  else
+    printf 'caddy'
+  fi
+}
+
+caddy_validate() {
+  local c="${1:-$(_web_container)}"
+  docker exec "$c" "$(_web_bin "$c")" validate --config /etc/caddy/Caddyfile
+}
+
+caddy_reload() {
+  local c="${1:-$(_web_container)}"
+  docker exec "$c" "$(_web_bin "$c")" reload --config /etc/caddy/Caddyfile
+}
+
+_caddy_reload_soft() {
+  local msg="${1:-Caddy 已 reload}"
+  local c; c="$(_web_container)"
+  if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${c}$"; then
+    if caddy_validate "$c"; then
+      caddy_reload "$c" 2>/dev/null && ok "$msg" || warn "Caddy reload 失败"
+    else
+      warn "Caddy 配置校验失败，未 reload"
+    fi
+  fi
+}
+
+_php_franken_ok() {
+  local v="${1:-}"
+  [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || return 1
+  _lv_ge "$v" "8.2" && _lv_ge "8.5" "$v"
+}
+
 # 主.次版本号比较：_lv_ge "5.7" "5.6" → 0
 _lv_ge() {
   local a="$1" b="$2" a1 a2 b1 b2

@@ -17,12 +17,11 @@ cmd_remove() {
   rm -f "${NGINX_CONF}/${DOMAIN}.proxy-pass" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.webhook" 2>/dev/null || true
   stop_pm2_site "$DOMAIN"
-  if [[ -f "${NGINX_CONF}/${DOMAIN}.conf" ]]; then
-    rm -f "${NGINX_CONF}/${DOMAIN}.conf"
-    normalize_nginx_conf_d
-    docker exec lnmp-nginx nginx -s reload 2>/dev/null || true
-    ok "Nginx 配置已删除"
-  fi
+  rm -f "$(site_caddy_file "$DOMAIN")" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.conf" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.tls-mode" 2>/dev/null || true
+  container_ok "$(_web_container)" && caddy_reload 2>/dev/null || true
+  ok "Caddy 站点配置已删除"
 
   if [[ -d "${SSL_DIR}/${DOMAIN}" ]]; then
     rm -rf "${SSL_DIR}/${DOMAIN}"

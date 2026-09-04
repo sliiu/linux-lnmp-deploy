@@ -1,5 +1,9 @@
 # shellcheck shell=bash
 
+site_caddy_file() {
+  printf '%s/%s.caddy' "${CADDY_SITES:-${DATA_DIR}/caddy/sites}" "$1"
+}
+
 _laravel_sse_prefixes_resolve() {
   local domain="$1"
   local f="${NGINX_CONF}/${domain}.sse-prefixes"
@@ -17,38 +21,6 @@ _laravel_sse_prefixes_resolve() {
   printf '%s' "${LARAVEL_SSE_PREFIXES:-wave}"
 }
 
-# 将 Laravel 风格路径 /a/{b}/c 转为 nginx 正则 ^/a/[^/]+/c$（每一段 {name} → [^/]+）
-_laravel_sse_escape_static_for_nginx_re() {
-  local s="$1" out="" i c
-  for ((i = 0; i < ${#s}; i++)); do
-    c="${s:i:1}"
-    case "$c" in
-      .|\^|\$|\*|\+|\?|\(|\)|\{|\}|\||\[|\]|\\) out+="\\${c}" ;;
-      *) out+="$c" ;;
-    esac
-  done
-  printf '%s' "$out"
-}
-
-_laravel_sse_brace_path_to_nginx_regex() {
-  local s="$1" out="" post inner
-  [[ "$s" == /* ]] || s="/$s"
-  s="${s#/}"
-  while [[ "$s" == *'{'* ]]; do
-    [[ "$s" == *'{'*'}'* ]] || return 1
-    post="${s#*\{}"
-    inner="${post%%\}*}"
-    [[ -n "$inner" ]] || return 1
-    [[ "$inner" == *'{'* ]] && return 1
-    post="${post#"$inner"\}}"
-    out+="$(_laravel_sse_escape_static_for_nginx_re "${s%%\{*}")"
-    out+='[^/]+'
-    s="$post"
-  done
-  out+="$(_laravel_sse_escape_static_for_nginx_re "$s")"
-  printf '^/%s$' "$out"
-}
-
 apply_site_php_version_cli() {
   local domain="$1"
   [[ "${SITE_PHP_VERSION_CLI:-0}" -ne 1 ]] && return 0
@@ -60,8 +32,8 @@ apply_site_php_version_cli() {
     info "站点 ${domain} PHP 版本：清除 → 走默认 lnmp-php"
     return 0
   fi
-  [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || die "无效 --php-version: $v（应为 8.2 / 7.4）"
-  # 与 /etc/lnmp-env.conf 中 PHP_VERSION（默认 lnmp-php 容器）相同时短路：避免去找 lnmp-phpNN
+  [[ "$v" =~ ^[0-9]+\.[0-9]+$ ]] || die "无效 --php-version: $v（应为 8.2 / 8.3）"
+  _php_franken_ok "$v" || die "FrankenPHP 仅支持 PHP 8.2–8.5（当前: ${v}）"
   local _default_ver; _default_ver="$(_default_php_ver)"
   if [[ -n "$_default_ver" && "$v" = "$_default_ver" ]]; then
     rm -f "$f" 2>/dev/null || true
@@ -84,7 +56,6 @@ ensure_site_php_container() {
   if [[ -z "$v" ]]; then
     die "${cname} 未运行；请先执行 init.sh 部署 LNMP"
   fi
-  # 站点声明的版本若与默认版本一致（历史遗留 .php-version 文件），自动清理回退默认
   local _default_ver; _default_ver="$(_default_php_ver)"
   if [[ -n "$_default_ver" && "$v" = "$_default_ver" ]]; then
     warn "站点 ${domain} 声明 PHP ${v} = 当前默认；清理 .php-version 改用 lnmp-php"
@@ -110,7 +81,6 @@ apply_site_sse_prefixes_cli() {
   fi
 }
 
-# update：展示当前 SSE 规则（改用 --sse-prefixes）
 interactive_sse_prefixes_maybe_for_update() {
   local domain="$1"
   [[ "${YES:-0}" -eq 1 ]] && return 0
@@ -126,217 +96,110 @@ interactive_sse_prefixes_maybe_for_update() {
   cur_resolved=$(_laravel_sse_prefixes_resolve "$domain")
   cur_one=$(printf '%s' "$cur_resolved" | tr '\n' ' ' | tr -s '[:space:]' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
   echo ""
-  info "SSE（fastcgi → php:9001） 来源:${src}  当前规则: ${cur_one:-<空>}（改用 --sse-prefixes）"
+  info "SSE 来源:${src}  当前规则: ${cur_one:-<空>}（FrankenPHP 直出，改用 --sse-prefixes）"
 }
 
-# 输出一个 SSE location 块到 stdout；调用方负责拼接
-# $document_root / $request_uri 等保持 nginx 原变量字面量，不可被 shell 展开
-_laravel_sse_emit_upstream_block() {
-  local hdr="$1" svc="$2"
-  cat <<NGINX
-${hdr}
-        gzip                 off;
-        include              fastcgi_params;
-        fastcgi_pass         ${svc}:9001;
-        fastcgi_index        index.php;
-        fastcgi_param        SCRIPT_FILENAME \$document_root/index.php;
-        fastcgi_param        DOCUMENT_ROOT \$document_root;
-        fastcgi_param        REQUEST_URI \$request_uri;
-        fastcgi_param        QUERY_STRING \$query_string;
-        fastcgi_buffering    off;
-        fastcgi_read_timeout 86400s;
-        fastcgi_send_timeout 86400s;
-        fastcgi_buffer_size  32k;
-        fastcgi_buffers      8 16k;
-    }
-
-NGINX
+_caddy_security_headers() {
+  cat <<'CADDY'
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+CADDY
 }
 
-# 把单个 token（已 trim、已去重）渲染为对应的 location 块到 stdout
-_laravel_sse_emit_one_pattern() {
-  local tok="$1" svc="$2" hdr rx
-  if [[ "$tok" =~ ^~\*(.+)$ ]]; then
-    _laravel_sse_emit_upstream_block "    location ~* ${BASH_REMATCH[1]} {" "$svc"
-  elif [[ "$tok" =~ ^~(.+)$ ]]; then
-    _laravel_sse_emit_upstream_block "    location ~ ${BASH_REMATCH[1]} {" "$svc"
-  elif [[ "$tok" == *'{'*'}'* ]]; then
-    tok="${tok#/}"
-    [[ "$tok" == /* ]] || tok="/$tok"
-    if rx=$(_laravel_sse_brace_path_to_nginx_regex "$tok") 2>/dev/null; then
-      printf -v hdr '    location ~ %s {' "$rx"
-      _laravel_sse_emit_upstream_block "$hdr" "$svc"
-    fi
-  else
-    tok="${tok#/}"
-    tok="${tok%/}"
-    [[ -z "$tok" || "$tok" == '~' ]] && return 0
-    _laravel_sse_emit_upstream_block "    location ^~ /${tok} {" "$svc"
+_caddy_tls_block() {
+  local domain="$1"
+  local modef="${NGINX_CONF}/${domain}.tls-mode"
+  local mode=""
+  [[ -f "$modef" ]] && mode="$(head -n1 "$modef" | tr -d '[:space:]')"
+  if [[ "$mode" = "file" ]]; then
+    ensure_placeholder_cert "$domain"
+    printf '\ttls /ssl/%s/fullchain.cer /ssl/%s/%s.key\n' "$domain" "$domain" "$domain"
+  elif [[ "${SSL_STAGING:-0}" = "1" ]]; then
+    printf '\ttls {\n\t\tca https://acme-staging-v02.api.letsencrypt.org/directory\n\t}\n'
   fi
 }
 
-_nginx_laravel_sse_location_blocks() {
-  local raw="${1:-}" svc="${2:-php}"
-  local line tok seen=" "
-  local -a parts
-  [[ -z "$raw" ]] && raw="${LARAVEL_SSE_PREFIXES:-wave}"
-  # 每行可多条（空格/逗号）；禁止用「是否含换行」分支：单行文件末尾也有 \n，会把整行当一条 token 导致 {param} 路径未拆开
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line%%#*}"
-    line="${line#"${line%%[![:space:]]*}"}"
-    line="${line%"${line##*[![:space:]]}"}"
-    [[ -z "$line" ]] && continue
-    read -ra parts <<< "$(printf '%s' "$line" | tr ',' ' ')"
-    for tok in "${parts[@]}"; do
-      tok="${tok#"${tok%%[![:space:]]*}"}"
-      tok="${tok%"${tok##*[![:space:]]}"}"
-      [[ -z "$tok" ]] && continue
-      case "${seen}" in *"|${tok}|"*) continue ;; esac
-      seen+="|${tok}| "
-      _laravel_sse_emit_one_pattern "$tok" "$svc"
-    done
-  done < <(printf '%s\n' "$raw")
+_caddy_write_site() {
+  local domain="$1" body="$2"
+  local dir="${CADDY_SITES:-${DATA_DIR}/caddy/sites}"
+  mkdir -p "$dir"
+  local tls headers
+  tls="$(_caddy_tls_block "$domain")"
+  headers="$(_caddy_security_headers)"
+  cat > "$(site_caddy_file "$domain")" <<CADDY
+${domain} {
+${tls}${headers}${body}
+}
+CADDY
+  chmod 644 "$(site_caddy_file "$domain")" 2>/dev/null || true
 }
 
-gen_nginx_laravel() {
+gen_caddy_laravel() {
   local domain="$1"
   local svc; svc="$(_php_service_for_site "$domain")"
-  cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
-server {
-    listen 80;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-    root ${CONTAINER_WWW}/${domain}/public;
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain}/public;
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / { return 301 https://\$host\$request_uri; }
+  local body
+  if [[ "$svc" = "php" ]]; then
+    body=$(cat <<CADDY
+	root * ${CONTAINER_WWW}/${domain}/public
+	encode zstd gzip
+	php_server {
+		try_files {path} index.php
+	}
+	@static path *.js *.css *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.woff2 *.ttf *.eot
+	header @static Cache-Control "public, immutable"
+	request_body {
+		max_size 64MB
+	}
+CADDY
+)
+  else
+    body=$(cat <<CADDY
+	encode zstd gzip
+	reverse_proxy ${svc}:8080 {
+		flush_interval -1
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+	request_body {
+		max_size 64MB
+	}
+CADDY
+)
+  fi
+  _caddy_write_site "$domain" "$body"
 }
 
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-    root ${CONTAINER_WWW}/${domain}/public;
-    index index.php;
+gen_nginx_laravel() { gen_caddy_laravel "$@"; }
 
-    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
-    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
-
-    add_header X-Frame-Options            "SAMEORIGIN"                        always;
-    add_header X-Content-Type-Options     "nosniff"                           always;
-    add_header X-XSS-Protection           "1; mode=block"                    always;
-    add_header Referrer-Policy            "strict-origin-when-cross-origin"  always;
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain}/public;
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-$(_nginx_laravel_sse_location_blocks "$(_laravel_sse_prefixes_resolve "$domain")" "$svc")
-    location ~ \.php\$ {
-        include              fastcgi_params;
-        fastcgi_pass         ${svc}:9000;
-        fastcgi_index        index.php;
-        fastcgi_param        SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        fastcgi_param        REQUEST_URI \$request_uri;
-        fastcgi_param        QUERY_STRING \$query_string;
-        fastcgi_read_timeout 300;
-        fastcgi_buffer_size  32k;
-        fastcgi_buffers      8 16k;
-    }
-
-    location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)\$ {
-        expires 30d;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-    }
-
-    location ~ /\.(?!well-known) { deny all; }
-}
-NGINX
-  fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
-}
-
-gen_nginx_pm2() {
+gen_caddy_pm2() {
   local domain="$1" port="${2:-}"
   [[ -n "$port" ]] || port="$(pm2_port_for_site "$domain")"
-  [[ "$port" =~ ^[0-9]+$ ]] || die "gen_nginx_pm2: 无效端口（${domain}）"
-
+  [[ "$port" =~ ^[0-9]+$ ]] || die "gen_caddy_pm2: 无效端口（${domain}）"
   local upstream_host
   upstream_host="$(_docker_host_gateway)"
-
-  cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
-server {
-    listen 80;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-    root ${CONTAINER_WWW}/${domain};
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / { return 301 https://\$host\$request_uri; }
+  local body
+  body=$(cat <<CADDY
+	request_body {
+		max_size 110MB
+	}
+	reverse_proxy ${upstream_host}:${port} {
+		flush_interval -1
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+CADDY
+)
+  _caddy_write_site "$domain" "$body"
 }
 
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-
-    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
-    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
-
-    # Gateway PPTX 上传（与 packages/gateway IMPORT_MAX_BYTES 默认 100MB 对齐）
-    client_max_body_size 110m;
-
-    add_header X-Frame-Options            "SAMEORIGIN"                        always;
-    add_header X-Content-Type-Options     "nosniff"                           always;
-    add_header X-XSS-Protection           "1; mode=block"                    always;
-    add_header Referrer-Policy            "strict-origin-when-cross-origin"  always;
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / {
-        proxy_pass         http://${upstream_host}:${port};
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade \$http_upgrade;
-        proxy_set_header   Connection "upgrade";
-        proxy_set_header   Host \$host;
-        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
-    }
-
-    location ~ /\.(?!well-known) { deny all; }
-}
-NGINX
-  fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
-}
+gen_nginx_pm2() { gen_caddy_pm2 "$@"; }
 
 _normalize_proxy_pass() {
   local u="${1:-}"
@@ -351,7 +214,7 @@ _normalize_proxy_pass() {
   printf '%s' "$u"
 }
 
-_proxy_pass_for_nginx() {
+_proxy_pass_for_caddy() {
   local u="$1" scheme rest hostport path host port
   scheme="${u%%://*}"
   rest="${u#*://}"
@@ -382,145 +245,50 @@ _proxy_pass_for_nginx() {
   fi
 }
 
-gen_nginx_proxy() {
-  local domain="$1" raw="${2:-}" nginx_url host_hdr ssl_extra=""
+gen_caddy_proxy() {
+  local domain="$1" raw="${2:-}" nginx_url
   [[ -n "$raw" ]] || raw="$(proxy_pass_for_site "$domain")"
-  raw="$(_normalize_proxy_pass "$raw")" || die "gen_nginx_proxy: 无效上游（${domain}）"
-  nginx_url="$(_proxy_pass_for_nginx "$raw")"
-  host_hdr='$host'
-  if [[ "$nginx_url" == https://* ]]; then
-    ssl_extra=$'        proxy_ssl_server_name on;\n'
-    host_hdr='$proxy_host'
-  fi
-
-  cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
-server {
-    listen 80;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-    root ${CONTAINER_WWW}/${domain};
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / { return 301 https://\$host\$request_uri; }
+  raw="$(_normalize_proxy_pass "$raw")" || die "gen_caddy_proxy: 无效上游（${domain}）"
+  nginx_url="$(_proxy_pass_for_caddy "$raw")"
+  local body
+  body=$(cat <<CADDY
+	request_body {
+		max_size 100MB
+	}
+	reverse_proxy ${nginx_url} {
+		flush_interval -1
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+CADDY
+)
+  _caddy_write_site "$domain" "$body"
 }
 
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
+gen_nginx_proxy() { gen_caddy_proxy "$@"; }
 
-    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
-    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
-
-    client_max_body_size 100m;
-
-    add_header X-Frame-Options            "SAMEORIGIN"                        always;
-    add_header X-Content-Type-Options     "nosniff"                           always;
-    add_header X-XSS-Protection           "1; mode=block"                    always;
-    add_header Referrer-Policy            "strict-origin-when-cross-origin"  always;
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / {
-        proxy_pass         ${nginx_url};
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade \$http_upgrade;
-        proxy_set_header   Connection "upgrade";
-        proxy_set_header   Host ${host_hdr};
-${ssl_extra}        proxy_set_header   X-Real-IP \$remote_addr;
-        proxy_set_header   X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header   X-Forwarded-Proto \$scheme;
-        proxy_read_timeout 86400s;
-        proxy_send_timeout 86400s;
-    }
-
-    location ~ /\.(?!well-known) { deny all; }
-}
-NGINX
-  fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
-}
-
-gen_nginx_frontend() {
+gen_caddy_frontend() {
   local domain="$1" sub="$2"
   local root_path="${CONTAINER_WWW}/${domain}"
   [[ -n "$sub" ]] && root_path="${CONTAINER_WWW}/${domain}/${sub}"
-
-  cat > "${NGINX_CONF}/${domain}.conf" <<NGINX
-server {
-    listen 80;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-    root ${root_path};
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    location / { return 301 https://\$host\$request_uri; }
+  local body
+  body=$(cat <<CADDY
+	root * ${root_path}
+	encode zstd gzip
+	try_files {path} /index.html
+	file_server
+	@html path /index.html
+	header @html Cache-Control "no-cache"
+	@assets path *.js *.css *.woff2 *.png *.jpg *.jpeg *.gif *.ico *.svg *.woff *.ttf *.eot
+	header @assets Cache-Control "public, immutable"
+CADDY
+)
+  _caddy_write_site "$domain" "$body"
 }
 
-server {
-    listen 443 ssl;
-    http2 on;
-    server_name ${domain};
-    if (\$host != "${domain}") { return 444; }
-    root ${root_path};
-    index index.html;
+gen_nginx_frontend() { gen_caddy_frontend "$@"; }
 
-    ssl_certificate     /etc/nginx/ssl/${domain}/fullchain.cer;
-    ssl_certificate_key /etc/nginx/ssl/${domain}/${domain}.key;
-
-    add_header X-Frame-Options            "SAMEORIGIN"                        always;
-    add_header X-Content-Type-Options     "nosniff"                           always;
-    add_header X-XSS-Protection           "1; mode=block"                    always;
-    add_header Referrer-Policy            "strict-origin-when-cross-origin"  always;
-
-    location ^~ /.well-known/acme-challenge/ {
-        root ${CONTAINER_WWW}/${domain};
-        allow all;
-        default_type "text/plain";
-        try_files \$uri =404;
-    }
-
-    # HEAD / 或同源检查更新：依赖静态文件的 Last-Modified / ETag；CDN 勿对 HTML 长缓存以免边缘 ETag 长期不变
-    etag on;
-
-    location / {
-        try_files \$uri \$uri/ /index.html;
-    }
-
-    location = /index.html {
-        add_header Cache-Control "no-cache";
-    }
-
-    location ~* \.(js|css|woff2?|png|jpg|jpeg|gif|ico|svg|woff|ttf|eot)\$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-    }
-
-    location ~ /\.(?!well-known) { deny all; }
-}
-NGINX
-  fix_nginx_conf_d_file "${NGINX_CONF}/${domain}.conf"
-}
-
-# 前端静态根相对 ${WWW_ROOT}/<domain>：按「index.html 所在目录」推断，避免仅有空 dist/ 时 root 指错导致 /js/* 全 404
 effective_frontend_subdir() {
   local domain="$1"
   if frontend_release_webhook_site "$domain" 2>/dev/null || _adding_frontend_release_webhook; then
@@ -550,4 +318,3 @@ effective_frontend_subdir() {
   fi
   printf '%s\n' ""
 }
-

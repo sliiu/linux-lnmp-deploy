@@ -112,60 +112,50 @@ issue_ssl() {
       --config-home /acme.sh \
       --dns "$ssl_dns" --keylength ec-256 --server "${acme_ca}" \
       ${force} || acme_exit=$?
-  else
-    local wk_inner
-    if [[ "$site_type" = "laravel" ]]; then
-      wk_inner="/www/${domain}/public"
-      mkdir -p "${WWW_ROOT}/${domain}/public/.well-known/acme-challenge"
-    else
-      wk_inner="/www/${domain}"
-      mkdir -p "${WWW_ROOT}/${domain}/.well-known/acme-challenge"
+    if [[ $acme_exit -ne 0 && $acme_exit -ne 2 ]]; then
+      if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
+        warn "SSL 签发失败 (exit=${acme_exit})，站点 webhook 已注册，可稍后 deploy-site update 或手动签发"
+        return 1
+      fi
+      die "SSL 签发失败 (exit=${acme_exit})。Let's Encrypt 对同一域名 7 天内正式证书约 5 张上限；遇 429 请等到日志中 retry after 之后再试，或临时加 --ssl-staging 使用测试 CA。https://letsencrypt.org/docs/rate-limits/"
     fi
-    chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${domain}/.well-known" 2>/dev/null || true
-    chmod -R 755 "${WWW_ROOT}/${domain}/.well-known" 2>/dev/null || true
-
-    docker exec lnmp-acme \
-      acme.sh --issue -d "${domain}" \
+    if [[ $acme_exit -eq 2 ]]; then
+      info "证书已存在且未过期，跳过签发 (使用 --force-ssl 强制)"
+    fi
+    if ! docker exec lnmp-acme \
+      acme.sh --install-cert -d "${domain}" \
       --config-home /acme.sh \
-      --webroot "${wk_inner}" --keylength ec-256 --server "${acme_ca}" \
-      ${force} || acme_exit=$?
+      --server "${acme_ca}" \
+      --ecc \
+      --key-file       "/acme.sh/${domain}/${domain}.key" \
+      --fullchain-file "/acme.sh/${domain}/fullchain.cer" \
+      --reloadcmd "true"; then
+      if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
+        warn "acme.sh --install-cert 失败，站点 webhook 已注册，可稍后重试 SSL"
+        return 1
+      fi
+      die "acme.sh --install-cert 失败。排查: docker exec lnmp-acme acme.sh --list --config-home /acme.sh"
+    fi
+    printf 'file\n' > "${NGINX_CONF}/${domain}.tls-mode"
+    fix_nginx_ssl_domain "$domain"
+  else
+    info "Caddy 自动 HTTPS（HTTP-01）"
+    printf 'auto\n' > "${NGINX_CONF}/${domain}.tls-mode"
   fi
+  case "${site_type:-$(_site_type_for_domain "$domain")}" in
+    laravel) gen_caddy_laravel "$domain" ;;
+    pm2) gen_caddy_pm2 "$domain" ;;
+    proxy) gen_caddy_proxy "$domain" ;;
+    *) gen_caddy_frontend "$domain" "${frontend_root:-}" ;;
+  esac
 
-  if [[ $acme_exit -ne 0 && $acme_exit -ne 2 ]]; then
+  wait_container_running "$(_web_container)" 30
+  if ! caddy_reload; then
     if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
-      warn "SSL 签发失败 (exit=${acme_exit})，站点 webhook 已注册，可稍后 deploy-site update 或手动签发"
+      warn "Caddy reload 失败（证书可能未就绪），站点 webhook 已注册"
       return 1
     fi
-    die "SSL 签发失败 (exit=${acme_exit})。Let's Encrypt 对同一域名 7 天内正式证书约 5 张上限；遇 429 请等到日志中 retry after 之后再试，或临时加 --ssl-staging 使用测试 CA。https://letsencrypt.org/docs/rate-limits/"
-  fi
-  if [[ $acme_exit -eq 2 ]]; then
-    info "证书已存在且未过期，跳过签发 (使用 --force-ssl 强制)"
-  fi
-
-  if ! docker exec lnmp-acme \
-    acme.sh --install-cert -d "${domain}" \
-    --config-home /acme.sh \
-    --server "${acme_ca}" \
-    --ecc \
-    --key-file       "/acme.sh/${domain}/${domain}.key" \
-    --fullchain-file "/acme.sh/${domain}/fullchain.cer" \
-    --reloadcmd "true"; then
-    if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
-      warn "acme.sh --install-cert 失败，站点 webhook 已注册，可稍后重试 SSL"
-      return 1
-    fi
-    die "acme.sh --install-cert 失败。排查: docker exec lnmp-acme acme.sh --list --config-home /acme.sh"
-  fi
-
-  fix_nginx_ssl_domain "$domain"
-
-  wait_container_running "lnmp-nginx" 30
-  if ! docker exec lnmp-nginx nginx -s reload; then
-    if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
-      warn "nginx reload 失败（证书可能未就绪），站点 webhook 已注册"
-      return 1
-    fi
-    die "nginx reload 失败（请检查证书路径与权限）"
+    die "Caddy reload 失败（请检查证书路径与权限）"
   fi
   ok "SSL 证书已安装"
 }

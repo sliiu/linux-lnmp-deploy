@@ -80,7 +80,7 @@ usage() {
   status                查看当前状态
   install <组件>        安装指定组件
   uninstall <组件>      卸载指定组件
-  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: nginx|php|mysql|postgres|redis|acme|phpmyadmin
+  update lnmp [组件]    拉取镜像并重建容器；省略组件则全部；组件: caddy|php|mysql|postgres|redis|acme|phpmyadmin
   account [子命令]      账户/组/AllowUsers（见 account help）
 
 组件:
@@ -90,9 +90,10 @@ usage() {
   zsh         Oh-My-Zsh
   ssh         SSH 安全策略
   lnmp        LNMP 全部容器
-  nginx       Nginx 容器
-  php         PHP 默认容器（lnmp-php；会一并卸掉所有额外 PHP）
-  php-X.Y     仅卸载额外 PHP（如 php-7.4 → lnmp-php74）
+  nginx       兼容别名，转 caddy（无 php 时）或忽略（php 已含 Caddy）
+  caddy       Caddy 容器（无 PHP 时的 Web 入口）
+  php         FrankenPHP（lnmp-php，含 Caddy；会一并卸掉所有额外 PHP）
+  php-X.Y     仅卸载额外 PHP（如 php-8.2 → lnmp-php82）
   mysql       MySQL 容器
   postgres    PostgreSQL 容器
   redis       Redis 容器
@@ -110,9 +111,10 @@ usage() {
   --alpine-mirror=HOST    Alpine 源
   --node-version=VER     Node.js 主版本（fnm，默认 22）
   --node-mirror=URL      Node 二进制镜像 [https://npmmirror.com/mirrors/node]
-  --php-version=VER       PHP 主版本，对应 php:VER-fpm-alpine（如 8.3）
+  --php-version=VER       PHP 主版本，对应 dunglas/frankenphp:phpVER（8.2–8.5）
   --php-ext=EXT,...       PHP 扩展（逗号分隔）
-  --nginx-image=IMG       Nginx 镜像 (如 nginx:stable-alpine)
+  --caddy-image=IMG       Caddy 镜像 (如 caddy:2-alpine)
+  --nginx-image=IMG       兼容别名，写入 CADDY_IMAGE
   --mysql-image=IMG       MySQL 镜像 (如 mysql:8.0)
   --postgres-image=IMG    PostgreSQL 镜像 (如 postgres:16-alpine)
   --redis-image=IMG       Redis 镜像 (如 redis:alpine)
@@ -133,10 +135,10 @@ usage() {
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install pm2 --node-version=22
-  # PM2 网关栈（无 php）：nginx 反代 + postgres + redis + acme + 宿主机 PM2
+  # PM2 网关栈（无 php）：caddy 反代 + postgres + redis + acme + 宿主机 PM2
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install devops
-  $0 install nginx
+  $0 install caddy
   $0 install postgres --postgres-pwd=secret
   $0 install redis
   $0 install acme --acme-email=a@b.com
@@ -144,7 +146,7 @@ usage() {
   $0 install lnmp --php-version=8.3 --mysql-pwd=secret --postgres-pwd=secret --acme-email=a@b.com
   $0 install postgres --postgres-image=postgres:16-alpine --postgres-pwd=secret
   $0 update lnmp
-  $0 update lnmp nginx
+  $0 update lnmp php
   $0 install ssh --ssh-port=2222 --root-login=no
   $0 uninstall redis
   $0 account list
@@ -180,7 +182,8 @@ main() {
       --node-version=*)   NODE_VERSION="${arg#*=}" ;;
       --node-mirror=*)    FNM_NODE_DIST_MIRROR="${arg#*=}" ;;
       --php-ext=*)        PHP_EXTENSIONS="${arg#*=}" ;;
-      --nginx-image=*)    NGINX_IMAGE="${arg#*=}" ;;
+      --caddy-image=*)    CADDY_IMAGE="${arg#*=}" ;;
+      --nginx-image=*)    CADDY_IMAGE="${arg#*=}" ;;
       --mysql-image=*)    MYSQL_IMAGE="${arg#*=}" ;;
       --postgres-image=*) POSTGRES_IMAGE="${arg#*=}" ;;
       --redis-image=*)    REDIS_IMAGE="${arg#*=}" ;;
@@ -217,7 +220,16 @@ main() {
         zsh)      install_zsh ;;
         ssh)      install_ssh ;;
         lnmp)     install_lnmp ;;
-        nginx)    LNMP_SERVICES="${LNMP_SERVICES},nginx"; install_lnmp "nginx" ;;
+        nginx|caddy)
+          if has_service "php"; then
+            info "php（FrankenPHP）已含 Caddy"
+            LNMP_SERVICES="${LNMP_SERVICES},php"
+            install_lnmp "php"
+          else
+            LNMP_SERVICES="${LNMP_SERVICES},caddy"
+            install_lnmp "caddy"
+          fi
+          ;;
         php)      LNMP_SERVICES="${LNMP_SERVICES},php";   install_lnmp "php" ;;
         mysql)    LNMP_SERVICES="${LNMP_SERVICES},mysql";  install_lnmp "mysql" ;;
         postgres) LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
@@ -261,7 +273,7 @@ main() {
         zsh)      uninstall_zsh ;;
         ssh)      uninstall_ssh ;;
         lnmp)     uninstall_lnmp "all" ;;
-        nginx)    uninstall_lnmp "nginx" ;;
+        nginx|caddy) uninstall_lnmp "caddy" ;;
         php)      uninstall_lnmp "php" ;;
         php-*)    uninstall_lnmp "$target" ;;
         mysql)    uninstall_lnmp "mysql" ;;

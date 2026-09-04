@@ -483,13 +483,20 @@ parse_args() {
 
 # 列出 ${NGINX_CONF}/*.conf 已部署站点（去掉 default）
 _list_deployed_domains() {
-  local conf name
-  for conf in "${NGINX_CONF}"/*.conf; do
-    [[ -f "$conf" ]] || continue
-    name=$(basename "$conf" .conf)
-    [[ "$name" = "default" ]] && continue
+  local f name seen=" "
+  local dir="${CADDY_SITES:-${DATA_DIR}/caddy/sites}"
+  shopt -s nullglob
+  for f in "$dir"/*.caddy "${NGINX_CONF}"/*.conf; do
+    [[ -f "$f" ]] || continue
+    name=$(basename "$f")
+    name="${name%.caddy}"
+    name="${name%.conf}"
+    [[ "$name" = "default" || "$name" = "000-placeholder" ]] && continue
+    case "$seen" in *" $name "*) continue ;; esac
+    seen+=" $name "
     printf '%s\n' "$name"
   done
+  shopt -u nullglob
 }
 
 # DOMAIN 为空 + TTY 时弹菜单选择已部署站点；prefer_action=update/remove/ssl/status 仅用于标题
@@ -686,9 +693,9 @@ _pm2_site_has_launchable_code() {
 }
 
 _nginx_reload_or_die() {
-  wait_container_running "lnmp-nginx" 45
-  docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
-  docker exec lnmp-nginx nginx -s reload
+  wait_container_running "$(_web_container)" 45
+  caddy_validate || die "Caddy 配置校验失败"
+  caddy_reload
 }
 
 # Webhook Release 首次部署：无代码也应完整注册站点（.webhook / 类型 / 端口），打破「无代码→无法 webhook」死循环
@@ -722,29 +729,31 @@ _cmd_add_webhook_release_site() {
   ok "Webhook 站点已注册: $(site_webhook_file "$domain")"
 
   echo ""
-  hr; info "[1/6] Nginx 配置（Webhook Release）"; echo ""
+  hr; info "[1/6] Caddy 配置（Webhook Release）"; echo ""
   if [[ "$SITE_TYPE" = "pm2" ]]; then
     gen_nginx_pm2 "$domain"
     _nginx_reload_or_die
-    ok "Nginx 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$domain")）"
+    ok "Caddy 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$domain")）"
   else
     gen_nginx_frontend "$domain" ""
     _nginx_reload_or_die
-    ok "Nginx 配置已生成（站点根待 Release 写入）"
+    ok "Caddy 配置已生成（站点根待 Release 写入）"
   fi
 
   echo ""
   hr; info "[3/6] SSL 证书"; echo ""
-  if container_ok "lnmp-acme"; then
-    SSL_SOFT_FAIL=1
-    if [[ "$SITE_TYPE" = "frontend" ]]; then
+  if _is_dns_mode "${SSL_DNS:-webroot}"; then
+    if container_ok "lnmp-acme"; then
+      SSL_SOFT_FAIL=1
       issue_ssl "$domain" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "" || true
+      unset SSL_SOFT_FAIL
     else
-      issue_ssl "$domain" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "" || true
+      warn "lnmp-acme 未运行，跳过 DNS-01 签发"
     fi
-    unset SSL_SOFT_FAIL
   else
-    warn "lnmp-acme 未运行，跳过 SSL 签发"
+    SSL_SOFT_FAIL=1
+    issue_ssl "$domain" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "" || true
+    unset SSL_SOFT_FAIL
   fi
 
   echo ""
@@ -782,7 +791,7 @@ collect_interactive() {
       "laravel (PHP 后端)" \
       "frontend (静态/SPA)" \
       "pm2 (Node.js 应用)" \
-      "proxy (Nginx 反代)"
+      "proxy (Caddy 反代)"
     _st_i=$MENU_SELECT_RESULT
     case "$_st_i" in
       1) SITE_TYPE="frontend" ;;
@@ -902,7 +911,7 @@ collect_interactive() {
 
 _require_deploy_containers() {
   local site_type="${1:-${SITE_TYPE:-laravel}}"
-  container_ok "lnmp-nginx" || menu_fail "容器 lnmp-nginx 未运行，请先执行: init.sh install nginx" || return 1
+  container_ok "$(_web_container)" || menu_fail "Web 容器 $(_web_container) 未运行，请先执行: init.sh install php 或 init.sh install caddy" || return 1
   if [[ "$site_type" = "laravel" ]]; then
     container_ok "lnmp-php" || menu_fail "容器 lnmp-php 未运行，请先执行: init.sh install php" || return 1
     ensure_php_fpm_slowlog_host_artifacts
@@ -934,7 +943,7 @@ cmd_add() {
     printf "  %-18s %s\n" "域名"   "$DOMAIN"
     printf "  %-18s %s\n" "类型"   "$SITE_TYPE"
     if [[ "$SITE_TYPE" = "proxy" ]]; then
-      printf "  %-18s %s\n" "部署" "Nginx 反代（不 clone）"
+      printf "  %-18s %s\n" "部署" "Caddy 反代（不 clone）"
       printf "  %-18s %s\n" "反代上游" "${SITE_PROXY_PASS}"
     elif [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" = "release" ]]; then
       printf "  %-18s %s\n" "部署"   "Webhook Release（不 clone）"
@@ -989,19 +998,17 @@ cmd_add() {
   normalize_nginx_ssl_trees
 
   echo ""
-  hr; info "[1/6] Nginx 配置"; echo ""
+  hr; info "[1/6] Caddy 配置"; echo ""
   if [[ "$SITE_TYPE" = "laravel" ]]; then
     apply_site_php_version_cli "$DOMAIN"
     ensure_site_php_container "$DOMAIN"
     apply_site_sse_prefixes_cli "$DOMAIN"
     gen_nginx_laravel "$DOMAIN"
-    wait_container_running "lnmp-nginx" 45
-    docker exec lnmp-nginx nginx -t 2>&1 || die "Nginx 配置校验失败"
-    docker exec lnmp-nginx nginx -s reload
-    ok "Nginx 配置已生成"
+    _nginx_reload_or_die
+    ok "Caddy 配置已生成"
     write_site_type_file "$DOMAIN" "laravel"
   elif [[ "$SITE_TYPE" = "pm2" ]]; then
-    info "PM2 站点：Nginx 反代在代码部署与 PM2 启动后生成"
+    info "PM2 站点：Caddy 反代在代码部署与 PM2 启动后生成"
     write_site_type_file "$DOMAIN" "pm2"
   elif [[ "$SITE_TYPE" = "proxy" ]]; then
     mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
@@ -1015,13 +1022,13 @@ cmd_add() {
     }
     gen_nginx_proxy "$DOMAIN"
     _nginx_reload_or_die
-    ok "Nginx 反代已生成（→ $(proxy_pass_for_site "$DOMAIN")）"
+    ok "Caddy 反代已生成（→ $(proxy_pass_for_site "$DOMAIN")）"
     write_site_type_file "$DOMAIN" "proxy"
   else
     if _adding_frontend_release_webhook; then
-      info "前端站点：Webhook Release，Nginx 根目录 = 站点目录（待 Release 推送后写入产物）"
+      info "前端站点：Webhook Release，Caddy 根目录 = 站点目录（待 Release 推送后写入产物）"
     else
-      info "前端站点：Nginx 在代码部署后生成（未指定子目录时：有 dist 用 dist，否则站点根）"
+      info "前端站点：Caddy 在代码部署后生成（未指定子目录时：有 dist 用 dist，否则站点根）"
     fi
   fi
 
@@ -1055,7 +1062,7 @@ cmd_add() {
     [[ "$_release_wh" -eq 0 ]] && _fe_sub=$(effective_frontend_subdir "$DOMAIN")
     gen_nginx_frontend "$DOMAIN" "$_fe_sub"
     _nginx_reload_or_die
-    ok "Nginx 配置已生成"
+    ok "Caddy 配置已生成"
     write_site_type_file "$DOMAIN" "frontend"
   elif [[ "$SITE_TYPE" = "pm2" ]]; then
     mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
@@ -1074,22 +1081,23 @@ cmd_add() {
     fi
     gen_nginx_pm2 "$DOMAIN"
     _nginx_reload_or_die
-    ok "Nginx 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$DOMAIN")）"
+    ok "Caddy 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$DOMAIN")）"
   fi
 
   if [[ "${WEBHOOK_RELEASE_ADD_DONE:-0}" -ne 1 ]]; then
     echo ""
     hr; info "[3/6] SSL 证书"; echo ""
-    if container_ok "lnmp-acme"; then
-      if [[ "$SITE_TYPE" = "frontend" ]]; then
-        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "${_fe_sub}"
-      elif [[ "$SITE_TYPE" = "pm2" || "$SITE_TYPE" = "proxy" ]]; then
-        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" ""
+    local _ssl_fe=""
+    [[ "$SITE_TYPE" = "frontend" ]] && _ssl_fe="${_fe_sub}"
+    [[ "$SITE_TYPE" = "laravel" ]] && _ssl_fe="dist"
+    if _is_dns_mode "${SSL_DNS:-webroot}"; then
+      if container_ok "lnmp-acme"; then
+        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "$_ssl_fe"
       else
-        issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "dist"
+        warn "lnmp-acme 未运行，跳过 DNS-01 签发"
       fi
     else
-      warn "lnmp-acme 未运行，跳过 SSL 签发"
+      issue_ssl "$DOMAIN" "$SITE_TYPE" "${SSL_DNS:-webroot}" "${FORCE_SSL:-}" "$_ssl_fe"
     fi
   fi
 
@@ -1258,8 +1266,8 @@ cmd_update() {
     chmod -R 775 "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     if command -v setfacl &>/dev/null; then
-      setfacl -R  -m u:82:rwX "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
-      setfacl -dR -m u:82:rwX "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
+      setfacl -R  -m "u:${PHP_C_UID}:rwX" "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
+      setfacl -dR -m "u:${PHP_C_UID}:rwX" "${site_dir}/storage" "${site_dir}/bootstrap/cache" 2>/dev/null || true
     fi
 
     if [[ "${RUN_MIGRATE:-y}" = "y" ]]; then
@@ -1281,10 +1289,10 @@ cmd_update() {
       docker_php_artisan "$DOMAIN" route:cache 2>/dev/null || true
     fi
 
-    info "php-fpm graceful reload（清空 OPCache，${cname}）..."
-    docker exec "$cname" sh -c 'kill -USR2 1' 2>/dev/null \
-      && ok "PHP-FPM 已 graceful reload（${cname}，OPCache 已清空）" \
-      || warn "PHP-FPM reload 失败，OPCache 未清空；如内存持续偏高请手动: docker restart ${cname}"
+    info "FrankenPHP reload（${cname}）..."
+    docker exec "$cname" frankenphp reload --config /etc/caddy/Caddyfile 2>/dev/null \
+      && ok "FrankenPHP 已 reload（${cname}）" \
+      || warn "FrankenPHP reload 失败；可手动: docker restart ${cname}"
 
     # 切换 PHP 版本时 cron 里的 docker exec 仍指向旧容器，若已注册过则重写
     local _cron_log="${WWW_ROOT}/${DOMAIN}/storage/logs/cron.log"
@@ -1307,25 +1315,13 @@ cmd_update() {
     interactive_sse_prefixes_maybe_for_update "$DOMAIN"
     apply_site_sse_prefixes_cli "$DOMAIN"
     gen_nginx_laravel "$DOMAIN"
-    if container_ok "lnmp-nginx"; then
-      if docker exec lnmp-nginx nginx -t 2>&1; then
-        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload（与模板同步）" || warn "Nginx reload 失败"
-      else
-        warn "Nginx 配置校验失败，未 reload"
-      fi
-    fi
+    _caddy_reload_soft "Caddy 已 reload（与模板同步）"
   elif [[ "$site_type" = "pm2" ]]; then
     apply_site_pm2_port_cli "$DOMAIN"
     apply_site_pm2_cmd_cli "$DOMAIN"
     reload_pm2_site "$DOMAIN"
     gen_nginx_pm2 "$DOMAIN"
-    if container_ok "lnmp-nginx"; then
-      if docker exec lnmp-nginx nginx -t 2>&1; then
-        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload" || warn "Nginx reload 失败"
-      else
-        warn "Nginx 配置校验失败，未 reload"
-      fi
-    fi
+    _caddy_reload_soft "Caddy 已 reload"
   elif [[ "$site_type" = "proxy" ]]; then
     if [[ "${SITE_PROXY_PASS_CLI:-0}" -ne 1 && "${YES:-0}" -ne 1 ]]; then
       prompt "反代上游" "$(proxy_pass_for_site "$DOMAIN")"
@@ -1334,13 +1330,7 @@ cmd_update() {
     fi
     apply_site_proxy_pass_cli "$DOMAIN"
     gen_nginx_proxy "$DOMAIN"
-    if container_ok "lnmp-nginx"; then
-      if docker exec lnmp-nginx nginx -t 2>&1; then
-        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload（→ $(proxy_pass_for_site "$DOMAIN")）" || warn "Nginx reload 失败"
-      else
-        warn "Nginx 配置校验失败，未 reload"
-      fi
-    fi
+    _caddy_reload_soft "Caddy 已 reload（→ $(proxy_pass_for_site "$DOMAIN")）"
   else
     if frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
       warn "Webhook Release 站点：请通过 Release 推送更新（update 不拉代码）"
@@ -1359,13 +1349,7 @@ cmd_update() {
       gen_nginx_frontend "$DOMAIN" "$_feu"
       fix_site_readable_for_nginx "$DOMAIN" "frontend" "$_feu"
     fi
-    if container_ok "lnmp-nginx"; then
-      if docker exec lnmp-nginx nginx -t 2>&1; then
-        docker exec lnmp-nginx nginx -s reload 2>/dev/null && ok "Nginx 已 reload" || warn "Nginx reload 失败"
-      else
-        warn "Nginx 配置校验失败，未 reload"
-      fi
-    fi
+    _caddy_reload_soft "Caddy 已 reload"
   fi
 
   info "清理 Docker 悬空镜像..."
