@@ -516,10 +516,10 @@ _interactive_full_install() {
 
   local sel
   MENU_MULTI_DEFAULT="2,3"
-  menu_multi "选择要安装的模块（回车=Docker + LNMP）" \
+  menu_multi "选择要安装的模块（回车=Docker + FrankenPHP 栈）" \
     "等保加固 (cyber 三权用户)" \
-    "Docker (LNMP 前置)" \
-    "LNMP (php/FrankenPHP + mysql + redis + acme)" \
+    "Docker (FrankenPHP 栈前置)" \
+    "FrankenPHP 栈 (Caddy + php + mysql + redis + acme)" \
     "PM2 (Node.js + pm2，deploy-site 用)" \
     "SSH 安全策略 (改端口/禁 root)" \
     "Firewalld (防火墙)" \
@@ -544,7 +544,7 @@ _interactive_full_install() {
 
   # LNMP 选了但 Docker 没勾 → 自动补，避免 install_lnmp 时 docker 不在
   if [[ $sel_lnmp -eq 1 && $sel_docker -eq 0 ]] && ! is_docker_ok; then
-    info "已自动补充 Docker（LNMP 依赖）"
+    info "已自动补充 Docker（FrankenPHP 栈依赖）"
     sel_docker=1
   fi
 
