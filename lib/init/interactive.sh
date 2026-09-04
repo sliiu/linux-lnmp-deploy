@@ -558,12 +558,17 @@ _interactive_full_install() {
   NODE_VERSION="${NODE_VERSION:-22}"
 
   # 0) 等保加固前置（cyber 内部含交互+创建账号；ordinary 可作为 devops 默认值）
-  if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users; fi
+  if [[ $sel_cyber -eq 1 ]]; then setup_cyber_users skip-devops; fi
 
   if [[ $sel_wheel -eq 1 ]]; then
     prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"
     WHEEL_USER=$PROMPT_RESULT
   fi
+
+  if [[ $sel_docker -eq 1 || $sel_pm2 -eq 1 || $sel_zsh -eq 1 ]]; then
+    collect_github_proxy
+  fi
+  if [[ $sel_docker -eq 1 ]]; then collect_docker_mirrors; fi
 
   if [[ $sel_lnmp -eq 1 ]]; then
     collect_lnmp_services

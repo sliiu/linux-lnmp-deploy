@@ -85,6 +85,9 @@ ensure_user_ssh_access() {
     chown -R "${u}:${u}" "${home}/.ssh" 2>/dev/null || true
     return 0
   fi
+  case " ${_SSH_ACCESS_ASKED:-} " in
+    *" $u "*) return 0 ;;
+  esac
 
   if [[ "$mode" = "root" ]]; then
     if [[ -s /root/.ssh/authorized_keys ]]; then
@@ -95,6 +98,7 @@ ensure_user_ssh_access() {
   elif [[ "$mode" = "line" && -n "$key_line" ]]; then
     printf '%s\n' "$key_line" >> "$ak"
   else
+    _SSH_ACCESS_ASKED="${_SSH_ACCESS_ASKED:-} $u"
     if [[ -s /root/.ssh/authorized_keys ]] && confirm "将 root 的 authorized_keys 复制到 ${u}？" "y"; then
       cp /root/.ssh/authorized_keys "$ak" || true
     fi
@@ -249,7 +253,7 @@ setup_cyber_users() {
   if [[ -n "${CYBER_ORDINARY:-}" ]]; then
     if confirm "将 ${CYBER_ORDINARY} 设为 devops 部署用户？" "y"; then
       DEVOPS_USER="$CYBER_ORDINARY"
-      setup_devops_user
+      [[ "${1:-}" = "skip-devops" ]] || setup_devops_user
     fi
   fi
 
