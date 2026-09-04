@@ -414,6 +414,8 @@ _interactive_pm2_gateway_install() {
 
   prompt "devops 用户名" "${DEVOPS_USER:-devops}"
   DEVOPS_USER=$PROMPT_RESULT
+  collect_account_password_into "$DEVOPS_USER" DEVOPS_PWD _DEVOPS_SKIP_PASSWD
+  collect_user_ssh_access_into "$DEVOPS_USER" DEVOPS_SSH_MODE DEVOPS_SSH_LINE
   collect_github_proxy
   collect_docker_mirrors
   collect_node_version
@@ -582,6 +584,20 @@ _interactive_full_install() {
   if [[ $sel_wheel -eq 1 ]]; then
     prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"
     WHEEL_USER=$PROMPT_RESULT
+  fi
+
+  if [[ $sel_cyber -eq 0 ]]; then
+    collect_account_password_into "$DEVOPS_USER" DEVOPS_PWD _DEVOPS_SKIP_PASSWD
+  fi
+  collect_user_ssh_access_into "$DEVOPS_USER" DEVOPS_SSH_MODE DEVOPS_SSH_LINE
+  if [[ $sel_wheel -eq 1 ]]; then
+    collect_account_password_into "$WHEEL_USER" WHEEL_PWD WHEEL_SKIP_PASSWD_PROMPT
+    if [[ "$WHEEL_USER" = "$DEVOPS_USER" ]]; then
+      WHEEL_SSH_MODE="${DEVOPS_SSH_MODE:-skip}"
+      WHEEL_SSH_LINE="${DEVOPS_SSH_LINE:-}"
+    else
+      collect_user_ssh_access_into "$WHEEL_USER" WHEEL_SSH_MODE WHEEL_SSH_LINE
+    fi
   fi
 
   if [[ $sel_docker -eq 1 || $sel_pm2 -eq 1 || $sel_zsh -eq 1 ]]; then

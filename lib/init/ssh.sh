@@ -97,6 +97,10 @@ ensure_user_ssh_access() {
     fi
   elif [[ "$mode" = "line" && -n "$key_line" ]]; then
     printf '%s\n' "$key_line" >> "$ak"
+  elif [[ "$mode" = "skip" ]]; then
+    _SSH_ACCESS_ASKED="${_SSH_ACCESS_ASKED:-} $u"
+    chown -R "${u}:${u}" "${home}/.ssh" 2>/dev/null || true
+    return 0
   else
     _SSH_ACCESS_ASKED="${_SSH_ACCESS_ASKED:-} $u"
     if [[ -s /root/.ssh/authorized_keys ]] && confirm "将 root 的 authorized_keys 复制到 ${u}？" "y"; then
@@ -118,6 +122,46 @@ ensure_user_ssh_access() {
   chown -R "${u}:${u}" "${home}/.ssh" 2>/dev/null || true
 }
 
+collect_user_ssh_access_into() {
+  local u="$1" modevar="$2" linevar="$3"
+  local mode="skip" line="" home ak
+  home=$(getent passwd "$u" | cut -d: -f6 || true)
+  ak="${home}/.ssh/authorized_keys"
+  if [[ -n "$home" && -s "$ak" ]]; then
+    printf -v "$modevar" '%s' skip
+    printf -v "$linevar" '%s' ""
+    return 0
+  fi
+  if [[ -s /root/.ssh/authorized_keys ]] && confirm "将 root 的 authorized_keys 复制到 ${u}？" "y"; then
+    mode="root"
+  else
+    local pk=""
+    read -rp "  ${u} 的 SSH 公钥一行（留空须控制台手工写入 ~/.ssh/authorized_keys）: " pk </dev/tty
+    printf '\n' >/dev/tty 2>/dev/null || true
+    if [[ -n "$pk" ]]; then
+      mode="line"
+      line="$pk"
+    else
+      warn "${u} 未配置 SSH 公钥；仅密钥登录时须从控制台登录后补充"
+    fi
+  fi
+  printf -v "$modevar" '%s' "$mode"
+  printf -v "$linevar" '%s' "$line"
+}
+
+collect_account_password_into() {
+  local u="$1" pwdvar="$2" skipvar="$3"
+  if id "$u" &>/dev/null; then
+    if confirm "${u} 已存在，是否修改密码？" "n"; then
+      prompt_secret_confirm_into "新密码" "$pwdvar"
+    else
+      printf -v "$skipvar" '%s' 1
+    fi
+  else
+    prompt_secret_confirm_into "${u} 密码" "$pwdvar"
+  fi
+}
+
 # ═══════════════════════════════════════════════
 #  用户管理
 # ═══════════════════════════════════════════════
@@ -128,14 +172,18 @@ setup_devops_user() {
   getent group devops >/dev/null 2>&1 || groupadd devops
 
   if ! id "${DEVOPS_USER}" &>/dev/null; then
-    local pwd
-    prompt_secret_confirm_into "${DEVOPS_USER} 密码" pwd
+    local pwd="${DEVOPS_PWD:-}"
+    [[ -n "$pwd" ]] || prompt_secret_confirm_into "${DEVOPS_USER} 密码" pwd
     useradd -m -s /bin/bash "${DEVOPS_USER}" || die "创建用户失败"
     echo "${DEVOPS_USER}:${pwd}" | chpasswd || die "设置密码失败"
     chmod 700 /home/"${DEVOPS_USER}"
     ok "${DEVOPS_USER} 创建完成"
   else
     ok "${DEVOPS_USER} 已存在"
+    if [[ -n "${DEVOPS_PWD:-}" ]]; then
+      echo "${DEVOPS_USER}:${DEVOPS_PWD}" | chpasswd || die "设置密码失败"
+      ok "${DEVOPS_USER} 密码已更新"
+    fi
   fi
 
   usermod -aG devops "${DEVOPS_USER}" 2>/dev/null || true
@@ -147,7 +195,7 @@ setup_devops_user() {
     > /etc/sudoers.d/devops-deploy 2>/dev/null
   chmod 440 /etc/sudoers.d/devops-deploy 2>/dev/null || true
 
-  ensure_user_ssh_access "${DEVOPS_USER}"
+  ensure_user_ssh_access "${DEVOPS_USER}" "${DEVOPS_SSH_MODE:-interactive}" "${DEVOPS_SSH_LINE:-}"
 }
 
 setup_wheel_user() {
@@ -157,12 +205,15 @@ setup_wheel_user() {
   getent group wheel >/dev/null 2>&1 || groupadd wheel
 
   if ! id "${WHEEL_USER}" &>/dev/null; then
-    local pwd
-    prompt_secret_confirm_into "${WHEEL_USER} 密码" pwd
+    local pwd="${WHEEL_PWD:-}"
+    [[ -n "$pwd" ]] || prompt_secret_confirm_into "${WHEEL_USER} 密码" pwd
     useradd -m -s /bin/bash "${WHEEL_USER}" || die "创建用户 ${WHEEL_USER} 失败"
     echo "${WHEEL_USER}:${pwd}" | chpasswd || die "设置密码失败"
     ok "${WHEEL_USER} 创建完成"
-  elif confirm "${WHEEL_USER} 已存在，是否修改密码？" "n"; then
+  elif [[ -n "${WHEEL_PWD:-}" ]]; then
+    echo "${WHEEL_USER}:${WHEEL_PWD}" | chpasswd || die "设置密码失败"
+    ok "${WHEEL_USER} 密码已更新"
+  elif [[ "${WHEEL_SKIP_PASSWD_PROMPT:-0}" != 1 ]] && confirm "${WHEEL_USER} 已存在，是否修改密码？" "n"; then
     local pwd
     prompt_secret_confirm_into "新密码" pwd
     echo "${WHEEL_USER}:${pwd}" | chpasswd || die "设置密码失败"
@@ -177,7 +228,7 @@ setup_wheel_user() {
   chmod 700 /home/"${WHEEL_USER}"/.ssh
   chown -R "${WHEEL_USER}:${WHEEL_USER}" /home/"${WHEEL_USER}"/.ssh
 
-  ensure_user_ssh_access "${WHEEL_USER}"
+  ensure_user_ssh_access "${WHEEL_USER}" "${WHEEL_SSH_MODE:-interactive}" "${WHEEL_SSH_LINE:-}"
 }
 
 setup_cyber_users() {
