@@ -366,9 +366,11 @@ _webhook_restore_backup() {
     rsync -a --delete "${backup_dir}/snapshot/" "${site_dir}/" 2>/dev/null \
       || { rm -rf "${site_dir:?}/"* 2>/dev/null; cp -a "${backup_dir}/snapshot/." "${site_dir}/"; }
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "$site_dir" 2>/dev/null || true
+    _webhook_flatten_frontend_root "$site_dir"
     local fe=""
-    gen_nginx_frontend "$domain" ""
-    fix_site_readable_for_nginx "$domain" "frontend" ""
+    fe="$(effective_frontend_subdir "$domain")"
+    gen_nginx_frontend "$domain" "$fe"
+    fix_site_readable_for_nginx "$domain" "frontend" "$fe"
     _caddy_reload_soft "Caddy 已 reload"
   fi
 }
@@ -712,6 +714,22 @@ _webhook_download_url() {
   _webhook_download_try_urls "$dest" "$token" 60 "$url"
 }
 
+_webhook_flatten_frontend_root() {
+  local site_dir="$1" d src
+  [[ -d "$site_dir" ]] || return 0
+  [[ -f "${site_dir}/index.html" ]] && return 0
+  for d in dist out .output/public build output; do
+    src="${site_dir}/${d}"
+    [[ -f "${src}/index.html" ]] || continue
+    shopt -s dotglob
+    mv "$src"/* "$site_dir/" 2>/dev/null || true
+    shopt -u dotglob
+    rm -rf "$src"
+    info "静态产物已从 ${d}/ 提升到站点根"
+    return 0
+  done
+}
+
 _webhook_extract_archive() {
   local archive="$1" dest="$2"
   mkdir -p "$dest"
@@ -850,10 +868,13 @@ _webhook_deploy_release() {
       || cp -a "${tmp}/extract/." "$site_dir/"
   fi
   rm -rf "$tmp"
+  _webhook_flatten_frontend_root "$site_dir"
   chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "$site_dir" 2>/dev/null || true
 
-  gen_nginx_frontend "$domain" ""
-  fix_site_readable_for_nginx "$domain" "frontend" ""
+  local fe_sub
+  fe_sub="$(effective_frontend_subdir "$domain")"
+  gen_nginx_frontend "$domain" "$fe_sub"
+  fix_site_readable_for_nginx "$domain" "frontend" "$fe_sub"
   _caddy_reload_soft "Caddy 已 reload"
   ok "站点 ${domain} 已更新到 release ${ver}"
 }

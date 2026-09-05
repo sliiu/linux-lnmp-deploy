@@ -291,10 +291,6 @@ gen_nginx_frontend() { gen_caddy_frontend "$@"; }
 
 effective_frontend_subdir() {
   local domain="$1"
-  if frontend_release_webhook_site "$domain" 2>/dev/null || _adding_frontend_release_webhook; then
-    printf '%s\n' ""
-    return
-  fi
   local site="${WWW_ROOT}/${domain}"
   local fe="${FRONTEND_ROOT:-}"
   [[ "$fe" = "." ]] && fe=""
@@ -302,16 +298,13 @@ effective_frontend_subdir() {
     printf '%s\n' "$fe"
     return
   fi
+  [[ -f "${site}/index.html" ]] && { printf '%s\n' ""; return; }
   local d
-  for d in dist .output/public build output; do
+  for d in dist out .output/public build output; do
     [[ -f "${site}/${d}/index.html" ]] || continue
     printf '%s\n' "$d"
     return
   done
-  if [[ -f "${site}/index.html" ]]; then
-    printf '%s\n' ""
-    return
-  fi
   if [[ -d "${site}/dist" ]]; then
     printf '%s\n' "dist"
     return
