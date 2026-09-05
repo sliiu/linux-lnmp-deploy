@@ -108,17 +108,18 @@ main() {
         _idx=$MENU_SELECT_RESULT
         echo ""
         case "$_idx" in
-          0) cmd_list ;;
-          1) reset_menu_deploy_state; cmd_add ;;
-          2) reset_menu_deploy_state; cmd_update ;;
-          3) reset_menu_deploy_state; cmd_webhook ;;
-          4) reset_menu_deploy_state; cmd_rollback ;;
-          5) reset_menu_deploy_state; STATUS_ALL=0; cmd_status ;;
-          6) reset_menu_deploy_state; cmd_ssl ;;
-          7) reset_menu_deploy_state; cmd_remove ;;
+          0) cmd_list || true ;;
+          1) reset_menu_deploy_state; cmd_add || true ;;
+          2) reset_menu_deploy_state; cmd_update || true ;;
+          3) reset_menu_deploy_state; cmd_webhook || true; echo ""; continue ;;
+          4) reset_menu_deploy_state; cmd_rollback || true ;;
+          5) reset_menu_deploy_state; STATUS_ALL=0; cmd_status || true ;;
+          6) reset_menu_deploy_state; cmd_ssl || true ;;
+          7) reset_menu_deploy_state; cmd_remove || true ;;
           8) ok "再见"; exit 0 ;;
         esac
         echo ""
+        _ui_wait_enter
       done
       ;;
     *)

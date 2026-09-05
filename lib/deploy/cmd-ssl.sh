@@ -26,7 +26,7 @@ cmd_ssl() {
   hr; info "SSL 续期/签发: ${DOMAIN}"; echo ""
   local _fe_ssl="dist"
   [[ "$site_type" = "frontend" ]] && _fe_ssl=$(effective_frontend_subdir "$DOMAIN")
-  issue_ssl "$DOMAIN" "$site_type" "${SSL_DNS}" "${FORCE_SSL:-}" "$_fe_ssl"
+  issue_ssl "$DOMAIN" "$site_type" "${SSL_DNS}" "${FORCE_SSL:-}" "$_fe_ssl" || return 0
 }
 
 # ═══════════════════════════════════════════════

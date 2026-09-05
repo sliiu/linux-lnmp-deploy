@@ -298,13 +298,14 @@ cmd_webhook() {
         _i=$MENU_SELECT_RESULT
         echo ""
         case "$_i" in
-          0) _webhook_reset_configure_state; DOMAIN=""; cmd_webhook_enable ;;
-          1) DOMAIN=""; cmd_webhook_disable ;;
-          2) cmd_webhook_setup ;;
-          3) cmd_webhook_list ;;
+          0) _webhook_reset_configure_state; DOMAIN=""; cmd_webhook_enable || true ;;
+          1) DOMAIN=""; cmd_webhook_disable || true ;;
+          2) cmd_webhook_setup || true ;;
+          3) cmd_webhook_list || true ;;
           4) return 0 ;;
         esac
         echo ""
+        _ui_wait_enter
       done
       ;;
     *) die "未知 webhook 子命令: ${sub}（enable | disable | setup | serve | handle | list）" ;;
