@@ -357,13 +357,22 @@ install_lnmp() {
 
   run_pkg install -y acl 2>/dev/null || true
 
-  is_docker_ok || die "需要先安装 Docker"
+  if ! is_docker_ok; then
+    info "LNMP 依赖 Docker，先安装 Docker"
+    if interactive_tty_ok && declare -F collect_docker_mirrors &>/dev/null && [[ -z "${DOCKER_MIRRORS_STR:-}" ]]; then
+      collect_docker_mirrors
+    fi
+    install_docker
+  fi
   systemctl start docker 2>/dev/null || true
 
   if [[ "$component" != "all" ]]; then
     if [[ "$component" = "nginx" ]]; then component="caddy"; fi
     if [[ ",$LNMP_SERVICES," != *",$component,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},${component}"; fi
-    if [[ "$component" = "phpmyadmin" && ",$LNMP_SERVICES," != *",mysql,"* ]]; then LNMP_SERVICES="${LNMP_SERVICES},mysql"; fi
+    if [[ "$component" = "phpmyadmin" && ",$LNMP_SERVICES," != *",mysql,"* ]]; then
+      info "phpMyAdmin 依赖 MySQL，先加入 mysql"
+      LNMP_SERVICES="${LNMP_SERVICES},mysql"
+    fi
   fi
 
   lnmp_gen_compose
@@ -675,6 +684,10 @@ uninstall_lnmp() {
       compose_cmd -f "$COMPOSE_FILE" up -d 2>/dev/null || true
     fi
   else
+    if [[ "$component" = "mysql" ]] && has_service "phpmyadmin"; then
+      info "phpMyAdmin 依赖 MySQL，先卸载 phpMyAdmin"
+      uninstall_lnmp "phpmyadmin"
+    fi
     local new_services=""
     IFS=',' read -ra svcs <<< "$LNMP_SERVICES"
     for s in "${svcs[@]}"; do

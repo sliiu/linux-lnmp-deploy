@@ -36,13 +36,13 @@ ZEOF
 
   cat > /etc/zshenv <<'ZEOF'
 zsh-newuser-install() { return 0 }
-# >>> node init.sh >>>
-export FNM_DIR="$HOME/.local/share/fnm"
-export PATH="/usr/local/fnm:$HOME/.local/share/fnm/aliases/default/bin:$PATH"
-mkdir -p "$HOME/.local/share/fnm" "$HOME/.local/state/fnm_multishells" 2>/dev/null || true
-command -v fnm >/dev/null 2>&1 && eval "$(fnm env --shell zsh)"
-# <<< node init.sh <<<
 ZEOF
+  if declare -F is_fnm_ok &>/dev/null && is_fnm_ok && declare -F _node_shell_block &>/dev/null; then
+    {
+      printf '\n'
+      _node_shell_block zsh
+    } >> /etc/zshenv
+  fi
 
   _write_p10k_config
 
@@ -250,6 +250,10 @@ uninstall_zsh() {
   /bin/rm -f /etc/profile.d/lnmp-zsh.sh
   if [[ -f /etc/zshrc.bak ]]; then mv /etc/zshrc.bak /etc/zshrc; fi
   /bin/rm -f /etc/p10k.zsh /etc/zshenv
+  if declare -F is_fnm_ok &>/dev/null && is_fnm_ok && declare -F _node_write_devops_shell &>/dev/null; then
+    touch /etc/zshenv
+    _node_write_devops_shell
+  fi
   local bash_bin="/bin/bash"
   for u in root "${WHEEL_USER:-}" "${DEVOPS_USER:-}" "${CYBER_ORDINARY:-}" "${CYBER_AUDIT:-}" "${CYBER_SAFE:-}"; do
     if [[ -n "$u" ]] && id "$u" &>/dev/null; then chsh -s "$bash_bin" "$u" 2>/dev/null || true; fi

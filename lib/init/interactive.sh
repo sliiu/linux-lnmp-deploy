@@ -746,7 +746,9 @@ _interactive_install_one() {
       4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
       5)  collect_caddy_image; LNMP_SERVICES="${LNMP_SERVICES},caddy"; install_lnmp "caddy" ;;
       6)  collect_acme_image; collect_acme_email; collect_acme_ssl_dns_default; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
-      7)  collect_phpmyadmin_image; collect_phpmyadmin_listen; LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
+      7)  collect_phpmyadmin_image; collect_phpmyadmin_listen
+          if ! has_service "mysql"; then collect_mysql_image; collect_mysql_password; fi
+          LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
       8)  collect_github_proxy; collect_docker_mirrors; install_docker ;;
       9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_github_proxy; collect_node_version; install_node ;;
       10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT
@@ -798,14 +800,14 @@ _interactive_uninstall_one() {
         _ev="${component#php-}"
         _danger_msg="将停止 lnmp-php$(_php_ver_no_dot "$_ev")，从 EXTRA_PHP_VERSIONS 移除 ${_ev}，并重建 compose"
         ;;
-      mysql)      _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）" ;;
+      mysql)      _danger_msg="将停止并移除 lnmp-mysql 容器（数据卷可保留）；若已装 phpMyAdmin 会一并卸载" ;;
       postgres)   _danger_msg="将停止并移除 lnmp-postgres 容器（数据卷可保留）" ;;
       redis)      _danger_msg="将停止并移除 lnmp-redis 容器" ;;
       caddy)      _danger_msg="将停止并移除 lnmp-caddy 容器" ;;
       acme)       _danger_msg="将停止并移除 lnmp-acme 容器" ;;
       phpmyadmin) _danger_msg="将停止并移除 lnmp-phpmyadmin 容器" ;;
       all)        _danger_msg="将停止 LNMP 全部容器、删除 compose 文件、可选删除 ${DATA_DIR}" ;;
-      docker)     _danger_msg="将卸载 Docker（不删除 /var/lib/docker，请按提示确认）" ;;
+      docker)     _danger_msg="将卸载 Docker（不删除 /var/lib/docker）；若已装 LNMP 会一并卸载" ;;
       pm2)        _danger_msg="将卸载 PM2（保留 Node.js / fnm）" ;;
       node)       _danger_msg="将卸载 Node.js / fnm（若已装 PM2 会一并卸载）" ;;
       ssh)        _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;

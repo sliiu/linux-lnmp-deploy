@@ -164,8 +164,9 @@ _docker_add_users() {
 uninstall_docker() {
   hr; info "卸载 Docker"; echo ""
 
-  if [[ -f "$COMPOSE_FILE" ]]; then
-    cd "$DATA_DIR" 2>/dev/null && compose_cmd down 2>/dev/null || true
+  if [[ -f "$COMPOSE_FILE" ]] || [[ -n "${LNMP_SERVICES:-}" ]]; then
+    info "LNMP 依赖 Docker，先卸载 LNMP"
+    uninstall_lnmp "all"
   fi
 
   systemctl stop docker 2>/dev/null || true
