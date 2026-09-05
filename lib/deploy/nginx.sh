@@ -129,7 +129,9 @@ _caddy_write_site() {
   headers="$(_caddy_security_headers)"
   cat > "$(site_caddy_file "$domain")" <<CADDY
 ${domain} {
-${tls}${headers}${body}
+${tls}
+${headers}
+${body}
 }
 CADDY
   chmod 644 "$(site_caddy_file "$domain")" 2>/dev/null || true
@@ -276,7 +278,7 @@ gen_caddy_frontend() {
   body=$(cat <<CADDY
 	root * ${root_path}
 	encode zstd gzip
-	try_files {path} /index.html
+	try_files {path} {path}.html {path}/index.html /index.html
 	file_server
 	@html path /index.html
 	header @html Cache-Control "no-cache"
