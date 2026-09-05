@@ -101,12 +101,9 @@ interactive_sse_prefixes_maybe_for_update() {
 
 _caddy_security_headers() {
   cat <<'CADDY'
-	header {
-		X-Frame-Options SAMEORIGIN
-		X-Content-Type-Options nosniff
-		X-XSS-Protection "1; mode=block"
-		Referrer-Policy strict-origin-when-cross-origin
-	}
+	header X-Frame-Options SAMEORIGIN
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy strict-origin-when-cross-origin
 CADDY
 }
 
