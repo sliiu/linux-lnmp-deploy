@@ -63,6 +63,7 @@ _source_lib lib/init/docker.sh
 _source_lib lib/init/ssh.sh
 _source_lib lib/init/accounts.sh
 _source_lib lib/init/lnmp.sh
+_source_lib lib/init/node.sh
 _source_lib lib/init/pm2.sh
 _source_lib lib/init/status.sh
 _source_lib lib/init/interactive.sh
@@ -99,7 +100,8 @@ usage() {
   redis       Redis 容器
   acme        ACME 证书容器
   phpmyadmin  phpMyAdmin 容器
-  pm2         Node.js + PM2（devops 用户，供 deploy-site --type=pm2）
+  node        Node.js（fnm，devops 用户）
+  pm2         PM2（依赖 Node.js，未安装时联动安装）
   wheel       Wheel 管理员
   cyber       等保加固
   devops      Devops 部署用户
@@ -134,7 +136,8 @@ usage() {
   $0                                    # 交互模式
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
-  $0 install pm2 --node-version=22
+  $0 install node --node-version=22
+  $0 install pm2
   # PM2 网关栈（无 php）：caddy 反代 + postgres + redis + acme + 宿主机 PM2
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install devops
@@ -236,6 +239,7 @@ main() {
         redis)    LNMP_SERVICES="${LNMP_SERVICES},redis";  install_lnmp "redis" ;;
         acme)     LNMP_SERVICES="${LNMP_SERVICES},acme";   install_lnmp "acme" ;;
         phpmyadmin) LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
+        node)     install_node ;;
         pm2)      install_pm2 ;;
         wheel)    setup_wheel_user ;;
         cyber)    setup_cyber_users ;;
@@ -281,6 +285,7 @@ main() {
         redis)    uninstall_lnmp "redis" ;;
         acme)     uninstall_lnmp "acme" ;;
         phpmyadmin) uninstall_lnmp "phpmyadmin" ;;
+        node)     uninstall_node ;;
         pm2)      uninstall_pm2 ;;
         saferm)   uninstall_saferm ;;
         *)        die "未知组件: $target" ;;

@@ -22,12 +22,19 @@ show_status() {
   _s=$(is_saferm_ok && echo "已安装" || echo "未安装")
   printf "  %-20s %s\n" "saferm" "$_s"
 
-  if is_pm2_ok; then
-    _s="已安装 (Node $(devops_bash_c 'node -v' 2>/dev/null || echo '?'), pm2 $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?'))"
+  if is_node_ok; then
+    _s="已安装 ($(devops_bash_c 'node -v' 2>/dev/null || echo '?'))"
   else
     _s="未安装"
   fi
-  printf "  %-20s %s\n" "PM2 / Node.js" "$_s"
+  printf "  %-20s %s\n" "Node.js" "$_s"
+
+  if is_pm2_ok; then
+    _s="已安装 ($(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?'))"
+  else
+    _s="未安装"
+  fi
+  printf "  %-20s %s\n" "PM2" "$_s"
 
   _s=$(is_cybersec_ok && echo "已加固" || echo "未配置")
   printf "  %-20s %s\n" "等保" "$_s"
@@ -73,14 +80,18 @@ show_status() {
     printf "  %-20s %s\n" "phpMyAdmin 镜像" "${PHPMYADMIN_IMAGE:-}"
     printf "  %-20s %s\n" "phpMyAdmin 监听" "${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}"
   fi
-  printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}"
-  printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
-  printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
+  if has_service "php"; then
+    printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}"
+    printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
+    printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
+  fi
   printf "  %-20s %s\n" "GitHub 代理" "${GH_PROXY:-无}"
-  printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"
-  printf "  %-20s %s\n" "Node.js 版本" "${NODE_VERSION:-22}"
-  printf "  %-20s %s\n" "Node 镜像源" "${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
-  printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
+  is_docker_ok && printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"
+  if is_node_ok; then
+    printf "  %-20s %s\n" "Node.js 版本" "${NODE_VERSION:-22}"
+    printf "  %-20s %s\n" "Node 镜像源" "${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
+  fi
+  has_service "acme" && printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
   echo ""
 }
 

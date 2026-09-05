@@ -180,7 +180,7 @@ _pm2_run_as_devops() {
 ensure_pm2_runtime() {
   local node_v pm2_v
   node_v="$(devops_bash_c 'command -v node' 2>/dev/null || true)"
-  [[ -n "$node_v" ]] || die "未找到 node（用户 ${DEVOPS_USER}）；请先执行 init.sh install pm2"
+  [[ -n "$node_v" ]] || die "未找到 node（用户 ${DEVOPS_USER}）；请先执行 init.sh install node"
   pm2_v="$(devops_bash_c 'command -v pm2' 2>/dev/null || true)"
   [[ -n "$pm2_v" ]] || die "未找到 pm2（用户 ${DEVOPS_USER}）；请先执行 init.sh install pm2"
   ok "Node: $(devops_bash_c 'node -v' 2>/dev/null || echo '?')  PM2: $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?')"
