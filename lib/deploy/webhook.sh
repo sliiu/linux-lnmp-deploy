@@ -1432,6 +1432,18 @@ _webhook_public_callback_url() {
   return 0
 }
 
+_caddy_restore_webhook_proxy() {
+  local domain="$1"
+  [[ -n "$domain" ]] || return 0
+  _webhook_load_listener_env
+  [[ "${WEBHOOK_PUBLIC_MODE:-}" = "nginx" ]] || return 0
+  [[ "${WEBHOOK_PROXY_DOMAIN:-}" = "$domain" ]] || return 0
+  local conf
+  conf="$(site_caddy_file "$domain")"
+  [[ -f "$conf" ]] || return 0
+  _caddy_merge_webhook_proxy "$conf" "${WEBHOOK_PATH:-/hooks}" "${WEBHOOK_PORT:-9080}"
+}
+
 _caddy_strip_webhook_proxy() {
   local conf="$1"
   [[ -f "$conf" ]] || return 0
@@ -1559,8 +1571,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
 
+    def _hook_path(self):
+        p = self.path.split("?", 1)[0].rstrip("/") or "/"
+        return p
+
     def do_POST(self):
-        if self.path.split("?", 1)[0] != PATH:
+        if self._hook_path() != (PATH.rstrip("/") or "/"):
             self.send_response(404); self.end_headers(); return
         length = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(length) if length else b""
@@ -1613,7 +1629,7 @@ class Handler(BaseHTTPRequestHandler):
                     except OSError: pass
 
     def do_GET(self):
-        if self.path.split("?", 1)[0] in (PATH, PATH + "/"):
+        if self._hook_path() == (PATH.rstrip("/") or "/"):
             self.send_response(200); self.end_headers()
             self.wfile.write(b"lnmp deploy webhook ok\n")
         else:

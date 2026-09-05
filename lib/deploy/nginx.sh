@@ -133,6 +133,9 @@ ${tls}${headers}${body}
 }
 CADDY
   chmod 644 "$(site_caddy_file "$domain")" 2>/dev/null || true
+  if declare -F _caddy_restore_webhook_proxy >/dev/null 2>&1; then
+    _caddy_restore_webhook_proxy "$domain"
+  fi
 }
 
 gen_caddy_laravel() {
