@@ -1586,7 +1586,6 @@ SCRIPT = os.environ["WEBHOOK_SCRIPT"]
 PORT = int(os.environ.get("WEBHOOK_PORT", "9080"))
 BIND = os.environ.get("WEBHOOK_BIND", "127.0.0.1")
 PATH = os.environ.get("WEBHOOK_PATH", "/hooks")
-HANDLE_TIMEOUT = 2400
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -1612,31 +1611,21 @@ class Handler(BaseHTTPRequestHandler):
             event = self.headers.get("X-GitHub-Event") or self.headers.get("X-Gitee-Event") or ""
             gh_sig = self.headers.get("X-Hub-Signature-256") or self.headers.get("X-Hub-Signature") or ""
             gitee_token = self.headers.get("X-Gitee-Token") or ""
-            r = subprocess.run(
+            subprocess.Popen(
                 [SCRIPT, "webhook", "handle",
                  "--body-file", body_path,
                  "--headers-file", hdr_path,
                  "--event", event,
                  "--github-signature", gh_sig,
                  "--gitee-token", gitee_token],
-                timeout=HANDLE_TIMEOUT,
+                start_new_session=True,
+                stdin=subprocess.DEVNULL,
             )
             body_path = hdr_path = None
-            if r.returncode == 0:
-                self.send_response(200)
-                msg = b"deployed\n"
-            else:
-                self.send_response(500)
-                msg = b"deploy failed\n"
+            self.send_response(202)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(msg)
-        except subprocess.TimeoutExpired:
-            sys.stderr.write("webhook handle timed out\n")
-            self.send_response(504)
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.end_headers()
-            self.wfile.write(b"deploy timed out\n")
+            self.wfile.write(b"accepted\n")
         except Exception as exc:
             sys.stderr.write("webhook handle failed: %s\n" % exc)
             self.send_response(500)
