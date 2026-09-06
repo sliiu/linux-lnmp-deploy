@@ -129,6 +129,53 @@ _ensure_php_pgsql_ext() {
 
 _php_franken_image() { printf 'dunglas/frankenphp:php%s' "${1:-${PHP_VERSION}}"; }
 
+_php_ext_vol_local() {
+  local ver="${1:-$PHP_VERSION}"
+  if [[ "$ver" = "${PHP_VERSION}" ]]; then printf 'php-extensions'; else printf 'php-extensions-%s' "$(_php_ver_no_dot "$ver")"; fi
+}
+
+_php_ext_vol_docker() {
+  printf '%s_%s' "${COMPOSE_PROJECT_NAME:-$(basename "$DATA_DIR")}" "$(_php_ext_vol_local "$1")"
+}
+
+_seed_php_ext_volume() {
+  local ver="${1:-$PHP_VERSION}" vol img
+  vol="$(_php_ext_vol_docker "$ver")"
+  img="$(_php_franken_image "$ver")"
+  docker volume create "$vol" >/dev/null
+  if docker run --rm -v "${vol}:/v" --entrypoint sh "$img" -c 'ls -A /v 2>/dev/null | grep -q .'; then
+    return 0
+  fi
+  info "同步镜像内 PHP 扩展到数据卷（${ver}）"
+  docker run --rm -v "${vol}:/dest" --entrypoint sh "$img" -c 'cp -a /usr/local/lib/php/extensions/. /dest/'
+}
+
+_seed_all_php_ext_volumes() {
+  has_service "php" || return 0
+  _seed_php_ext_volume "$PHP_VERSION"
+  local _ev
+  while IFS= read -r _ev; do
+    [[ -z "$_ev" ]] && continue
+    _seed_php_ext_volume "$_ev"
+  done < <(_php_extra_list)
+}
+
+_ensure_php_ext_swap() {
+  local total
+  total=$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)
+  (( total > 0 && total < 2097152 )) || return 0
+  [[ -n "$(swapon --show=NAME --noheadings 2>/dev/null)" ]] && return 0
+  local f="/var/lib/lnmp-ext-swap"
+  mkdir -p /var/lib
+  if [[ ! -f "$f" ]]; then
+    info "内存不足 2G，创建 2G swap 供编译 PHP 扩展"
+    fallocate -l 2G "$f" 2>/dev/null || dd if=/dev/zero of="$f" bs=1M count=2048 status=none
+    chmod 600 "$f"
+    mkswap "$f" >/dev/null
+  fi
+  swapon "$f" 2>/dev/null || true
+}
+
 _php_service_yaml() {
   local ver="$1" php_deps="$2" php_env="$3"
   local sub svc cname volname
@@ -411,6 +458,7 @@ install_lnmp() {
   chmod 771 "${DATA_DIR}"
 
   _lnmp_pull_images
+  _seed_all_php_ext_volumes
   _chown_caddy_volumes
   if has_service "php"; then
     local _ev _esub
@@ -552,6 +600,7 @@ update_lnmp() {
         _php_extra_list | grep -qx "$_ev" || die "未知 LNMP 组件: $one（请确认 EXTRA_PHP_VERSIONS 含此版本）"
         local _esvc; _esvc="$(_php_service_name "$_ev")"
         _lnmp_pull_images force "$one"
+        _seed_php_ext_volume "$_ev"
         _compose_lnmp_up_recreate "$_esvc"
         _wait_container "$(_php_container_name "$_ev")" 45
         _install_php_extensions_one "$(_php_container_name "$_ev")"
@@ -561,6 +610,7 @@ update_lnmp() {
     esac
     has_service "$one" || die "当前编排未包含 lnmp-${one}"
     _lnmp_pull_images force "$one"
+    [[ "$one" = "php" ]] && _seed_php_ext_volume "$PHP_VERSION"
     _compose_lnmp_up_recreate "$one"
     if [[ "$one" = "php" ]]; then
       _wait_container "php" 45
@@ -570,6 +620,7 @@ update_lnmp() {
     fi
   else
     _lnmp_pull_images force
+    _seed_all_php_ext_volumes
     _compose_lnmp_up_recreate ""
     if has_service "php"; then
       _wait_container "php" 45
@@ -611,16 +662,27 @@ _install_php_extensions_one() {
   info "安装 PHP 扩展（${cname}），日志：${logfile}"
 
   IFS=',' read -ra exts <<< "$PHP_EXTENSIONS"
-  local want="" e
+  local loaded e el
+  loaded=$(docker exec "$cname" php -m 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+  local -a need=()
   for e in "${exts[@]}"; do
     e="${e//[[:space:]]/}"
     [[ -z "$e" ]] && continue
-    want+="${want:+ }$e"
+    el=$(printf '%s' "$e" | tr '[:upper:]' '[:lower:]')
+    printf '%s\n' "$loaded" | grep -qx "$el" && continue
+    need+=("$e")
   done
-  [[ -n "$want" ]] || { ok "未配置 PHP 扩展（${cname}）"; return 0; }
+  [[ ${#need[@]} -gt 0 ]] || { ok "PHP 扩展已齐全（${cname}）"; return 0; }
 
-  docker exec -u root "$cname" install-php-extensions $want 2>&1 | tee -a "$logfile"
-  [[ "${PIPESTATUS[0]}" -eq 0 ]] || { _php_ext_show_log_tail "$logfile"; die "PHP 扩展安装失败（${cname}）。日志：${logfile}"; }
+  _ensure_php_ext_swap
+  for e in "${need[@]}"; do
+    info "安装扩展 ${e}（${cname}）"
+    if ! docker exec -u root -e IPE_PROCESSOR_COUNT=1 -e MAKEFLAGS=-j1 \
+      "$cname" install-php-extensions "$e" 2>&1 | tee -a "$logfile"; then
+      _php_ext_show_log_tail "$logfile"
+      die "PHP 扩展安装失败（${e} / ${cname}）。日志：${logfile}"
+    fi
+  done
 
   docker restart "$cname"
   local svc="${cname#lnmp-}"
