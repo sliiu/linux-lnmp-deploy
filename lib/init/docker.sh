@@ -152,6 +152,41 @@ EOF
   systemctl restart docker 2>/dev/null || true
 }
 
+_docker_hub_path() {
+  local img="${1#docker.io/}"
+  if [[ "$img" != */* ]]; then
+    printf 'library/%s' "$img"
+  else
+    printf '%s' "$img"
+  fi
+}
+
+_docker_pull() {
+  local img="$1" force="${2:-}"
+  [[ -n "$img" ]] || return 1
+  if [[ -z "$force" ]] && docker image inspect "$img" &>/dev/null; then
+    return 0
+  fi
+  info "拉取 ${img} ..."
+  if docker pull "$img"; then
+    ok "已拉取 ${img}"
+    return 0
+  fi
+  local p src path
+  path="$(_docker_hub_path "$img")"
+  for p in docker.xuanyuan.me docker.1ms.run docker.1panel.live; do
+    src="${p}/${path}"
+    warn "当前镜像源失败，改从 ${p} 拉取"
+    if docker pull "$src"; then
+      docker tag "$src" "$img"
+      docker rmi "$src" 2>/dev/null || true
+      ok "已从 ${p} 拉取 ${img}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 _docker_add_users() {
   if [[ -n "${WHEEL_USER:-}" ]] && id "$WHEEL_USER" &>/dev/null; then
     usermod -aG docker "$WHEEL_USER" 2>/dev/null || true

@@ -44,8 +44,8 @@ collect_github_proxy() {
 
 collect_docker_mirrors() {
   local sel
-  MENU_MULTI_DEFAULT="2,3"
-  menu_multi "Docker 镜像源" "官方" "DaoCloud" "阿里云" "腾讯云" "自定义"
+  MENU_MULTI_DEFAULT="3"
+  menu_multi "Docker 镜像源" "官方" "DaoCloud（白名单，无 FrankenPHP）" "阿里云" "腾讯云" "自定义"
   sel=$MENU_MULTI_RESULT
   DOCKER_MIRRORS_STR=""
   for idx in $sel; do
@@ -412,7 +412,7 @@ collect_lnmp_services_pm2_gateway() {
 
 _apply_quiet_network_defaults() {
   [[ -n "${GH_PROXY:-}" ]] || GH_PROXY="https://ghfast.top"
-  [[ -n "${DOCKER_MIRRORS_STR:-}" ]] || DOCKER_MIRRORS_STR="https://docker.m.daocloud.io,https://1hdd0hae.mirror.aliyuncs.com"
+  [[ -n "${DOCKER_MIRRORS_STR:-}" ]] || DOCKER_MIRRORS_STR="https://1hdd0hae.mirror.aliyuncs.com,https://docker.xuanyuan.me"
 }
 
 _interactive_pm2_gateway_install() {

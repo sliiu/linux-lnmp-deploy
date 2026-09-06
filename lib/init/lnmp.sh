@@ -410,9 +410,7 @@ install_lnmp() {
   chown root:"${_dg}" "${DATA_DIR}" 2>/dev/null || true
   chmod 771 "${DATA_DIR}"
 
-  if has_service "caddy" && ! has_service "php"; then
-    _compose_up pull caddy >/dev/null 2>&1 || true
-  fi
+  _lnmp_pull_images
   _chown_caddy_volumes
   if has_service "php"; then
     local _ev _esub
@@ -473,6 +471,43 @@ LOGROTATE
   ok "logrotate 已配置（/etc/logrotate.d/lnmp，每日轮转保留 14 天）"
 }
 
+_lnmp_pull_images() {
+  local force="${1:-}" one="${2:-}"
+  local -a imgs=()
+  if [[ -n "$one" ]]; then
+    case "$one" in
+      php) imgs+=("$(_php_franken_image)") ;;
+      php-*) imgs+=("$(_php_franken_image "${one#php-}")") ;;
+      caddy) imgs+=("${CADDY_IMAGE}") ;;
+      mysql) imgs+=("${MYSQL_IMAGE}") ;;
+      postgres) imgs+=("${POSTGRES_IMAGE}") ;;
+      redis) imgs+=("${REDIS_IMAGE}") ;;
+      acme) imgs+=("${ACME_IMAGE}") ;;
+      phpmyadmin) imgs+=("${PHPMYADMIN_IMAGE}") ;;
+    esac
+  else
+    if has_service "php"; then
+      imgs+=("$(_php_franken_image)")
+      local _ev
+      while IFS= read -r _ev; do
+        [[ -z "$_ev" ]] && continue
+        imgs+=("$(_php_franken_image "$_ev")")
+      done < <(_php_extra_list)
+    elif has_service "caddy"; then
+      imgs+=("${CADDY_IMAGE}")
+    fi
+    has_service "mysql" && imgs+=("${MYSQL_IMAGE}")
+    has_service "postgres" && imgs+=("${POSTGRES_IMAGE}")
+    has_service "redis" && imgs+=("${REDIS_IMAGE}")
+    has_service "acme" && imgs+=("${ACME_IMAGE}")
+    has_service "phpmyadmin" && imgs+=("${PHPMYADMIN_IMAGE}")
+  fi
+  local img
+  for img in "${imgs[@]}"; do
+    _docker_pull "$img" "$force" || die "无法拉取镜像: ${img}"
+  done
+}
+
 _compose_up() {
   local env_args=()
   if has_service "mysql" && [[ -n "${MYSQL_ROOT_PWD:-}" ]]; then
@@ -516,7 +551,7 @@ update_lnmp() {
         local _ev="${one#php-}"
         _php_extra_list | grep -qx "$_ev" || die "未知 LNMP 组件: $one（请确认 EXTRA_PHP_VERSIONS 含此版本）"
         local _esvc; _esvc="$(_php_service_name "$_ev")"
-        compose_cmd -f "$COMPOSE_FILE" pull "$_esvc"
+        _lnmp_pull_images force "$one"
         _compose_lnmp_up_recreate "$_esvc"
         _wait_container "$(_php_container_name "$_ev")" 45
         _install_php_extensions_one "$(_php_container_name "$_ev")"
@@ -525,7 +560,7 @@ update_lnmp() {
       *) die "未知 LNMP 组件: $one（caddy|php|mysql|postgres|redis|acme|phpmyadmin|php-<版本>）" ;;
     esac
     has_service "$one" || die "当前编排未包含 lnmp-${one}"
-    compose_cmd -f "$COMPOSE_FILE" pull "$one"
+    _lnmp_pull_images force "$one"
     _compose_lnmp_up_recreate "$one"
     if [[ "$one" = "php" ]]; then
       _wait_container "php" 45
@@ -534,7 +569,7 @@ update_lnmp() {
       _wait_container "caddy" 45
     fi
   else
-    compose_cmd -f "$COMPOSE_FILE" pull
+    _lnmp_pull_images force
     _compose_lnmp_up_recreate ""
     if has_service "php"; then
       _wait_container "php" 45
