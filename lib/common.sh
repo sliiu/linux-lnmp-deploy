@@ -288,6 +288,8 @@ _php_container_os_mirror() {
     fi
   '
 }
+
+_web_container() {
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-php$'; then
     printf 'lnmp-php'
   elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-caddy$'; then
