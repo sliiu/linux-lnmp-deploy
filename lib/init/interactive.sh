@@ -279,8 +279,8 @@ collect_ssh_config() {
 
 collect_lnmp_services() {
   local sel
-  MENU_MULTI_DEFAULT="1,2,4,5"
-  menu_multi "LNMP 组件（Laravel 选 php=FrankenPHP/Caddy；PM2 网关选 caddy + acme，可选 postgres/redis）" "caddy（无 PHP 时的 Web）" "php（FrankenPHP，含 Caddy）" "mysql" "postgresql" "redis" "acme.sh" "phpMyAdmin"
+  MENU_MULTI_DEFAULT="2"
+  menu_multi "LNMP 组件（Laravel 选 php；PM2 网关选 caddy；库/缓存可第三方；DNS-01 再加 acme.sh）" "caddy（无 PHP 时的 Web，自带 HTTPS）" "php（FrankenPHP，含 Caddy）" "mysql" "postgresql" "redis" "acme.sh（仅 DNS-01）" "phpMyAdmin"
   sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
   local -a names=(caddy php mysql postgres redis acme phpmyadmin)
@@ -390,10 +390,20 @@ collect_lnmp_stack_images() {
   if has_service "phpmyadmin"; then collect_phpmyadmin_image; collect_phpmyadmin_listen; fi
 }
 
-# PM2 网关（SlimPPT api 等）：反代 + 数据库 + 缓存 + 证书，不含 php/mysql
+# PM2 网关：Caddy 反代 + 宿主机 PM2；postgres/redis 可选（可用第三方）
 collect_lnmp_services_pm2_gateway() {
-  LNMP_SERVICES="caddy,postgres,redis,acme"
-  info "PM2 网关栈：caddy + postgres + redis + acme（无 php / mysql）"
+  LNMP_SERVICES="caddy"
+  local sel idx
+  MENU_MULTI_DEFAULT=keep
+  menu_multi "本机再装（回车=不装；Postgres/Redis 可用第三方）" "postgresql" "redis"
+  sel=$MENU_MULTI_RESULT
+  for idx in $sel; do
+    case "$idx" in
+      0) LNMP_SERVICES+=",postgres" ;;
+      1) LNMP_SERVICES+=",redis" ;;
+    esac
+  done
+  info "PM2 网关栈：${LNMP_SERVICES}"
 }
 
 _apply_quiet_network_defaults() {
@@ -404,8 +414,8 @@ _apply_quiet_network_defaults() {
 _interactive_pm2_gateway_install() {
   echo ""
   hr; info "PM2 网关栈（最小安装）"; hr; echo ""
-  info "将安装：Docker → devops 用户 → caddy + postgres + redis + acme → PM2"
-  info "不含 PHP / MySQL（deploy-site --type=pm2 反代宿主机 Node 进程）"
+  info "将安装：Docker → devops 用户 → caddy → PM2"
+  info "不含 PHP / MySQL / acme.sh；Postgres/Redis 回车跳过（可用第三方）"
   echo ""
 
   _apply_quiet_network_defaults
@@ -421,9 +431,8 @@ _interactive_pm2_gateway_install() {
   collect_node_version
   collect_lnmp_services_pm2_gateway
   collect_lnmp_stack_images
-  collect_postgres_password
+  has_service "postgres" && collect_postgres_password
   collect_acme_email
-  collect_acme_ssl_dns_default
 
   echo ""
   hr; info "配置确认"; hr
@@ -432,12 +441,10 @@ _interactive_pm2_gateway_install() {
   printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"
   printf "  %-20s %s\n" "LNMP 组件" "$LNMP_SERVICES"
   printf "  %-20s %s\n" "Caddy 镜像" "$CADDY_IMAGE"
-  printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"
-  printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"
-  printf "  %-20s %s\n" "ACME 镜像" "$ACME_IMAGE"
+  has_service "postgres" && printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"
+  has_service "redis" && printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"
   printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"
   printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"
-  printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
   echo ""
   confirm "确认执行？" "y" || { warn "已取消"; return; }
 
@@ -471,7 +478,7 @@ interactive_setup() {
     local _i
     menu_select "请选择操作" \
       "查看状态" \
-      "PM2 网关栈（Docker + caddy + postgres + redis + acme + PM2）" \
+      "PM2 网关栈（Docker + caddy + PM2；库/缓存可选）" \
       "全新安装（完整向导）" \
       "一键重装 LNMP（沿用上次配置，跳过所有问询）" \
       "更新配置（含 PHP 多版本、镜像源、SSH 等）" \
@@ -538,7 +545,7 @@ _interactive_full_install() {
   menu_multi "选择要安装的模块（回车=Docker + FrankenPHP 栈）" \
     "等保加固 (cyber 三权用户)" \
     "Docker (FrankenPHP 栈前置)" \
-    "FrankenPHP 栈 (Caddy + php + mysql + redis + acme)" \
+    "FrankenPHP 栈 (php，含 Caddy；库/缓存可选)" \
     "Node.js (fnm)" \
     "PM2 (依赖 Node.js，deploy-site 用)" \
     "SSH 安全策略 (改端口/禁 root)" \
@@ -620,8 +627,10 @@ _interactive_full_install() {
     collect_lnmp_stack_images
     if has_service "mysql"; then collect_mysql_password; fi
     if has_service "postgres"; then collect_postgres_password; fi
-    if has_service "acme"; then
+    if has_service "php" || has_service "caddy" || has_service "acme"; then
       collect_acme_email
+    fi
+    if has_service "acme"; then
       collect_acme_ssl_dns_default
     fi
   fi
@@ -655,8 +664,10 @@ _interactive_full_install() {
     fi
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL" "已设置"; fi
     if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL" "已设置"; fi
-    if has_service "acme"; then
+    if has_service "php" || has_service "caddy" || has_service "acme"; then
       printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"
+    fi
+    if has_service "acme"; then
       printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
     fi
   fi
@@ -733,18 +744,21 @@ _interactive_install_one() {
         collect_lnmp_stack_images
         if has_service "mysql"; then collect_mysql_password; fi
         if has_service "postgres"; then collect_postgres_password; fi
-        if has_service "acme"; then
+        if has_service "php" || has_service "caddy" || has_service "acme"; then
           collect_acme_email
+        fi
+        if has_service "acme"; then
           collect_acme_ssl_dns_default
         fi
         install_lnmp
         ;;
       1)  collect_php_version; collect_extra_php_versions; collect_php_extensions; collect_alpine_mirror
+          collect_acme_email
           LNMP_SERVICES="${LNMP_SERVICES},php"; install_lnmp "php" ;;
       2)  collect_mysql_image; collect_mysql_password; LNMP_SERVICES="${LNMP_SERVICES},mysql"; install_lnmp "mysql" ;;
       3)  collect_postgres_image; collect_postgres_password; LNMP_SERVICES="${LNMP_SERVICES},postgres"; install_lnmp "postgres" ;;
       4)  collect_redis_image; LNMP_SERVICES="${LNMP_SERVICES},redis"; install_lnmp "redis" ;;
-      5)  collect_caddy_image; LNMP_SERVICES="${LNMP_SERVICES},caddy"; install_lnmp "caddy" ;;
+      5)  collect_caddy_image; collect_acme_email; LNMP_SERVICES="${LNMP_SERVICES},caddy"; install_lnmp "caddy" ;;
       6)  collect_acme_image; collect_acme_email; collect_acme_ssl_dns_default; LNMP_SERVICES="${LNMP_SERVICES},acme"; install_lnmp "acme" ;;
       7)  collect_phpmyadmin_image; collect_phpmyadmin_listen
           if ! has_service "mysql"; then collect_mysql_image; collect_mysql_password; fi

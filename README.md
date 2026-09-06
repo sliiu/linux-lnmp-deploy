@@ -102,18 +102,16 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
   ```bash
    sudo bash init.sh
   ```
-   - **仅 PM2 网关**（SlimPPT API 等）：选 **「PM2 网关栈」**（Docker + nginx + postgres + redis + acme + PM2，**不含 php**）
+   - **仅 PM2 网关**（SlimPPT API 等）：选 **「PM2 网关栈」**（Docker + caddy + PM2；postgres/redis 可选，可用第三方）
    - **Laravel 全栈**：选 **「全新安装」** 并勾选 LNMP + 按需 PM2
    - **安装单个组件 → PM2 (Node.js)**：在已有 Docker/nginx 的机器上单独补 PM2
 3. **非交互 — PM2 网关最小栈**（无 php/mysql）：
   ```bash
   sudo ./init.sh install docker --docker-mirrors=https://docker.m.daocloud.io
   sudo ./init.sh install devops
-  sudo ./init.sh install nginx
-  sudo ./init.sh install postgres --postgres-pwd='你的密码'
-  sudo ./init.sh install redis
-  sudo ./init.sh install acme --acme-email=you@example.com
+  sudo ./init.sh install caddy --acme-email=you@example.com
   sudo ./init.sh install pm2 --node-version=20
+  # 本机需要时再装：install postgres / install redis
   ```
 4. **查看状态**：
   ```bash
@@ -136,7 +134,7 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
 ### LNMP 版本与镜像（init.sh）
 
 - **交互向导**：全新安装 / PM2 网关 / 「LNMP 全部」**不问**镜像、Alpine 源、PHP 版本/扩展、GitHub 代理、Docker 源、devops 用户名、Node 版本（沿用 `/etc/lnmp-env.conf`：PHP **8.3**、Node **22**、Alpine **阿里云**、未配置时代理 **ghfast.top**、镜像源 **DaoCloud + 阿里云**）。只问 MySQL/Postgres 密码与 ACME 邮箱。改镜像/版本请用 **「更新配置」**。安装**单个**容器时仍可选预设或自定义 `镜像:TAG`。
-- **全新安装回车默认**：模块 **Docker + LNMP**；LNMP 组件 **nginx + php + mysql + redis + acme**（不含 postgres / phpMyAdmin）。
+- **全新安装回车默认**：模块 **Docker + FrankenPHP 栈**；LNMP 组件 **php**（含 Caddy；mysql/postgres/redis/acme 回车不装）。
 - **非交互**：除原有 `**--php-version=`**、`**--php-ext=**` 外，还可指定
 `**--nginx-image=**`、`**--mysql-image=**`、`**--redis-image=**`、`**--acme-image=**`（值须为
 Docker Hub 等可拉取的镜像引用，与 `docker-compose` 中 `image:` 一致）。
@@ -235,7 +233,7 @@ saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
 选单：**回车 = 第 1 项**；非法输入会重问（不会悄悄落到第 1 项）。操作完成后直接回到当前菜单，无需再确认「返回」。
 
 - **查看状态**
-- **PM2 网关栈**：Docker + nginx + postgres + redis + acme + PM2（**不含 php / mysql**）
+- **PM2 网关栈**：Docker + caddy + PM2（postgres/redis 可选，回车不装；Caddy 自动 HTTPS）
 - **全新安装**：多选模块（回车= Docker + LNMP；含可选 **PM2**、**saferm**、SSH、等保等）后一次性执行
 - **一键重装 LNMP**：沿用 `/etc/lnmp-env.conf`，跳过问询
 - **更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**Node.js 版本（PM2）**、**LNMP 各组件镜像**、SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等
@@ -288,7 +286,7 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 - **frontend**：Nginx 在 **代码就绪后**生成。未指定 `**--frontend-root`** 时：若站点目录下存在
 `**dist/**` 则用 `dist`，否则 **站点根目录**即静态根。交互部署不问该字段（自动选择）。
 - **pm2**：Node.js 应用在 **宿主机**由 `**DEVOPS_USER**` 的 PM2 管理，`**lnmp-nginx**` 容器通过 Docker 网关 IP **反代**到宿主机监听端口（支持 WebSocket）。部署流程：Git clone/pull → 检测包管理器（pnpm / yarn / npm）→ `install` → 可选 `build` → PM2 启动/reload → 生成 Nginx 配置与 SSL。
-  - **前提**：已执行 `**init.sh install pm2**`；仍需 **Docker + lnmp-nginx**（及签发证书时的 **lnmp-acme**）。
+  - **前提**：已执行 `**init.sh install pm2**`；仍需 **Docker + lnmp-caddy**。HTTP-01 由 Caddy 自动 HTTPS；**DNS-01** 才需要 **lnmp-acme**。
   - **端口**：写入 `**conf.d/<域名>.pm2-port**`；`**--pm2-port**` 可指定，留空或 `-` 则从 **3000** 起自动分配。交互部署默认自动分配。
   - **启动命令**：写入 `**conf.d/<域名>.pm2-cmd**`；未指定时按顺序检测 `ecosystem.config.cjs` → `ecosystem.config.js` → `package.json` 的 `scripts.start`（`npm start`）；可用 `**--pm2-cmd**` 覆盖。交互默认自动检测。
   - **进程名**：`lnmp-<域名中点换横线>`（如 `api.example.com` → `lnmp-api-example-com`）；启动时注入 `PORT`、`HOST=0.0.0.0`、`NODE_ENV=production`。

@@ -138,13 +138,10 @@ usage() {
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install node --node-version=22
   $0 install pm2
-  # PM2 网关栈（无 php）：caddy 反代 + postgres + redis + acme + 宿主机 PM2
+  # PM2 网关栈（无 php）：caddy 反代 + 宿主机 PM2；postgres/redis 按需另装
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install devops
-  $0 install caddy
-  $0 install postgres --postgres-pwd=secret
-  $0 install redis
-  $0 install acme --acme-email=a@b.com
+  $0 install caddy --acme-email=a@b.com
   $0 install pm2 --node-version=20
   $0 install lnmp --php-version=8.3 --mysql-pwd=secret --postgres-pwd=secret --acme-email=a@b.com
   $0 install postgres --postgres-image=postgres:16-alpine --postgres-pwd=secret

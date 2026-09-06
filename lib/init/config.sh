@@ -16,7 +16,7 @@ conf_load() {
   CYBER_ORDINARY="${CYBER_ORDINARY:-}"
   CYBER_AUDIT="${CYBER_AUDIT:-}"
   CYBER_SAFE="${CYBER_SAFE:-}"
-  LNMP_SERVICES="${LNMP_SERVICES:-php,mysql,redis,acme}"
+  LNMP_SERVICES="${LNMP_SERVICES:-php}"
   CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
   NGINX_IMAGE="${NGINX_IMAGE:-nginx:stable-alpine}"
   MYSQL_IMAGE="${MYSQL_IMAGE:-mysql:8.0}"
