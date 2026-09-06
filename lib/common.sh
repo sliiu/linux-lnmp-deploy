@@ -266,6 +266,39 @@ $1
 "
 }
 
+_php_ext_loaded() {
+  local cname="$1" e="$2"
+  docker exec "$cname" php -r "exit(extension_loaded('${e}') ? 0 : 1);" 2>/dev/null
+}
+
+_php_apt_clear() {
+  local cname="$1"
+  docker exec -u root "$cname" sh -c '
+    for p in /proc/[0-9]*; do
+      cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue
+      case "$cmd" in
+        *apt-get*|*"/usr/bin/apt "*|*dpkg*) kill -9 "$(basename "$p")" 2>/dev/null || true ;;
+      esac
+    done
+    sleep 1
+    rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock
+    DEBIAN_FRONTEND=noninteractive dpkg --configure -a >/dev/null 2>&1 || true
+  ' 2>/dev/null || true
+}
+
+_php_apt_wait() {
+  local cname="$1"
+  docker exec -u root "$cname" sh -c '
+    i=0
+    while [ "$i" -lt 20 ]; do
+      flock -n /var/lib/apt/lists/lock true 2>/dev/null || { i=$((i+1)); sleep 1; continue; }
+      flock -n /var/lib/dpkg/lock-frontend true 2>/dev/null || { i=$((i+1)); sleep 1; continue; }
+      exit 0
+    done
+    exit 0
+  ' 2>/dev/null || true
+}
+
 _php_os_mirror_host() {
   local h="${ALPINE_MIRROR:-}"
   [[ -n "$h" ]] || return 1

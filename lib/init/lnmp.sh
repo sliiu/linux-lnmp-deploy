@@ -662,22 +662,22 @@ _install_php_extensions_one() {
   info "安装 PHP 扩展（${cname}），日志：${logfile}"
 
   IFS=',' read -ra exts <<< "$PHP_EXTENSIONS"
-  local loaded e el
-  loaded=$(docker exec "$cname" php -m 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)
+  local e
   local -a need=()
   for e in "${exts[@]}"; do
     e="${e//[[:space:]]/}"
     [[ -z "$e" ]] && continue
-    el=$(printf '%s' "$e" | tr '[:upper:]' '[:lower:]')
-    printf '%s\n' "$loaded" | grep -qx "$el" && continue
+    _php_ext_loaded "$cname" "$e" && continue
     need+=("$e")
   done
   [[ ${#need[@]} -gt 0 ]] || { ok "PHP 扩展已齐全（${cname}）"; return 0; }
 
   _ensure_php_ext_swap
   _php_container_os_mirror "$cname"
+  _php_apt_clear "$cname"
   for e in "${need[@]}"; do
     info "安装扩展 ${e}（${cname}）"
+    _php_apt_wait "$cname"
     if ! docker exec -u root -e IPE_PROCESSOR_COUNT=1 -e MAKEFLAGS=-j1 \
       "$cname" install-php-extensions "$e" 2>&1 | tee -a "$logfile"; then
       _php_ext_show_log_tail "$logfile"

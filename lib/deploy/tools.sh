@@ -255,9 +255,11 @@ ensure_lnmp_php_laravel_extensions() {
   [[ $need_pgsql -eq 1 ]] && _ipe+=" pdo_pgsql" || _ipe+=" pdo_mysql"
   info "安装 Laravel 所需 PHP 扩展（${cname}）..."
   _php_container_os_mirror "$cname"
+  _php_apt_clear "$cname"
   local _e
   for _e in ${_ipe}; do
-    docker exec "$cname" php -m 2>/dev/null | grep -qi "^${_e}$" && continue
+    _php_ext_loaded "$cname" "$_e" && continue
+    _php_apt_wait "$cname"
     docker exec -u root -e IPE_PROCESSOR_COUNT=1 -e MAKEFLAGS=-j1 "$cname" install-php-extensions "${_e}" \
       || die "PHP 扩展安装失败（${_e} / ${cname}）"
   done
