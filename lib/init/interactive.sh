@@ -280,11 +280,14 @@ collect_ssh_config() {
 collect_lnmp_services() {
   local sel
   MENU_MULTI_DEFAULT="2"
-  menu_multi "LNMP 组件（Laravel 选 php；PM2 网关选 caddy；库/缓存可第三方；DNS-01 再加 acme.sh）" "caddy（无 PHP 时的 Web，自带 HTTPS）" "php（FrankenPHP，含 Caddy）" "mysql" "postgresql" "redis" "acme.sh（仅 DNS-01）" "phpMyAdmin"
+  WANT_PM2=0
+  menu_multi "LNMP 组件（Laravel 选 php；PM2 网关选 caddy + PM2；库/缓存可第三方；DNS-01 再加 acme.sh）" "caddy（无 PHP 时的 Web，自带 HTTPS）" "php（FrankenPHP，含 Caddy）" "mysql" "postgresql" "redis" "acme.sh（仅 DNS-01）" "phpMyAdmin" "PM2（宿主机 Node，deploy-site --type=pm2）"
   sel=$MENU_MULTI_RESULT
   LNMP_SERVICES=""
   local -a names=(caddy php mysql postgres redis acme phpmyadmin)
+  local idx
   for idx in $sel; do
+    if [[ "$idx" -eq 7 ]]; then WANT_PM2=1; continue; fi
     LNMP_SERVICES+="${LNMP_SERVICES:+,}${names[$idx]}"
   done
   if [[ ",$LNMP_SERVICES," = *",php,"* ]]; then
@@ -298,6 +301,7 @@ collect_lnmp_services() {
     LNMP_SERVICES+=",mysql"
     info "已自动补充 mysql（phpMyAdmin 后端必需）"
   fi
+  [[ "$WANT_PM2" = "1" ]] && info "已选 PM2（将安装 fnm + Node.js + pm2）"
 }
 
 _collect_image() {
@@ -611,13 +615,25 @@ _interactive_full_install() {
     fi
   fi
 
+  local _asked_proxy=0
   if [[ $sel_docker -eq 1 || $sel_node -eq 1 || $sel_pm2 -eq 1 || $sel_zsh -eq 1 ]]; then
     collect_github_proxy
+    _asked_proxy=1
   fi
   if [[ $sel_docker -eq 1 ]]; then collect_docker_mirrors; fi
 
   if [[ $sel_lnmp -eq 1 ]]; then
     collect_lnmp_services
+    if [[ "${WANT_PM2:-0}" = "1" ]]; then
+      sel_pm2=1
+      if [[ $sel_node -eq 0 ]] && ! is_node_ok; then
+        info "已自动补充 Node.js（PM2 依赖）"
+        sel_node=1
+      fi
+    fi
+    if [[ $_asked_proxy -eq 0 && ( $sel_node -eq 1 || $sel_pm2 -eq 1 ) ]]; then
+      collect_github_proxy
+    fi
     if has_service "php"; then
       collect_php_version
       collect_extra_php_versions
@@ -751,6 +767,10 @@ _interactive_install_one() {
           collect_acme_ssl_dns_default
         fi
         install_lnmp
+        if [[ "${WANT_PM2:-0}" = "1" ]]; then
+          if ! is_node_ok; then collect_github_proxy; collect_node_version; install_node; fi
+          install_pm2
+        fi
         ;;
       1)  collect_php_version; collect_extra_php_versions; collect_php_extensions; collect_alpine_mirror
           collect_acme_email
