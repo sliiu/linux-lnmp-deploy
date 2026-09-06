@@ -613,6 +613,9 @@ _interactive_full_install() {
     else
       collect_user_ssh_access_into "$WHEEL_USER" WHEEL_SSH_MODE WHEEL_SSH_LINE
     fi
+    setup_wheel_user
+    WHEEL_SKIP_PASSWD_PROMPT=1
+    WHEEL_PWD=""
   fi
 
   local _asked_proxy=0

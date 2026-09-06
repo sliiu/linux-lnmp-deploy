@@ -203,6 +203,12 @@ setup_wheel_user() {
   if [[ -z "$WHEEL_USER" ]]; then return 0; fi
 
   getent group wheel >/dev/null 2>&1 || groupadd wheel
+  printf '%s\n' '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel
+  chmod 440 /etc/sudoers.d/wheel
+  if command -v visudo >/dev/null && ! visudo -cf /etc/sudoers.d/wheel &>/dev/null; then
+    rm -f /etc/sudoers.d/wheel
+    die "写入 wheel sudoers 失败"
+  fi
 
   if ! id "${WHEEL_USER}" &>/dev/null; then
     local pwd="${WHEEL_PWD:-}"
@@ -254,7 +260,9 @@ setup_cyber_users() {
 
   for role in ordinary audit safe; do
     local name
-    prompt "${roles[$role]}用户名" "${defaults[$role]}"
+    local _var="${vars[$role]}" _def="${defaults[$role]}"
+    [[ -n "${!_var:-}" ]] && _def="${!_var}"
+    prompt "${roles[$role]}用户名" "$_def"
     name=$PROMPT_RESULT
     name=$(echo -n "$name" | tr -cd '[:alnum:]_')
     if [[ -z "$name" ]]; then name="${defaults[$role]}"; fi
