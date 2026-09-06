@@ -266,7 +266,28 @@ $1
 "
 }
 
-_web_container() {
+_php_os_mirror_host() {
+  local h="${ALPINE_MIRROR:-}"
+  [[ -n "$h" ]] || return 1
+  printf '%s' "$h"
+}
+
+_php_container_os_mirror() {
+  local cname="$1" host
+  host="$(_php_os_mirror_host)" || return 0
+  info "容器 ${cname} 使用软件源 ${host}"
+  docker exec -u root -e "_MIRROR=${host}" "$cname" sh -c '
+    if grep -qi alpine /etc/os-release 2>/dev/null; then
+      sed -i "s#https\?://dl-cdn.alpinelinux.org/alpine#http://${_MIRROR}/alpine#g" /etc/apk/repositories 2>/dev/null || true
+    else
+      for f in /etc/apt/sources.list /etc/apt/sources.list.d/debian.sources /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+        [ -f "$f" ] || continue
+        sed -i "s#https\?://deb.debian.org#http://${_MIRROR}#g" "$f"
+        sed -i "s#https\?://security.debian.org#http://${_MIRROR}/debian-security#g" "$f"
+      done
+    fi
+  '
+}
   if docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-php$'; then
     printf 'lnmp-php'
   elif docker ps --format '{{.Names}}' 2>/dev/null | grep -q '^lnmp-caddy$'; then

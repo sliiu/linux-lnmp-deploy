@@ -3,7 +3,7 @@ conf_load() {
   DEVOPS_USER="${DEVOPS_USER:-devops}"
   GH_PROXY="${GH_PROXY:-}"
   DOCKER_MIRRORS_STR="${DOCKER_MIRRORS_STR:-}"
-  ALPINE_MIRROR="${ALPINE_MIRROR:-mirrors.aliyun.com}"
+  ALPINE_MIRROR="${ALPINE_MIRROR:-mirrors.cloud.aliyuncs.com}"
   NODE_VERSION="${NODE_VERSION:-22}"
   FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
   PHP_VERSION="${PHP_VERSION:-8.3}"

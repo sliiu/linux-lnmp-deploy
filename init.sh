@@ -110,7 +110,7 @@ usage() {
 安装选项:
   --gh-proxy=URL          GitHub 代理
   --docker-mirrors=URL,.. Docker 镜像源（逗号分隔）
-  --alpine-mirror=HOST    Alpine 源
+  --alpine-mirror=HOST    PHP 系统源主机名（Debian/Alpine，如 mirrors.cloud.aliyuncs.com）
   --node-version=VER     Node.js 主版本（fnm，默认 22）
   --node-mirror=URL      Node 二进制镜像 [https://npmmirror.com/mirrors/node]
   --php-version=VER       PHP 主版本，对应 dunglas/frankenphp:phpVER（8.2–8.5）

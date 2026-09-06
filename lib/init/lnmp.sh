@@ -675,6 +675,7 @@ _install_php_extensions_one() {
   [[ ${#need[@]} -gt 0 ]] || { ok "PHP 扩展已齐全（${cname}）"; return 0; }
 
   _ensure_php_ext_swap
+  _php_container_os_mirror "$cname"
   for e in "${need[@]}"; do
     info "安装扩展 ${e}（${cname}）"
     if ! docker exec -u root -e IPE_PROCESSOR_COUNT=1 -e MAKEFLAGS=-j1 \

@@ -83,7 +83,7 @@ show_status() {
   if has_service "php"; then
     printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}"
     printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
-    printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
+    printf "  %-20s %s\n" "PHP 系统源" "${ALPINE_MIRROR:-官方}"
   fi
   printf "  %-20s %s\n" "GitHub 代理" "${GH_PROXY:-无}"
   is_docker_ok && printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"

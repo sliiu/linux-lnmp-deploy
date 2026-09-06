@@ -254,6 +254,7 @@ ensure_lnmp_php_laravel_extensions() {
   local _ipe="bcmath pcntl gd zip redis"
   [[ $need_pgsql -eq 1 ]] && _ipe+=" pdo_pgsql" || _ipe+=" pdo_mysql"
   info "安装 Laravel 所需 PHP 扩展（${cname}）..."
+  _php_container_os_mirror "$cname"
   local _e
   for _e in ${_ipe}; do
     docker exec "$cname" php -m 2>/dev/null | grep -qi "^${_e}$" && continue

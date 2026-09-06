@@ -66,13 +66,23 @@ collect_docker_mirrors() {
 
 collect_alpine_mirror() {
   local idx
-  menu_select "PHP Alpine 源（当前: ${ALPINE_MIRROR:-官方}）" \
-    "阿里云（推荐国内）" "清华" "官方"
+  menu_select "PHP 系统源（Debian apt / Alpine apk，当前: ${ALPINE_MIRROR:-官方}）" \
+    "阿里云内网 mirrors.cloud.aliyuncs.com（ECS 推荐）" \
+    "阿里云 mirrors.aliyun.com" \
+    "清华 mirrors.tuna.tsinghua.edu.cn" \
+    "官方" \
+    "自定义"
   idx=$MENU_SELECT_RESULT
   case "$idx" in
-    0) ALPINE_MIRROR="mirrors.aliyun.com" ;;
-    1) ALPINE_MIRROR="mirrors.tuna.tsinghua.edu.cn" ;;
-    2) ALPINE_MIRROR="" ;;
+    0) ALPINE_MIRROR="mirrors.cloud.aliyuncs.com" ;;
+    1) ALPINE_MIRROR="mirrors.aliyun.com" ;;
+    2) ALPINE_MIRROR="mirrors.tuna.tsinghua.edu.cn" ;;
+    3) ALPINE_MIRROR="" ;;
+    4)
+      prompt "镜像主机名（如 mirrors.aliyun.com；- 用官方）" "${ALPINE_MIRROR:-mirrors.cloud.aliyuncs.com}"
+      ALPINE_MIRROR=$PROMPT_RESULT
+      [[ "$ALPINE_MIRROR" = "-" ]] && ALPINE_MIRROR=""
+      ;;
   esac
 }
 
@@ -529,7 +539,7 @@ _interactive_oneclick_reinstall() {
     printf "  %-20s %s\n" "PHP 默认版本" "${PHP_VERSION:-<未设置>}"
     printf "  %-20s %s\n" "PHP 额外版本" "${EXTRA_PHP_VERSIONS:-<无>}"
     printf "  %-20s %s\n" "PHP 扩展" "${PHP_EXTENSIONS:-<未设置>}"
-    printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
+    printf "  %-20s %s\n" "PHP 系统源" "${ALPINE_MIRROR:-官方}"
   fi
   echo ""
   confirm "确认按上述配置执行 install_lnmp？" "y" || { warn "已取消"; return; }
@@ -679,7 +689,7 @@ _interactive_full_install() {
       printf "  %-20s %s\n" "PHP 版本（默认）" "$PHP_VERSION"
       printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
       printf "  %-20s %s\n" "PHP 扩展" "$PHP_EXTENSIONS"
-      printf "  %-20s %s\n" "Alpine 源" "${ALPINE_MIRROR:-官方}"
+      printf "  %-20s %s\n" "PHP 系统源" "${ALPINE_MIRROR:-官方}"
     fi
     if has_service "mysql"; then printf "  %-20s %s\n" "MySQL" "已设置"; fi
     if has_service "postgres"; then printf "  %-20s %s\n" "PostgreSQL" "已设置"; fi
@@ -883,7 +893,7 @@ _interactive_config() {
       "PHP 版本（默认）" \
       "LNMP 组件镜像" \
       "Docker 镜像源" \
-      "Alpine 源" \
+      "PHP 系统源" \
       "GitHub 代理" \
       "SSH 配置" \
       "ACME 邮箱" \
