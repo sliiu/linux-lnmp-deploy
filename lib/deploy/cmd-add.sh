@@ -1353,7 +1353,13 @@ cmd_update() {
   elif [[ "$site_type" = "pm2" ]]; then
     apply_site_pm2_port_cli "$DOMAIN"
     apply_site_pm2_cmd_cli "$DOMAIN"
-    reload_pm2_site "$DOMAIN"
+    if _pm2_site_has_launchable_code "$DOMAIN"; then
+      reload_pm2_site "$DOMAIN"
+    elif frontend_release_webhook_site "$DOMAIN" 2>/dev/null; then
+      warn "待 gateway-release webhook 推送产物后再启动 PM2"
+    else
+      warn "站点目录尚无 package.json / ecosystem 配置，跳过 PM2"
+    fi
     gen_nginx_pm2 "$DOMAIN"
     _caddy_reload_soft "Caddy 已 reload"
   elif [[ "$site_type" = "proxy" ]]; then
