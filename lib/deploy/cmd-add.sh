@@ -10,10 +10,12 @@ setup_laravel() {
     su - "${DEVOPS_USER}" -c "cp '${site_dir}/.env.example' '${envfile}'"
   fi
 
-  local queue_conn="redis"
+  local queue_conn="redis" session_drv="redis" cache_drv="redis"
   if ! container_ok "lnmp-redis"; then
     queue_conn="sync"
-    warn "lnmp-redis 未运行，队列使用 sync"
+    session_drv="file"
+    cache_drv="file"
+    warn "lnmp-redis 未运行，队列 sync、session/cache 使用 file"
   fi
 
   local lv; lv="$(_laravel_min_for_site "$domain")"
@@ -26,11 +28,11 @@ setup_laravel() {
   env_set "REDIS_PORT"       "${REDIS_PORT}"    "$envfile"
   env_set "REDIS_PASSWORD"   "${REDIS_PASSWORD}" "$envfile"
   env_set "QUEUE_CONNECTION" "${queue_conn}"    "$envfile"
-  env_set "SESSION_DRIVER"   "redis"            "$envfile"
+  env_set "SESSION_DRIVER"   "${session_drv}"   "$envfile"
   if [[ -n "$lv" ]] && _lv_ge "$lv" "10"; then
-    env_set "CACHE_STORE"    "redis"            "$envfile"
+    env_set "CACHE_STORE"    "${cache_drv}"     "$envfile"
   else
-    env_set "CACHE_DRIVER"   "redis"            "$envfile"
+    env_set "CACHE_DRIVER"   "${cache_drv}"     "$envfile"
   fi
   if [[ -n "$lv" ]] && ! _lv_ge "$lv" "6"; then
     env_set "REDIS_CLIENT"   "predis"           "$envfile"
@@ -942,7 +944,9 @@ _require_deploy_containers() {
     ensure_mysql_low_memory_host_artifacts
     warn_mysql_low_memory_compose_missing
   fi
-  container_ok "lnmp-acme" || warn "lnmp-acme 未运行，SSL 签发可能失败"
+  if _is_dns_mode "${SSL_DNS:-${ACME_SSL_DNS_DEFAULT:-webroot}}"; then
+    container_ok "lnmp-acme" || warn "lnmp-acme 未运行，DNS-01 签发将失败"
+  fi
 }
 
 cmd_add() {
@@ -1319,7 +1323,7 @@ cmd_update() {
     fi
 
     info "FrankenPHP reload（${cname}）..."
-    docker exec "$cname" frankenphp reload --config /etc/caddy/Caddyfile 2>/dev/null \
+    docker exec "$cname" "$(_web_bin "$cname")" reload --config /etc/caddy/Caddyfile 2>/dev/null \
       && ok "FrankenPHP 已 reload（${cname}）" \
       || warn "FrankenPHP reload 失败；可手动: docker restart ${cname}"
 

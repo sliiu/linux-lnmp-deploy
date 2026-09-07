@@ -1532,11 +1532,13 @@ _webhook_apply_nginx_proxy() {
   else
     info "生成 Webhook 专用 Caddy 配置 ${conf}"
     _webhook_gen_standalone_caddy "$domain" "$hook_path" "$port"
-    warn "新域名请执行: $0 ssl --domain=${domain} 签发证书"
+    mkdir -p "${NGINX_CONF}"
+    printf 'auto\n' > "${NGINX_CONF}/${domain}.tls-mode"
+    info "Caddy 自动 HTTPS（HTTP-01）"
   fi
   if container_ok "$(_web_container)"; then
     caddy_validate || die "Caddy 配置校验失败"
-    caddy_reload 2>/dev/null && ok "Caddy 已 reload"
+    caddy_reload && ok "Caddy 已 reload" || die "Caddy reload 失败"
   fi
 }
 

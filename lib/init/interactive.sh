@@ -912,7 +912,7 @@ _interactive_config() {
          fi
          ;;
       1) collect_php_extensions
-         if has_service "php" && container_ok "lnmp-php"; then
+         if has_service "php" && container_ok "php"; then
            _install_php_extensions
          else
            ok "已写入配置（lnmp-php 未运行，下次启动后通过此菜单或 LNMP - php 重建生效）"
@@ -931,7 +931,7 @@ _interactive_config() {
       6) collect_github_proxy ;;
       7) collect_ssh_config; install_ssh ;;
       8) collect_acme_email
-         if container_ok "lnmp-acme"; then
+         if container_ok "acme"; then
            info "更新 acme.sh 注册账户邮箱..."
            docker exec lnmp-acme acme.sh --register-account -m "$ACME_EMAIL" 2>/dev/null \
              && ok "邮箱已更新" || warn "更新失败（首次签证书时也会自动注册）"
