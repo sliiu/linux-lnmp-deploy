@@ -334,8 +334,8 @@ _web_container() {
 
 _web_bin() {
   local c="${1:-$(_web_container)}"
-  if docker exec "$c" command -v frankenphp >/dev/null 2>&1; then
-    printf 'frankenphp'
+  if docker exec "$c" sh -c 'command -v frankenphp >/dev/null 2>&1 || test -x /usr/local/bin/frankenphp'; then
+    docker exec "$c" sh -c 'command -v frankenphp 2>/dev/null || printf %s /usr/local/bin/frankenphp'
   else
     printf 'caddy'
   fi
