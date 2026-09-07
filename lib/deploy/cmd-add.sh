@@ -690,7 +690,8 @@ _collect_pm2_source_interactive() {
 
 # PM2 站点目录尚无可启动产物时跳过 setup_pm2（Webhook / 待首次推送场景）
 _pm2_site_has_launchable_code() {
-  local domain="$1" site_dir="${WWW_ROOT}/${domain}"
+  local domain="$1"
+  local site_dir="${WWW_ROOT}/${domain}"
   [[ -f "${site_dir}/package.json" || -f "${site_dir}/ecosystem.config.js" || -f "${site_dir}/ecosystem.config.cjs" ]]
 }
 

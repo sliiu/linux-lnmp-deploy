@@ -120,7 +120,8 @@ pm2_port_for_site() {
 }
 
 pm2_start_cmd_for_site() {
-  local domain="$1" site_dir="${WWW_ROOT}/${domain}" f cmd
+  local domain="$1"
+  local site_dir="${WWW_ROOT}/${domain}" f cmd
   f="$(site_pm2_cmd_file "$domain")"
   if [[ -f "$f" ]]; then
     cmd="$(head -n1 "$f" 2>/dev/null | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
@@ -196,7 +197,8 @@ _pm2_detect_pkg_manager() {
 }
 
 _pm2_install_deps() {
-  local domain="$1" site_dir="${WWW_ROOT}/${domain}" pm
+  local domain="$1"
+  local site_dir="${WWW_ROOT}/${domain}" pm
   [[ -f "${site_dir}/package.json" ]] || die "未找到 ${site_dir}/package.json"
   pm="$(_pm2_detect_pkg_manager "$site_dir")" || die "无法检测包管理器"
   info "${pm} install..."
@@ -209,7 +211,8 @@ _pm2_install_deps() {
 }
 
 _pm2_run_build() {
-  local domain="$1" site_dir="${WWW_ROOT}/${domain}" pm
+  local domain="$1"
+  local site_dir="${WWW_ROOT}/${domain}" pm
   [[ "${PM2_BUILD:-y}" != "y" ]] && { info "跳过构建（PM2_BUILD=n）"; return 0; }
   [[ -f "${site_dir}/package.json" ]] || return 0
   grep -q '"build"' "${site_dir}/package.json" 2>/dev/null || { info "package.json 无 build 脚本，跳过"; return 0; }
@@ -224,7 +227,8 @@ _pm2_run_build() {
 }
 
 setup_pm2() {
-  local domain="$1" site_dir="${WWW_ROOT}/${domain}" port app cmd env_prefix
+  local domain="$1"
+  local site_dir="${WWW_ROOT}/${domain}" port app cmd env_prefix
   ensure_pm2_runtime
   apply_site_pm2_port_cli "$domain"
   apply_site_pm2_cmd_cli "$domain"
@@ -254,7 +258,8 @@ setup_pm2() {
 }
 
 reload_pm2_site() {
-  local domain="$1" site_dir="${WWW_ROOT}/${domain}" port app env_prefix
+  local domain="$1"
+  local site_dir="${WWW_ROOT}/${domain}" port app env_prefix
   [[ "$(_site_type_for_domain "$domain")" = "pm2" ]] || return 0
   ensure_pm2_runtime
   port="$(pm2_port_for_site "$domain")"
