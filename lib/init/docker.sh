@@ -29,6 +29,7 @@ install_docker() {
   _ensure_compose
   _configure_docker_daemon
   _docker_add_users
+  declare -F _firewall_apply_host_ports &>/dev/null && _firewall_apply_host_ports
 
   ok "Docker 就绪"
 }

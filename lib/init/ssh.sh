@@ -1,13 +1,54 @@
 # shellcheck shell=bash
+_useradd_login() {
+  local name="$1" shell="${2:-/bin/bash}"
+  local -a args=(-m -s "$shell")
+  getent group "$name" >/dev/null 2>&1 && args+=(-g "$name")
+  useradd "${args[@]}" "$name"
+}
+
+_account_passwd_ready() {
+  local u="$1"
+  id "$u" &>/dev/null || return 0
+  chage -m 0 -M 90 -W 7 -E -1 -d "$(date +%F)" "$u" 2>/dev/null || true
+}
+
+_ssh_src_authorized_keys() {
+  local u home ak
+  for u in "${SUDO_USER:-}" ec2-user ubuntu admin centos fedora debian cloud-user ecs-user; do
+    [[ -n "$u" && "$u" != "root" ]] || continue
+    home=$(getent passwd "$u" | cut -d: -f6 || true)
+    ak="${home}/.ssh/authorized_keys"
+    [[ -s "$ak" ]] && { printf '%s' "$ak"; return 0; }
+  done
+  [[ -s /root/.ssh/authorized_keys ]] && { printf '%s' /root/.ssh/authorized_keys; return 0; }
+  return 1
+}
+
+_ssh_keep_cloud_logins() {
+  local u
+  [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && printf '%s\n' "$SUDO_USER"
+  for u in ec2-user ubuntu admin centos fedora debian cloud-user ecs-user; do
+    id "$u" &>/dev/null && printf '%s\n' "$u"
+  done
+}
+
 _ssh_build_allowusers_list() {
   local -a raw=() out=()
+  local x y seen
   [[ "${ROOT_LOGIN:-prohibit-password}" != "no" ]] && raw+=(root)
   [[ -n "${WHEEL_USER:-}" ]] && raw+=("$WHEEL_USER")
   [[ -n "${DEVOPS_USER:-}" ]] && raw+=("$DEVOPS_USER")
   [[ -n "${CYBER_ORDINARY:-}" ]] && raw+=("$CYBER_ORDINARY")
   [[ -n "${CYBER_AUDIT:-}" ]] && raw+=("$CYBER_AUDIT")
   [[ -n "${CYBER_SAFE:-}" ]] && raw+=("$CYBER_SAFE")
-  local x y seen
+  while IFS= read -r x; do
+    [[ -n "$x" ]] && raw+=("$x")
+  done < <(_ssh_keep_cloud_logins)
+  if declare -F _ssh_config_read_allowusers &>/dev/null; then
+    for x in $(_ssh_config_read_allowusers); do
+      raw+=("$x")
+    done
+  fi
   for x in "${raw[@]}"; do
     [[ -n "$x" ]] || continue
     seen=0
@@ -43,7 +84,9 @@ install_ssh() {
   sed -i '/^AllowUsers/d' "$sshd_conf"
   echo "AllowUsers $(_ssh_build_allowusers_list)" >> "$sshd_conf"
 
-  if [[ "${SSH_PORT}" != "22" ]] && is_firewall_on; then
+  if is_firewall_on && declare -F _firewall_apply_host_ports &>/dev/null; then
+    _firewall_apply_host_ports
+  elif [[ "${SSH_PORT}" != "22" ]] && is_firewall_on; then
     firewall-cmd --permanent --add-port="${SSH_PORT}"/tcp 2>/dev/null || true
     firewall-cmd --reload 2>/dev/null || true
   fi
@@ -90,10 +133,12 @@ ensure_user_ssh_access() {
   esac
 
   if [[ "$mode" = "root" ]]; then
-    if [[ -s /root/.ssh/authorized_keys ]]; then
-      cp /root/.ssh/authorized_keys "$ak" || true
+    local src=""
+    src="$(_ssh_src_authorized_keys)" || src=""
+    if [[ -n "$src" ]]; then
+      cp "$src" "$ak" || true
     else
-      warn "${u}：root 无 authorized_keys，无法复制"
+      warn "${u}：无可用 authorized_keys 可复制"
     fi
   elif [[ "$mode" = "line" && -n "$key_line" ]]; then
     printf '%s\n' "$key_line" >> "$ak"
@@ -103,8 +148,10 @@ ensure_user_ssh_access() {
     return 0
   else
     _SSH_ACCESS_ASKED="${_SSH_ACCESS_ASKED:-} $u"
-    if [[ -s /root/.ssh/authorized_keys ]] && confirm "将 root 的 authorized_keys 复制到 ${u}？" "y"; then
-      cp /root/.ssh/authorized_keys "$ak" || true
+    local src=""
+    src="$(_ssh_src_authorized_keys)" || src=""
+    if [[ -n "$src" ]] && confirm "将 ${src} 复制到 ${u}？" "y"; then
+      cp "$src" "$ak" || true
     fi
     if [[ ! -s "$ak" ]]; then
       local pk=""
@@ -132,7 +179,9 @@ collect_user_ssh_access_into() {
     printf -v "$linevar" '%s' ""
     return 0
   fi
-  if [[ -s /root/.ssh/authorized_keys ]] && confirm "将 root 的 authorized_keys 复制到 ${u}？" "y"; then
+  local src=""
+  src="$(_ssh_src_authorized_keys)" || src=""
+  if [[ -n "$src" ]] && confirm "将 ${src} 复制到 ${u}？" "y"; then
     mode="root"
   else
     local pk=""
@@ -174,14 +223,16 @@ setup_devops_user() {
   if ! id "${DEVOPS_USER}" &>/dev/null; then
     local pwd="${DEVOPS_PWD:-}"
     [[ -n "$pwd" ]] || prompt_secret_confirm_into "${DEVOPS_USER} 密码" pwd
-    useradd -m -s /bin/bash "${DEVOPS_USER}" || die "创建用户失败"
+    _useradd_login "${DEVOPS_USER}" || die "创建用户失败"
     echo "${DEVOPS_USER}:${pwd}" | chpasswd || die "设置密码失败"
+    _account_passwd_ready "${DEVOPS_USER}"
     chmod 700 /home/"${DEVOPS_USER}"
     ok "${DEVOPS_USER} 创建完成"
   else
     ok "${DEVOPS_USER} 已存在"
     if [[ -n "${DEVOPS_PWD:-}" ]]; then
       echo "${DEVOPS_USER}:${DEVOPS_PWD}" | chpasswd || die "设置密码失败"
+      _account_passwd_ready "${DEVOPS_USER}"
       ok "${DEVOPS_USER} 密码已更新"
     fi
   fi
@@ -213,16 +264,19 @@ setup_wheel_user() {
   if ! id "${WHEEL_USER}" &>/dev/null; then
     local pwd="${WHEEL_PWD:-}"
     [[ -n "$pwd" ]] || prompt_secret_confirm_into "${WHEEL_USER} 密码" pwd
-    useradd -m -s /bin/bash "${WHEEL_USER}" || die "创建用户 ${WHEEL_USER} 失败"
+    _useradd_login "${WHEEL_USER}" || die "创建用户 ${WHEEL_USER} 失败"
     echo "${WHEEL_USER}:${pwd}" | chpasswd || die "设置密码失败"
+    _account_passwd_ready "${WHEEL_USER}"
     ok "${WHEEL_USER} 创建完成"
   elif [[ -n "${WHEEL_PWD:-}" ]]; then
     echo "${WHEEL_USER}:${WHEEL_PWD}" | chpasswd || die "设置密码失败"
+    _account_passwd_ready "${WHEEL_USER}"
     ok "${WHEEL_USER} 密码已更新"
   elif [[ "${WHEEL_SKIP_PASSWD_PROMPT:-0}" != 1 ]] && confirm "${WHEEL_USER} 已存在，是否修改密码？" "n"; then
     local pwd
     prompt_secret_confirm_into "新密码" pwd
     echo "${WHEEL_USER}:${pwd}" | chpasswd || die "设置密码失败"
+    _account_passwd_ready "${WHEEL_USER}"
     ok "${WHEEL_USER} 密码已更新"
   fi
 
@@ -244,9 +298,10 @@ setup_cyber_users() {
   local -A defaults=([ordinary]="user" [audit]="audit" [safe]="safe")
   local -A vars=([ordinary]="CYBER_ORDINARY" [audit]="CYBER_AUDIT" [safe]="CYBER_SAFE")
 
-  local cyber_ssh_mode="skip" cyber_ssh_line=""
+  local cyber_ssh_mode="skip" cyber_ssh_line="" cyber_ssh_src=""
+  cyber_ssh_src="$(_ssh_src_authorized_keys)" || cyber_ssh_src=""
   if confirm "为三权账户配置 SSH 公钥（禁用口令登录后远程必需）？" "y"; then
-    if [[ -s /root/.ssh/authorized_keys ]] && confirm "各账户从 root 复制 authorized_keys？" "y"; then
+    if [[ -n "$cyber_ssh_src" ]] && confirm "各账户从 ${cyber_ssh_src} 复制 authorized_keys？" "y"; then
       cyber_ssh_mode="root"
     else
       read -rp "  统一公钥一行（写入全部三权账户；留空则每个账户分别询问）: " cyber_ssh_line </dev/tty
@@ -278,16 +333,11 @@ setup_cyber_users() {
           warn "复杂度不足"
         done
         echo "${name}:${pw}" | chpasswd || die "设置密码失败"
+        _account_passwd_ready "$name"
         ok "${name} 密码已更新"
       fi
     else
-      local -a _ua=(-m -s /bin/bash)
-      getent group "$name" >/dev/null 2>&1 && _ua+=(-g "$name")
-      _ua+=("$name")
-      if ! useradd "${_ua[@]}"; then
-        warn "创建 ${name} 失败"
-        continue
-      fi
+      _useradd_login "$name" || { warn "创建 ${name} 失败"; continue; }
       local pw
       while true; do
         prompt_secret_confirm_into "${name} 密码 (>=10位，大小写/数字/特殊符至少3类)" pw
@@ -295,6 +345,7 @@ setup_cyber_users() {
         warn "复杂度不足"
       done
       echo "${name}:${pw}" | chpasswd || die "设置密码失败"
+      _account_passwd_ready "$name"
       ok "${name} 创建完成"
     fi
 
@@ -323,8 +374,11 @@ setup_cyber_users() {
   fi
 
   chmod 750 /home/* 2>/dev/null || true
-  chage --maxdays 90 root 2>/dev/null || true
-  chage --mindays 7 root 2>/dev/null || true
+  if grep -q '^root:[^!*:]' /etc/shadow 2>/dev/null; then
+    _account_passwd_ready root
+  else
+    chage -m 0 -M -1 -E -1 root 2>/dev/null || true
+  fi
   chmod 600 /etc/ssh/sshd_config 2>/dev/null || true
   touch "$CYBERSEC_MARKER"
   ok "等保加固完成"

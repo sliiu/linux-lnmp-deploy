@@ -206,8 +206,13 @@ account_user_add_interactive() {
 
   prompt_secret_confirm_into "${name} 登录密码" pwd
 
-  useradd -m -s "$shell" "$name" || { warn "useradd 失败"; return 0; }
+  if declare -F _useradd_login &>/dev/null; then
+    _useradd_login "$name" "$shell" || { warn "useradd 失败"; return 0; }
+  else
+    useradd -m -s "$shell" "$name" || { warn "useradd 失败"; return 0; }
+  fi
   echo "${name}:${pwd}" | chpasswd || { warn "chpasswd 失败"; return 0; }
+  declare -F _account_passwd_ready &>/dev/null && _account_passwd_ready "$name"
   chmod 750 "/home/${name}" 2>/dev/null || true
   mkdir -p "/home/${name}/.ssh"
   chmod 700 "/home/${name}/.ssh"
@@ -253,6 +258,7 @@ account_user_passwd_interactive() {
   _account_refuse_system_user "$name" || return 0
   prompt_secret_confirm_into "${name} 新密码" pwd
   echo "${name}:${pwd}" | chpasswd || { warn "chpasswd 失败"; return 0; }
+  declare -F _account_passwd_ready &>/dev/null && _account_passwd_ready "$name"
   ok "密码已更新"
 }
 
