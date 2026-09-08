@@ -58,6 +58,27 @@ _ssh_build_allowusers_list() {
   echo "${out[*]}"
 }
 
+_sudo_keep_cloud_nopasswd() {
+  local u hash f=/etc/sudoers.d/zz-cloud-nopasswd lines=""
+  for u in "${SUDO_USER:-}" ec2-user ubuntu centos fedora debian cloud-user ecs-user; do
+    [[ -n "$u" && "$u" != "root" ]] || continue
+    id "$u" &>/dev/null || continue
+    hash=$(getent shadow "$u" 2>/dev/null | cut -d: -f2)
+    case "$hash" in
+      ""|"!"|"*"|"!!"|!*) ;;
+      *) continue ;;
+    esac
+    lines+="${u} ALL=(ALL) NOPASSWD:ALL"$'\n'
+  done
+  [[ -n "$lines" ]] || return 0
+  printf '%s' "$lines" > "$f"
+  chmod 440 "$f"
+  if command -v visudo >/dev/null && ! visudo -cf "$f" &>/dev/null; then
+    rm -f "$f"
+    return 1
+  fi
+}
+
 install_ssh() {
   hr; info "SSH 安全配置"; echo ""
 
@@ -94,6 +115,7 @@ install_ssh() {
   chmod 600 "$sshd_conf"
   systemctl restart sshd
   systemctl is-active sshd &>/dev/null || die "sshd 重启失败"
+  _sudo_keep_cloud_nopasswd
   ok "SSH 配置完成 (端口 ${SSH_PORT})"
 }
 
@@ -247,6 +269,7 @@ setup_devops_user() {
   chmod 440 /etc/sudoers.d/devops-deploy 2>/dev/null || true
 
   ensure_user_ssh_access "${DEVOPS_USER}" "${DEVOPS_SSH_MODE:-interactive}" "${DEVOPS_SSH_LINE:-}"
+  _sudo_keep_cloud_nopasswd
 }
 
 setup_wheel_user() {
@@ -254,10 +277,11 @@ setup_wheel_user() {
   if [[ -z "$WHEEL_USER" ]]; then return 0; fi
 
   getent group wheel >/dev/null 2>&1 || groupadd wheel
-  printf '%s\n' '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/wheel
-  chmod 440 /etc/sudoers.d/wheel
-  if command -v visudo >/dev/null && ! visudo -cf /etc/sudoers.d/wheel &>/dev/null; then
-    rm -f /etc/sudoers.d/wheel
+  rm -f /etc/sudoers.d/wheel
+  printf '%s\n' '%wheel ALL=(ALL) ALL' > /etc/sudoers.d/10-wheel
+  chmod 440 /etc/sudoers.d/10-wheel
+  if command -v visudo >/dev/null && ! visudo -cf /etc/sudoers.d/10-wheel &>/dev/null; then
+    rm -f /etc/sudoers.d/10-wheel
     die "写入 wheel sudoers 失败"
   fi
 
@@ -289,6 +313,7 @@ setup_wheel_user() {
   chown -R "${WHEEL_USER}:${WHEEL_USER}" /home/"${WHEEL_USER}"/.ssh
 
   ensure_user_ssh_access "${WHEEL_USER}" "${WHEEL_SSH_MODE:-interactive}" "${WHEEL_SSH_LINE:-}"
+  _sudo_keep_cloud_nopasswd
 }
 
 setup_cyber_users() {
