@@ -42,7 +42,10 @@ _webhook_collect_site_release_opts() {
   old_inc="$(_webhook_normalize_incremental "$old_inc")"
   repo_lc="$(printf '%s' "${GIT_REPO:-}" | tr '[:upper:]' '[:lower:]')"
 
-  [[ -z "${WEBHOOK_ASSET_NAME:-}" && -n "$old_asset" ]] && WEBHOOK_ASSET_NAME="$old_asset"
+  if [[ -z "${WEBHOOK_ASSET_NAME:-}" ]]; then
+    prompt "Release 附件名关键字（如 slimppt-standalone.tar.gz，留空不限制）" "${old_asset:-}"
+    WEBHOOK_ASSET_NAME="$PROMPT_RESULT"
+  fi
 
   if [[ "$repo_lc" == *github.com* || "$repo_lc" == git@github.com:* ]]; then
     if [[ -z "${WEBHOOK_SITE_GITHUB_TOKEN:-}" ]]; then

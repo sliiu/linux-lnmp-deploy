@@ -975,13 +975,14 @@ cmd_add() {
       printf "  %-18s %s\n" "部署"   "Webhook Release（不 clone）"
       printf "  %-18s %s\n" "仓库(匹配)" "${GIT_REPO}"
       printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
+      printf "  %-18s %s\n" "附件关键字" "${WEBHOOK_ASSET_NAME:-不限制}"
       printf "  %-18s %s\n" "增量部署" \
         "$([[ "$(_webhook_normalize_incremental "${WEBHOOK_INCREMENTAL:-0}")" = 1 ]] && echo 是 || echo 否)"
     elif [[ "$SITE_TYPE" = "pm2" && "${WEBHOOK_MODE:-}" = "release" ]]; then
       printf "  %-18s %s\n" "部署"   "Webhook Gateway Release（不 clone）"
       printf "  %-18s %s\n" "仓库(匹配)" "${GIT_REPO}"
       printf "  %-18s %s\n" "Release" "${WEBHOOK_RELEASE_NAME}"
-      printf "  %-18s %s\n" "附件关键字" "${WEBHOOK_ASSET_NAME:-自动}"
+      printf "  %-18s %s\n" "附件关键字" "${WEBHOOK_ASSET_NAME:-不限制}"
     elif [[ -n "$GIT_REPO" ]]; then
       printf "  %-18s %s\n" "Git" "${GIT_REPO}${GIT_BRANCH:+ (${GIT_BRANCH})}"
     else
