@@ -281,7 +281,13 @@ setup_cyber_users() {
         ok "${name} 密码已更新"
       fi
     else
-      useradd "$name" -m -s /bin/bash 2>/dev/null || { warn "创建 ${name} 失败"; continue; }
+      local -a _ua=(-m -s /bin/bash)
+      getent group "$name" >/dev/null 2>&1 && _ua+=(-g "$name")
+      _ua+=("$name")
+      if ! useradd "${_ua[@]}"; then
+        warn "创建 ${name} 失败"
+        continue
+      fi
       local pw
       while true; do
         prompt_secret_confirm_into "${name} 密码 (>=10位，大小写/数字/特殊符至少3类)" pw
