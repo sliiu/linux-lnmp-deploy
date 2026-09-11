@@ -99,6 +99,74 @@ interactive_sse_prefixes_maybe_for_update() {
   info "SSE 来源:${src}  当前规则: ${cur_one:-<空>}（FrankenPHP 直出，改用 --sse-prefixes）"
 }
 
+site_security_file() {
+  printf '%s/%s.security' "${CADDY_SITES:-${DATA_DIR}/caddy/sites}" "$1"
+}
+
+_frontend_security_conf() {
+  local domain="$1" sub="${2:-}" base="${WWW_ROOT}/${domain}"
+  [[ -n "$sub" && -f "${base}/${sub}/_nginx_security.conf" ]] && { printf '%s' "${base}/${sub}/_nginx_security.conf"; return 0; }
+  [[ -f "${base}/_nginx_security.conf" ]] && { printf '%s' "${base}/_nginx_security.conf"; return 0; }
+  return 1
+}
+
+_write_frontend_security_snippet() {
+  local domain="$1" sub="${2:-}" dest conf="" converted=""
+  dest="$(site_security_file "$domain")"
+  mkdir -p "$(dirname "$dest")"
+  conf="$(_frontend_security_conf "$domain" "$sub")" || conf=""
+  if [[ -n "$conf" ]]; then
+    converted="$(_caddy_headers_from_nginx_security "$conf")" || converted=""
+  fi
+  if [[ -n "$converted" ]]; then
+    printf '%s\n' "$converted" > "$dest"
+    info "已 include _nginx_security.conf（${domain}）"
+  else
+    _caddy_security_headers > "$dest"
+  fi
+  chmod 644 "$dest" 2>/dev/null || true
+}
+
+_caddy_headers_from_nginx_security() {
+  local conf="$1"
+  [[ -f "$conf" ]] || return 1
+  command -v python3 &>/dev/null || return 1
+  python3 - "$conf" <<'PY' 2>/dev/null
+import re, sys
+path = sys.argv[1]
+order = ["X-Frame-Options", "X-Content-Type-Options", "Referrer-Policy"]
+vals = {
+    "X-Frame-Options": "SAMEORIGIN",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+pat = re.compile(
+    r"""^\s*add_header\s+(\S+)\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;]+)(?:\s+always)?\s*;?\s*$""",
+    re.I,
+)
+with open(path, encoding="utf-8") as f:
+    for raw in f:
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        m = pat.match(s)
+        if not m:
+            continue
+        name, val = m.group(1), m.group(2)
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if name not in order:
+            order.append(name)
+        vals[name] = val
+def q(v):
+    if re.search(r"""[\s"'{}]""", v):
+        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return v
+for n in order:
+    print(f"\theader {n} {q(vals[n])}")
+PY
+}
+
 _caddy_security_headers() {
   cat <<'CADDY'
 	header X-Frame-Options SAMEORIGIN
@@ -121,12 +189,12 @@ _caddy_tls_block() {
 }
 
 _caddy_write_site() {
-  local domain="$1" body="$2"
+  local domain="$1" body="$2" headers="${3:-}"
   local dir="${CADDY_SITES:-${DATA_DIR}/caddy/sites}"
   mkdir -p "$dir"
-  local tls headers
+  local tls
   tls="$(_caddy_tls_block "$domain")"
-  headers="$(_caddy_security_headers)"
+  [[ -n "$headers" ]] || headers="$(_caddy_security_headers)"
   cat > "$(site_caddy_file "$domain")" <<CADDY
 ${domain} {
 ${tls}
@@ -274,7 +342,9 @@ gen_caddy_frontend() {
   local domain="$1" sub="$2"
   local root_path="${CONTAINER_WWW}/${domain}"
   [[ -n "$sub" ]] && root_path="${CONTAINER_WWW}/${domain}/${sub}"
-  local body
+  _write_frontend_security_snippet "$domain" "$sub"
+  local headers body
+  headers=$(printf '\timport /etc/caddy/sites/%s.security' "$domain")
   body=$(cat <<CADDY
 	root * ${root_path}
 	encode zstd gzip
@@ -286,7 +356,7 @@ gen_caddy_frontend() {
 	header @assets Cache-Control "public, immutable"
 CADDY
 )
-  _caddy_write_site "$domain" "$body"
+  _caddy_write_site "$domain" "$body" "$headers"
 }
 
 gen_nginx_frontend() { gen_caddy_frontend "$@"; }

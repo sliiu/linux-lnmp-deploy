@@ -17,7 +17,7 @@ cmd_remove() {
   rm -f "${NGINX_CONF}/${DOMAIN}.proxy-pass" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.webhook" 2>/dev/null || true
   stop_pm2_site "$DOMAIN"
-  rm -f "$(site_caddy_file "$DOMAIN")" 2>/dev/null || true
+  rm -f "$(site_caddy_file "$DOMAIN")" "$(site_security_file "$DOMAIN")" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.conf" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.tls-mode" 2>/dev/null || true
   container_ok "$(_web_container)" && caddy_reload 2>/dev/null || true
