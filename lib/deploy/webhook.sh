@@ -1127,7 +1127,7 @@ _webhook_deploy_gateway_release() {
   chmod 644 "$(site_pm2_port_file "$domain")" 2>/dev/null || true
 
   info "npm install（生产依赖）..."
-  _pm2_run_as_devops "$site_dir" "npm ci --omit=dev 2>/dev/null || npm install --omit=dev"
+  _pm2_run_as_devops "$site_dir" "npm ci --omit=dev || npm install --omit=dev"
   ok "依赖安装完成"
 
   PM2_BUILD=n reload_pm2_site "$domain"
@@ -1574,6 +1574,14 @@ EOF
 _webhook_run_python_server() {
   local script_path="$1"
   _webhook_load_listener_env
+  case "${WEBHOOK_BIND:-}" in
+    0.0.0.0|127.0.0.1|::|::1) ;;
+    *)
+      if ! _ipv4_is_local "${WEBHOOK_BIND:-}"; then
+        WEBHOOK_BIND=0.0.0.0
+      fi
+      ;;
+  esac
   command -v python3 &>/dev/null || die "需要 python3 运行 webhook 监听"
   WEBHOOK_SCRIPT="$script_path" WEBHOOK_PORT="$WEBHOOK_PORT" WEBHOOK_BIND="$WEBHOOK_BIND" WEBHOOK_PATH="$WEBHOOK_PATH" \
     python3 - <<'PY'
@@ -1647,6 +1655,13 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_response(404); self.end_headers()
 
-ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
+try:
+    ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()
+except OSError as e:
+    if getattr(e, "errno", None) == 99 and BIND not in ("0.0.0.0", "::"):
+        sys.stderr.write("bind %s failed (%s), fallback 0.0.0.0\n" % (BIND, e))
+        ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    else:
+        raise
 PY
 }

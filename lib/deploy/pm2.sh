@@ -60,15 +60,24 @@ pm2_app_name() {
   printf 'lnmp-%s' "${domain//./-}"
 }
 
-# Nginx 容器访问宿主机 PM2 进程用的网关 IP
+_ipv4_is_local() {
+  local ip="$1"
+  [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+  ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -Fxq "$ip"
+}
+
+# Nginx 容器访问宿主机 PM2 进程用的网关 IP（必须是宿主机本地地址）
 _docker_host_gateway() {
   local gw="" c
   c="$(_web_container)"
   if container_ok "$c"; then
     gw="$(docker exec "$c" sh -c "ip route 2>/dev/null | awk '/default/ {print \$3; exit}'" 2>/dev/null || true)"
+    _ipv4_is_local "$gw" && { printf '%s' "$gw"; return 0; }
   fi
-  [[ -n "$gw" ]] && { printf '%s' "$gw"; return 0; }
-  gw="$(ip -4 route show match 0/0 2>/dev/null | awk '{print $3; exit}')"
+  gw="$(docker network inspect bridge --format '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)"
+  [[ "$gw" = "<no value>" ]] && gw=""
+  _ipv4_is_local "$gw" && { printf '%s' "$gw"; return 0; }
+  gw="$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1)"
   [[ -n "$gw" ]] && { printf '%s' "$gw"; return 0; }
   printf '172.17.0.1'
 }
@@ -174,7 +183,7 @@ apply_site_pm2_cmd_cli() {
 
 _pm2_run_as_devops() {
   local site_dir="$1" cmd="$2"
-  devops_bash_c "cd '${site_dir}' && ${cmd}" \
+  devops_bash_c "cd '${site_dir}' && { ${cmd}; }" \
     || die "PM2/Node 命令失败: ${cmd}"
 }
 
@@ -203,9 +212,9 @@ _pm2_install_deps() {
   pm="$(_pm2_detect_pkg_manager "$site_dir")" || die "无法检测包管理器"
   info "${pm} install..."
   case "$pm" in
-    pnpm) _pm2_run_as_devops "$site_dir" "pnpm install --frozen-lockfile 2>/dev/null || pnpm install" ;;
-    yarn) _pm2_run_as_devops "$site_dir" "yarn install --frozen-lockfile 2>/dev/null || yarn install" ;;
-    npm)  _pm2_run_as_devops "$site_dir" "npm ci 2>/dev/null || npm install" ;;
+    pnpm) _pm2_run_as_devops "$site_dir" "pnpm install --frozen-lockfile || pnpm install" ;;
+    yarn) _pm2_run_as_devops "$site_dir" "yarn install --frozen-lockfile || yarn install" ;;
+    npm)  _pm2_run_as_devops "$site_dir" "npm ci || npm install" ;;
   esac
   ok "依赖安装完成"
 }
