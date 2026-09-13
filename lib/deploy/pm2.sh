@@ -182,9 +182,15 @@ apply_site_pm2_cmd_cli() {
 }
 
 _pm2_run_as_devops() {
-  local site_dir="$1" cmd="$2"
-  devops_bash_c "cd '${site_dir}' && { ${cmd}; }" \
-    || die "PM2/Node 命令失败: ${cmd}"
+  local site_dir="$1" cmd="$2" tmp_out rc=0
+  tmp_out="$(mktemp)"
+  devops_bash_c "cd '${site_dir}' && { ${cmd}; }" >"$tmp_out" 2>&1 || rc=$?
+  cat "$tmp_out"
+  if [[ "$rc" -ne 0 ]]; then
+    rm -f "$tmp_out"
+    die "PM2/Node 命令失败: ${cmd}"
+  fi
+  rm -f "$tmp_out"
 }
 
 ensure_pm2_runtime() {
