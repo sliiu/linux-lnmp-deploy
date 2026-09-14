@@ -175,12 +175,14 @@ issue_ssl() {
       elif echo "$acme_output" | grep -qi "invalid.*credentials\|authentication.*failed\|unauthorized"; then
         err_hint="DNS API 凭证无效或权限不足（${ssl_dns}）。请检查 API key/token 是否正确且有 DNS 修改权限"
       fi
-      
+      local fail_msg="SSL 签发失败 (exit=${acme_exit})${err_hint:+。${err_hint}}"
+      [[ -n "${LOG_FILE:-}" && -f "$LOG_FILE" ]] && printf '%s\n' "$acme_output" >> "$LOG_FILE"
+      ops_notify_exception "SSL 签发失败" "$fail_msg"
       if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
         warn "SSL 签发失败 (exit=${acme_exit})${err_hint:+: ${err_hint}}，站点 webhook 已注册，可稍后 deploy-site update 或手动签发"
         return 1
       fi
-      die "SSL 签发失败 (exit=${acme_exit})${err_hint:+。${err_hint}}"
+      die "$fail_msg"
     fi
     if [[ $acme_exit -eq 2 ]]; then
       info "证书已存在且未过期，跳过签发 (使用 --force-ssl 强制)"
@@ -193,6 +195,7 @@ issue_ssl() {
       --key-file       "/acme.sh/${domain}/${domain}.key" \
       --fullchain-file "/acme.sh/${domain}/fullchain.cer" \
       --reloadcmd "true"; then
+      ops_notify_exception "acme.sh --install-cert 失败" "acme.sh --install-cert 失败"
       if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
         warn "acme.sh --install-cert 失败，站点 webhook 已注册，可稍后重试 SSL"
         return 1

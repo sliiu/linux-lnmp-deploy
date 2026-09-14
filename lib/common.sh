@@ -85,6 +85,7 @@ ops_notify_exception() {
   [[ -n "${LOG_FILE:-}" ]] && md+=$(printf '\n- 日志: `%s`' "$LOG_FILE")
   [[ -n "$logtail" ]] && md+=$(printf '\n\n**日志尾部**\n<pre>%s</pre>' "$logtail")
   ops_notify "$md"
+  _ops_notified=1
 }
 
 die() {
@@ -92,7 +93,7 @@ die() {
     printf '[%s] ✗ %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >> "$LOG_FILE"
   fi
   printf '✗ %s\n' "$*" >&2
-  if ! interactive_tty_ok; then
+  if [[ "${_ops_notified:-0}" != "1" ]] && ! interactive_tty_ok; then
     ops_notify_exception "部署异常" "$*"
   fi
   exit 1
