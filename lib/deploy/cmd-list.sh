@@ -165,12 +165,15 @@ cmd_status() {
       _papp="$(pm2_app_name "$dom")"
       info "PM2 应用: ${_papp}  端口: ${_pport}"
       if devops_bash_c "pm2 describe '${_papp}' &>/dev/null"; then
-        _pm2_status="$(devops_bash_c "pm2 jlist 2>/dev/null | jq -r '.[] | select(.name==\"${_papp}\") | .pm2_env.status' 2>/dev/null" || echo "unknown")"
+        _pm2_status="$(_pm2_get_app_status "$_papp")"
         if [[ "$_pm2_status" = "online" ]]; then
           ok "PM2 进程在线（状态: ${_pm2_status}）"
           devops_bash_c "pm2 describe '${_papp}' 2>/dev/null" | sed -n '1,12p' | sed 's/^/  /' || true
-        else
+        elif [[ -n "$_pm2_status" ]]; then
           warn "✗ PM2 进程异常（状态: ${_pm2_status}）。恢复: su - ${DEVOPS_USER} -c 'pm2 restart ${_papp}' 或: $0 update --domain=${dom}"
+          status_exit_code=1
+        else
+          warn "✗ PM2 进程状态未知（jq/python3 缺失？）。检查: su - ${DEVOPS_USER} -c 'pm2 status'"
           status_exit_code=1
         fi
       else
