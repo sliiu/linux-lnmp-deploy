@@ -194,6 +194,51 @@ ensure_pm2_runtime() {
   pm2_v="$(devops_bash_c 'command -v pm2' 2>/dev/null || true)"
   [[ -n "$pm2_v" ]] || die "未找到 pm2（用户 ${DEVOPS_USER}）；请先执行 init.sh install pm2"
   ok "Node: $(devops_bash_c 'node -v' 2>/dev/null || echo '?')  PM2: $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?')"
+  
+  local systemd_status
+  systemd_status="$(systemctl is-enabled "pm2-${DEVOPS_USER}.service" 2>/dev/null || echo "disabled")"
+  if [[ "$systemd_status" != "enabled" ]]; then
+    warn "PM2 systemd 开机自启未启用。重新配置: su - ${DEVOPS_USER} -c 'pm2 startup' && su - ${DEVOPS_USER} -c 'pm2 save'"
+  fi
+}
+
+_pm2_get_app_status() {
+  local app_name="$1"
+  local jlist_output status_val
+  jlist_output="$(devops_bash_c "pm2 jlist 2>/dev/null" || echo "[]")"
+  [[ -z "$jlist_output" || "$jlist_output" = "[]" ]] && { echo ""; return 1; }
+  
+  if command -v jq &>/dev/null; then
+    status_val="$(echo "$jlist_output" | jq -r ".[] | select(.name==\"${app_name}\") | .pm2_env.status" 2>/dev/null || true)"
+  elif command -v python3 &>/dev/null; then
+    status_val="$(python3 -c "
+import json, sys
+try:
+    apps = json.loads('''${jlist_output}''')
+    for app in apps:
+        if app.get('name') == '${app_name}':
+            print(app.get('pm2_env', {}).get('status', ''))
+            sys.exit(0)
+except: pass
+" 2>/dev/null || true)"
+  else
+    status_val=""
+  fi
+  
+  [[ -n "$status_val" ]] && echo "$status_val" || echo ""
+}
+
+check_pm2_app_running() {
+  local app_name="$1"
+  local status
+  status="$(_pm2_get_app_status "$app_name")"
+  if [[ -z "$status" ]]; then
+    return 2
+  elif [[ "$status" = "online" ]]; then
+    return 0
+  else
+    return 1
+  fi
 }
 
 _pm2_detect_pkg_manager() {

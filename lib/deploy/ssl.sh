@@ -12,6 +12,37 @@ ensure_placeholder_cert() {
   fix_nginx_ssl_domain "$domain"
 }
 
+check_cert_expiry() {
+  local cert="$1" domain="${2:-unknown}"
+  if [[ ! -f "$cert" ]]; then
+    echo "missing"
+    return 1
+  fi
+  if ! command -v openssl &>/dev/null; then
+    echo "no_openssl"
+    return 1
+  fi
+  local notafter enddate_epoch now_epoch
+  notafter="$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
+  enddate_epoch="$(date -d "$notafter" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$notafter" +%s 2>/dev/null || echo 0)"
+  now_epoch="$(date +%s)"
+  if [[ "$enddate_epoch" -le 0 ]]; then
+    echo "parse_error"
+    return 1
+  fi
+  if [[ "$now_epoch" -gt "$enddate_epoch" ]]; then
+    echo "expired"
+    return 2
+  fi
+  local days_left=$(( (enddate_epoch - now_epoch) / 86400 ))
+  if [[ "$days_left" -le 7 ]]; then
+    echo "expiring_soon:${days_left}"
+    return 3
+  fi
+  echo "valid:${days_left}"
+  return 0
+}
+
 _is_dns_mode() {
   case "$1" in dns_cf|dns_ali|dns_dp|dns_gd|dns_aws|dns_tencent) return 0 ;; *) return 1 ;; esac
 }
@@ -84,10 +115,26 @@ _collect_ssl_dns_creds_interactive() {
   esac
 }
 
+_ssl_validate_dns_ready() {
+  local domain="$1" mode="$2"
+  if [[ "$mode" = "webroot" ]]; then
+    return 0
+  fi
+  info "检查域名 ${domain} 的 DNS 解析..."
+  local resolved
+  resolved="$(dig +short "$domain" A 2>/dev/null | head -n1 || nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -v '#' | head -n1 || true)"
+  if [[ -z "$resolved" ]]; then
+    die "DNS 解析失败（NXDOMAIN）：域名 ${domain} 未解析或 DNS 尚未生效。DNS-01 模式需要域名正确解析。请等待 DNS 传播后重试，或改用 --dns=webroot（需本机 80 可达）"
+  fi
+  ok "域名 ${domain} 解析正常: ${resolved}"
+}
+
 issue_ssl() {
   local domain="$1" site_type="$2" ssl_dns="$3" force="${4:-}" frontend_root="${5:-dist}"
 
   mkdir -p "${SSL_DIR}/${domain}"
+
+  _ssl_validate_dns_ready "$domain" "$ssl_dns"
 
   local acme_ca="letsencrypt"
   if [[ "${SSL_STAGING:-0}" = "1" ]]; then
@@ -107,17 +154,33 @@ issue_ssl() {
       dns_aws)     dns_env_args=(-e "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}" -e "AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}") ;;
       dns_tencent) dns_env_args=(-e "Tencent_SecretId=${TENCENT_SECRET_ID}" -e "Tencent_SecretKey=${TENCENT_SECRET_KEY}") ;;
     esac
+    local acme_output acme_tmpfile
+    acme_tmpfile="$(mktemp)"
     docker exec "${dns_env_args[@]}" lnmp-acme \
       acme.sh --issue -d "${domain}" \
       --config-home /acme.sh \
       --dns "$ssl_dns" --keylength ec-256 --server "${acme_ca}" \
-      ${force} || acme_exit=$?
+      ${force} 2>&1 | tee "$acme_tmpfile" || acme_exit=$?
+    acme_output="$(cat "$acme_tmpfile")"
+    rm -f "$acme_tmpfile"
+    
     if [[ $acme_exit -ne 0 && $acme_exit -ne 2 ]]; then
+      local err_hint=""
+      if echo "$acme_output" | grep -qi "NXDOMAIN"; then
+        err_hint="域名 DNS 未解析或未生效（NXDOMAIN）。请确认域名指向本机 IP，并等待 DNS 传播（通常 5-30 分钟）后重试。检查: dig ${domain}"
+      elif echo "$acme_output" | grep -qi "rate limit\|too many\|429"; then
+        err_hint="触发 Let's Encrypt 速率限制（同一域名 7 天内正式证书约 5 张上限）。请等到日志中 'retry after' 时间后再试，或临时使用 --ssl-staging 测试。https://letsencrypt.org/docs/rate-limits/"
+      elif echo "$acme_output" | grep -qi "timeout\|timed out"; then
+        err_hint="ACME 验证超时。DNS-01 需确保 DNS API 凭证正确且域名托管在对应服务商。webroot 需确保本机 80 端口可从公网访问"
+      elif echo "$acme_output" | grep -qi "invalid.*credentials\|authentication.*failed\|unauthorized"; then
+        err_hint="DNS API 凭证无效或权限不足（${ssl_dns}）。请检查 API key/token 是否正确且有 DNS 修改权限"
+      fi
+      
       if [[ "${SSL_SOFT_FAIL:-0}" = "1" ]]; then
-        warn "SSL 签发失败 (exit=${acme_exit})，站点 webhook 已注册，可稍后 deploy-site update 或手动签发"
+        warn "SSL 签发失败 (exit=${acme_exit})${err_hint:+: ${err_hint}}，站点 webhook 已注册，可稍后 deploy-site update 或手动签发"
         return 1
       fi
-      die "SSL 签发失败 (exit=${acme_exit})。Let's Encrypt 对同一域名 7 天内正式证书约 5 张上限；遇 429 请等到日志中 retry after 之后再试，或临时加 --ssl-staging 使用测试 CA。https://letsencrypt.org/docs/rate-limits/"
+      die "SSL 签发失败 (exit=${acme_exit})${err_hint:+。${err_hint}}"
     fi
     if [[ $acme_exit -eq 2 ]]; then
       info "证书已存在且未过期，跳过签发 (使用 --force-ssl 强制)"
