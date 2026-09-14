@@ -69,6 +69,8 @@ _status_print_hints() {
 }
 
 cmd_status() {
+  local status_exit_code=0
+  
   if [[ "${STATUS_ALL:-0}" -ne 1 && -z "${DOMAIN:-}" ]]; then
     local -a _doms=()
     while IFS= read -r d; do _doms+=("$d"); done < <(_list_deployed_domains)
@@ -158,15 +160,22 @@ cmd_status() {
       [[ -f "${site_dir}/public/index.php" ]] && ok "Laravel public/index.php 存在" || warn "缺少 public/index.php"
     elif [[ "$site_type" = "pm2" ]]; then
       [[ -f "${site_dir}/package.json" ]] && ok "Node package.json 存在" || warn "缺少 package.json"
-      local _pport _papp
+      local _pport _papp _pm2_status
       _pport="$(pm2_port_for_site "$dom" 2>/dev/null || echo '?')"
       _papp="$(pm2_app_name "$dom")"
       info "PM2 应用: ${_papp}  端口: ${_pport}"
       if devops_bash_c "pm2 describe '${_papp}' &>/dev/null"; then
-        ok "PM2 进程在线"
-        devops_bash_c "pm2 describe '${_papp}' 2>/dev/null" | sed -n '1,12p' | sed 's/^/  /' || true
+        _pm2_status="$(devops_bash_c "pm2 jlist 2>/dev/null | jq -r '.[] | select(.name==\"${_papp}\") | .pm2_env.status' 2>/dev/null" || echo "unknown")"
+        if [[ "$_pm2_status" = "online" ]]; then
+          ok "PM2 进程在线（状态: ${_pm2_status}）"
+          devops_bash_c "pm2 describe '${_papp}' 2>/dev/null" | sed -n '1,12p' | sed 's/^/  /' || true
+        else
+          warn "✗ PM2 进程异常（状态: ${_pm2_status}）。恢复: su - ${DEVOPS_USER} -c 'pm2 restart ${_papp}' 或: $0 update --domain=${dom}"
+          status_exit_code=1
+        fi
       else
-        warn "PM2 进程未运行（${_papp}）"
+        warn "✗ PM2 进程未运行（${_papp}）。恢复: su - ${DEVOPS_USER} -c 'cd ${site_dir} && pm2 start <启动命令>' 或: $0 update --domain=${dom}"
+        status_exit_code=1
       fi
     elif [[ "$site_type" = "proxy" ]]; then
       info "反代上游: $(proxy_pass_for_site "$dom")"
@@ -176,7 +185,24 @@ cmd_status() {
 
     local cert="${SSL_DIR}/${dom}/fullchain.cer"
     if [[ -f "$cert" ]] && command -v openssl &>/dev/null; then
-      info "证书 notAfter: $(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
+      local notafter enddate_epoch now_epoch days_left
+      notafter="$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//')"
+      enddate_epoch="$(date -d "$notafter" +%s 2>/dev/null || date -j -f "%b %d %T %Y %Z" "$notafter" +%s 2>/dev/null || echo 0)"
+      now_epoch="$(date +%s)"
+      if [[ "$enddate_epoch" -gt 0 && "$now_epoch" -gt "$enddate_epoch" ]]; then
+        warn "✗ 证书已过期: ${cert}，notAfter=${notafter}。恢复: $0 ssl --domain=${dom} --force-ssl"
+        status_exit_code=1
+      elif [[ "$enddate_epoch" -gt 0 ]]; then
+        days_left=$(( (enddate_epoch - now_epoch) / 86400 ))
+        if [[ "$days_left" -le 7 ]]; then
+          warn "证书将在 ${days_left} 天后过期: ${notafter}。建议续期: $0 ssl --domain=${dom} --force-ssl"
+          [[ "$days_left" -le 2 ]] && status_exit_code=1
+        else
+          info "证书 notAfter: ${notafter}（${days_left} 天后过期）"
+        fi
+      else
+        info "证书 notAfter: ${notafter}"
+      fi
     elif [[ -f "$cert" ]]; then
       ok "证书文件存在: ${cert}"
     else
@@ -237,6 +263,15 @@ cmd_status() {
     info "单站详细诊断与「可能原因」说明请执行: $0 status --domain=<域名>"
   fi
   echo ""
+  
+  if [[ "$status_exit_code" -ne 0 ]]; then
+    if interactive_tty_ok; then
+      warn "状态检查发现问题（见上方 ✗ 标记），需要人工修复"
+      return 1
+    else
+      die "状态检查失败（见上方 ✗ 标记）：证书过期或 PM2 进程未运行"
+    fi
+  fi
 }
 
 # ═══════════════════════════════════════════════
