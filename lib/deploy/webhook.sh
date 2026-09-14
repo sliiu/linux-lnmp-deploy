@@ -1130,7 +1130,7 @@ _webhook_deploy_gateway_release() {
   _pm2_run_as_devops "$site_dir" "npm ci --omit=dev || npm install --omit=dev"
   ok "依赖安装完成"
 
-  PM2_BUILD=n reload_pm2_site "$domain"
+  PM2_BUILD=n PM2_INSTALL=n reload_pm2_site "$domain"
   gen_nginx_pm2 "$domain"
   fix_site_readable_for_nginx "$domain" "pm2" ""
   _caddy_reload_soft "Caddy 已 reload"

@@ -188,18 +188,19 @@ _pm2_run_as_devops() {
 }
 
 ensure_pm2_runtime() {
-  local node_v pm2_v
-  node_v="$(devops_bash_c 'command -v node' 2>/dev/null || true)"
+  [[ "${_PM2_RUNTIME_OK:-0}" = "1" ]] && return 0
+  local out node_v pm2_v systemd_status
+  out="$(devops_bash_c 'node -v && pm2 -v' 2>/dev/null || true)"
+  node_v="$(printf '%s\n' "$out" | sed -n '1p')"
+  pm2_v="$(printf '%s\n' "$out" | sed -n '2p')"
   [[ -n "$node_v" ]] || die "未找到 node（用户 ${DEVOPS_USER}）；请先执行 init.sh install node"
-  pm2_v="$(devops_bash_c 'command -v pm2' 2>/dev/null || true)"
   [[ -n "$pm2_v" ]] || die "未找到 pm2（用户 ${DEVOPS_USER}）；请先执行 init.sh install pm2"
-  ok "Node: $(devops_bash_c 'node -v' 2>/dev/null || echo '?')  PM2: $(devops_bash_c 'pm2 -v' 2>/dev/null || echo '?')"
-  
-  local systemd_status
+  ok "Node: ${node_v}  PM2: ${pm2_v}"
   systemd_status="$(systemctl is-enabled "pm2-${DEVOPS_USER}.service" 2>/dev/null || echo "disabled")"
   if [[ "$systemd_status" != "enabled" ]]; then
     warn "PM2 systemd 开机自启未启用。重新配置: su - ${DEVOPS_USER} -c 'pm2 startup' && su - ${DEVOPS_USER} -c 'pm2 save'"
   fi
+  _PM2_RUNTIME_OK=1
 }
 
 _pm2_get_app_status() {
@@ -253,6 +254,7 @@ _pm2_detect_pkg_manager() {
 _pm2_install_deps() {
   local domain="$1"
   local site_dir="${WWW_ROOT}/${domain}" pm
+  [[ "${PM2_INSTALL:-y}" != "y" ]] && return 0
   [[ -f "${site_dir}/package.json" ]] || die "未找到 ${site_dir}/package.json"
   pm="$(_pm2_detect_pkg_manager "$site_dir")" || die "无法检测包管理器"
   info "${pm} install..."

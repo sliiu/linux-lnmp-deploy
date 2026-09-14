@@ -254,7 +254,15 @@ menu_select() {
 
 devops_bash_c() {
   local _fnm="${FNM_BIN_DIR:-/usr/local/fnm}"
-  su - "${DEVOPS_USER}" -s /bin/bash -c "
+  local _home _uid _gid _script
+  _home="$(getent passwd "${DEVOPS_USER}" | cut -d: -f6)"
+  [[ -n "$_home" ]] || return 1
+  _uid="$(id -u "${DEVOPS_USER}")"
+  _gid="$(id -g "${DEVOPS_USER}")"
+  _script="
+export HOME=\"${_home}\"
+export USER=\"${DEVOPS_USER}\"
+export LOGNAME=\"${DEVOPS_USER}\"
 export FNM_DIR=\"\$HOME/.local/share/fnm\"
 export FNM_NODE_DIST_MIRROR=\"${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}\"
 export PATH=\"${_fnm}:\$HOME/.local/share/fnm/aliases/default/bin:\$PATH\"
@@ -265,6 +273,13 @@ if command -v fnm >/dev/null 2>&1; then
 fi
 $1
 "
+  if command -v setpriv >/dev/null 2>&1; then
+    setpriv --reuid="${_uid}" --regid="${_gid}" --init-groups -- /bin/bash -c "${_script}"
+  elif command -v runuser >/dev/null 2>&1; then
+    runuser -u "${DEVOPS_USER}" -- /bin/bash -c "${_script}"
+  else
+    su "${DEVOPS_USER}" -s /bin/bash -c "${_script}"
+  fi
 }
 
 _php_ext_loaded() {
