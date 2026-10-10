@@ -291,7 +291,7 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
   - **前提**：已执行 `**init.sh install pm2**`；仍需 **Docker + lnmp-caddy**。HTTP-01 由 Caddy 自动 HTTPS；**DNS-01** 才需要 **lnmp-acme**。
   - **端口**：写入 `**conf.d/<域名>.pm2-port**`；`**--pm2-port**` 可指定，留空或 `-` 则从 **3000** 起自动分配。交互部署默认自动分配。
   - **启动命令**：写入 `**conf.d/<域名>.pm2-cmd**`；未指定时按顺序检测 `ecosystem.config.cjs` → `ecosystem.config.js` → `package.json` 的 `scripts.start`（`npm start`）；可用 `**--pm2-cmd**` 覆盖。交互默认自动检测。
-  - **进程名**：`lnmp-<域名中点换横线>`（如 `api.example.com` → `lnmp-api-example-com`）；启动时注入 `PORT`、`HOST=0.0.0.0`、`NODE_ENV=production`。
+  - **进程名**：有 `ecosystem.config.cjs` / `.js` 且其中写了 `name` 时，用该名字（如 `slimppt-gateway`）。`pm2 start ecosystem --name` 不会改掉这个字段。没有 ecosystem 名字时才用 `lnmp-<域名中点换横线>`（如 `api.example.com` → `lnmp-api-example-com`）。启动时注入 `PORT`、`HOST=0.0.0.0`、`NODE_ENV=production`。
 - **构建**：`**--pm2-build=y|n**`（默认 y）；交互默认执行 build。`package.json` 无 `build` 脚本则跳过。
 - **proxy**：Nginx 反代到已有上游（`**--proxy-pass=**`，如 `http://127.0.0.1:8080`）；不 clone 代码。
 - **Nginx**：反代块内置 `client_max_body_size 110m`（Gateway PPTX 上传）；`update` 或 webhook 部署后会 `nginx reload`。

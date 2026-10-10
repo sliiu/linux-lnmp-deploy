@@ -55,8 +55,39 @@ _site_type_for_domain() {
   printf 'frontend'
 }
 
+# ecosystem 里的 apps[].name 才是 PM2 实际注册的进程名。
+# `pm2 start ecosystem.config.* --name` 不会覆盖该字段。
+_pm2_ecosystem_file() {
+  local site_dir="${WWW_ROOT}/$1"
+  if [[ -f "${site_dir}/ecosystem.config.cjs" ]]; then
+    printf '%s' "${site_dir}/ecosystem.config.cjs"
+  elif [[ -f "${site_dir}/ecosystem.config.js" ]]; then
+    printf '%s' "${site_dir}/ecosystem.config.js"
+  else
+    return 1
+  fi
+}
+
+_pm2_ecosystem_app_name() {
+  local file line
+  file="$(_pm2_ecosystem_file "$1")" || return 1
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ "$line" =~ ^[[:space:]]*// ]] && continue
+    if [[ "$line" =~ ^[[:space:]]*name:[[:space:]]*[\'\"]([A-Za-z0-9._:-]+)[\'\"] ]]; then
+      printf '%s' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done < "$file"
+  return 1
+}
+
 pm2_app_name() {
-  local domain="$1"
+  local domain="$1" eco
+  eco="$(_pm2_ecosystem_app_name "$domain" 2>/dev/null || true)"
+  if [[ -n "$eco" ]]; then
+    printf '%s' "$eco"
+    return 0
+  fi
   printf 'lnmp-%s' "${domain//./-}"
 }
 
@@ -137,11 +168,19 @@ pm2_start_cmd_for_site() {
     [[ -n "$cmd" ]] && { printf '%s' "$cmd"; return 0; }
   fi
   if [[ -f "${site_dir}/ecosystem.config.cjs" ]]; then
-    printf 'pm2 start ecosystem.config.cjs --env production --name %s' "$(pm2_app_name "$domain")"
+    if _pm2_ecosystem_app_name "$domain" >/dev/null; then
+      printf 'pm2 start ecosystem.config.cjs --env production'
+    else
+      printf 'pm2 start ecosystem.config.cjs --env production --name %s' "$(pm2_app_name "$domain")"
+    fi
     return 0
   fi
   if [[ -f "${site_dir}/ecosystem.config.js" ]]; then
-    printf 'pm2 start ecosystem.config.js --env production --name %s' "$(pm2_app_name "$domain")"
+    if _pm2_ecosystem_app_name "$domain" >/dev/null; then
+      printf 'pm2 start ecosystem.config.js --env production'
+    else
+      printf 'pm2 start ecosystem.config.js --env production --name %s' "$(pm2_app_name "$domain")"
+    fi
     return 0
   fi
   if [[ -f "${site_dir}/package.json" ]] && grep -q '"start"' "${site_dir}/package.json" 2>/dev/null; then
