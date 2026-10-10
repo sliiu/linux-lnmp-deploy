@@ -5,7 +5,14 @@ conf_load() {
   DOCKER_MIRRORS_STR="${DOCKER_MIRRORS_STR:-}"
   ALPINE_MIRROR="${ALPINE_MIRROR:-mirrors.cloud.aliyuncs.com}"
   NODE_VERSION="${NODE_VERSION:-22}"
-  FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
+  FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-${FNM_NODE_DIST_MIRROR_DEFAULT:-https://npmmirror.com/mirrors/node}}"
+  if [[ -z "${NPM_REGISTRY+x}" ]]; then
+    if [[ -z "${NPM_REGISTRY_DEFAULT+x}" ]]; then
+      NPM_REGISTRY="https://registry.npmmirror.com"
+    else
+      NPM_REGISTRY="$NPM_REGISTRY_DEFAULT"
+    fi
+  fi
   PHP_VERSION="${PHP_VERSION:-8.3}"
   EXTRA_PHP_VERSIONS="${EXTRA_PHP_VERSIONS:-}"
   PHP_EXTENSIONS="${PHP_EXTENSIONS:-pdo_mysql,opcache,mysqli,curl,gd,xml,dom,pcntl,bcmath,sockets,mbstring,zip,exif,intl,fileinfo,redis}"
@@ -55,6 +62,7 @@ conf_save() {
 DEVOPS_USER=${DEVOPS_USER}
 NODE_VERSION=${NODE_VERSION}
 FNM_NODE_DIST_MIRROR=${FNM_NODE_DIST_MIRROR}
+NPM_REGISTRY=${NPM_REGISTRY}
 GH_PROXY=${GH_PROXY}
 DOCKER_MIRRORS_STR=${DOCKER_MIRRORS_STR}
 ALPINE_MIRROR=${ALPINE_MIRROR}

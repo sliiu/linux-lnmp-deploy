@@ -443,6 +443,7 @@ _interactive_pm2_gateway_install() {
   collect_github_proxy
   collect_docker_mirrors
   collect_node_version
+  collect_npm_registry
   collect_lnmp_services_pm2_gateway
   collect_lnmp_stack_images
   has_service "postgres" && collect_postgres_password
@@ -458,6 +459,7 @@ _interactive_pm2_gateway_install() {
   has_service "postgres" && printf "  %-20s %s\n" "PostgreSQL 镜像" "$POSTGRES_IMAGE"
   has_service "redis" && printf "  %-20s %s\n" "Redis 镜像" "$REDIS_IMAGE"
   printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"
+  printf "  %-20s %s\n" "npm registry" "${NPM_REGISTRY:-官方}"
   printf "  %-20s %s\n" "ACME 邮箱" "$ACME_EMAIL"
   echo ""
   confirm "确认执行？" "y" || { warn "已取消"; return; }
@@ -664,7 +666,7 @@ _interactive_full_install() {
     fi
   fi
 
-  if [[ $sel_node -eq 1 ]]; then collect_node_version; fi
+  if [[ $sel_node -eq 1 ]]; then collect_node_version; collect_npm_registry; fi
 
   # 5) SSH 安全策略（最后问：会改 sshd 配置，留给末尾减少变更冲突）
   if [[ $sel_ssh -eq 1 ]]; then collect_ssh_config; fi
@@ -702,7 +704,10 @@ _interactive_full_install() {
   fi
   if [[ $sel_ssh -eq 1 ]]; then printf "  %-20s %s\n" "SSH" "root=${ROOT_LOGIN}, 端口=${SSH_PORT}"; fi
   if [[ $sel_wheel -eq 1 ]]; then printf "  %-20s %s\n" "Wheel 管理员" "$WHEEL_USER"; fi
-  if [[ $sel_node -eq 1 ]]; then printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"; fi
+  if [[ $sel_node -eq 1 ]]; then
+    printf "  %-20s %s\n" "Node.js" "${NODE_VERSION:-22}"
+    printf "  %-20s %s\n" "npm registry" "${NPM_REGISTRY:-官方}"
+  fi
   if [[ $sel_pm2 -eq 1 ]]; then printf "  %-20s %s\n" "PM2" "安装"; fi
   if [[ $sel_saferm -eq 1 ]]; then printf "  %-20s %s\n" "saferm" "安装"; fi
   echo ""
@@ -781,7 +786,7 @@ _interactive_install_one() {
         fi
         install_lnmp
         if [[ "${WANT_PM2:-0}" = "1" ]]; then
-          if ! is_node_ok; then collect_github_proxy; collect_node_version; install_node; fi
+          if ! is_node_ok; then collect_github_proxy; collect_node_version; collect_npm_registry; install_node; fi
           install_pm2
         fi
         ;;
@@ -797,9 +802,9 @@ _interactive_install_one() {
           if ! has_service "mysql"; then collect_mysql_image; collect_mysql_password; fi
           LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
       8)  collect_github_proxy; collect_docker_mirrors; install_docker ;;
-      9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_github_proxy; collect_node_version; install_node ;;
+      9)  prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; collect_github_proxy; collect_node_version; collect_npm_registry; install_node ;;
       10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT
-          if ! is_node_ok; then collect_github_proxy; collect_node_version; fi
+          if ! is_node_ok; then collect_github_proxy; collect_node_version; collect_npm_registry; fi
           install_pm2 ;;
       11) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
       12) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
@@ -899,6 +904,7 @@ _interactive_config() {
       "ACME 邮箱" \
       "ACME SSL 默认 (deploy-site)" \
       "Node.js 版本" \
+      "npm registry" \
       "Devops 用户" \
       "返回主菜单"
     idx=$MENU_SELECT_RESULT
@@ -939,8 +945,11 @@ _interactive_config() {
          ;;
       9) collect_acme_ssl_dns_default ;;
       10) collect_node_version; if is_node_ok; then install_node; else ok "已写入配置（执行「安装单个组件 → Node.js」后生效）"; fi ;;
-      11) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
-      12) return 0 ;;
+      11) collect_npm_registry
+         if is_node_ok; then apply_npm_registry; else ok "已写入配置（执行「安装单个组件 → Node.js」后生效）"; fi
+         ;;
+      12) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+      13) return 0 ;;
     esac
     conf_save
     ok "配置已更新"

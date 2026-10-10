@@ -152,13 +152,15 @@ Docker Hub 等可拉取的镜像引用，与 `docker-compose` 中 `image:` 一�
 sudo ./init.sh install pm2                    # 默认 Node 主版本 22
 sudo ./init.sh install pm2 --node-version=20
 sudo ./init.sh install pm2 --node-mirror=https://npmmirror.com/mirrors/node
+sudo ./init.sh install node --npm-registry=https://registry.npmmirror.com
+sudo ./init.sh install node --npm-registry=-   # 官方 registry.npmjs.org
 sudo ./init.sh uninstall pm2
 ```
 
 - **前提**：`install pm2` 若 `devops` 用户不存在会先创建；全新安装 / PM2 网关勾选 **PM2** 时用 Node **22**（改版本走「更新配置」）。
-- **配置写入**：`NODE_VERSION`、`FNM_NODE_DIST_MIRROR` 会写入 `/etc/lnmp-env.conf`；`devops` 的 `~/.bashrc` 写入 fnm env 块（login shell 经 `~/.bash_profile` 加载）。
-- **镜像**：Node 二进制默认从 `FNM_NODE_DIST_MIRROR`（国内默认 npmmirror）拉取；npm 全局包默认 registry 为 `https://registry.npmmirror.com`。
-- **状态**：`sudo ./init.sh status` 显示 Node / pm2 版本；交互菜单 **「查看状态」** 同理。
+- **配置写入**：`NODE_VERSION`、`FNM_NODE_DIST_MIRROR`、`NPM_REGISTRY` 会写入 `/etc/lnmp-env.conf`；`devops` 的 `~/.bashrc` 写入 fnm env 块（login shell 经 `~/.bash_profile` 加载）。
+- **镜像**：Node 二进制默认从 `FNM_NODE_DIST_MIRROR` 拉取；npm 走 `NPM_REGISTRY`（空 = 官方，安装时 `npm config set/delete` 写入 devops `~/.npmrc`）。出厂默认在 `init.sh` 顶部的 `FNM_NODE_DIST_MIRROR_DEFAULT` / `NPM_REGISTRY_DEFAULT`（国内均为 npmmirror）；CLI `--node-mirror` / `--npm-registry`（`-` 或空 = 官方）与交互「更新配置」可覆盖。
+- **状态**：`sudo ./init.sh status` 显示 Node / pm2 版本、Node 镜像源、npm registry；交互菜单 **「查看状态」** 同理。
 - **GitHub**：下载 fnm 可走 `**--gh-proxy=**`（与 zsh / lnmp 相同）。
 
 ### saferm（安全删除）
@@ -236,7 +238,7 @@ saferm -- ./-starts-with-dash        # 路径以 - 开头时用 --
 - **PM2 网关栈**：Docker + caddy + PM2（postgres/redis 可选，回车不装；Caddy 自动 HTTPS）
 - **全新安装**：多选模块（回车= Docker + LNMP；含可选 **PM2**、**saferm**、SSH、等保等）后一次性执行
 - **一键重装 LNMP**：沿用 `/etc/lnmp-env.conf`，跳过问询
-- **更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**Node.js 版本（PM2）**、**LNMP 各组件镜像**、SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等
+- **更新配置**：代理、Docker/Alpine 源、PHP 版本/扩展、**Node.js 版本（PM2）**、**npm registry**、**LNMP 各组件镜像**、SSH、ACME 邮箱、**ACME SSL 默认方式**、devops 用户等
 - **安装单个组件**：LNMP 全量或单容器 / Docker / **PM2** / devops / wheel / SSH / **saferm** 等
 - **账户管理**：见下节
 - **卸载单个组件**：高危项二次确认（默认 N）；firewall / BBR / zsh / saferm 同样确认
@@ -478,7 +480,7 @@ su - devops -c 'pm2 logs lnmp-api-example-com'
 变量）。与 LNMP 相关的常见键包括：`LNMP_SERVICES`、`PHP_VERSION`、`PHP_EXTENSIONS`、
 `**EXTRA_PHP_VERSIONS`**、
 `NGINX_IMAGE`、`MYSQL_IMAGE`、`REDIS_IMAGE`、`ACME_IMAGE`、`ACME_EMAIL`、`ACME_SSL_DNS_DEFAULT`、
-`**NODE_VERSION**`、`**FNM_NODE_DIST_MIRROR**`、
+`**NODE_VERSION**`、`**FNM_NODE_DIST_MIRROR**`、`**NPM_REGISTRY**`、
 `CONTAINER_WWW`、`LNMP_DATA_DIR` 等（完整列表以生成文件或 `sudo ./init.sh --help` 为准）。
 - **仅限 `deploy-site` 进程**：环境变量 `**LARAVEL_SSE_PREFIXES`** 可写入 shell 配置文件或在调用前导出，不写则走脚本内默认值；与 `/etc/lnmp-env.conf` 无必填关联。
 - 脚本内版本号均为 **2.0.0**（以脚本内 `VERSION=` 为准）。

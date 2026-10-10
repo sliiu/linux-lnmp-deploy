@@ -7,6 +7,10 @@ DATA_DIR="/data/docker-lnmp"
 COMPOSE_FILE="${DATA_DIR}/docker-compose.yml"
 CYBERSEC_MARKER="/etc/cybersecurity-init.done"
 
+# 出厂默认（/etc/lnmp-env.conf 与 CLI 会覆盖；NPM_REGISTRY 空 = 官方）
+FNM_NODE_DIST_MIRROR_DEFAULT="https://npmmirror.com/mirrors/node"
+NPM_REGISTRY_DEFAULT="https://registry.npmmirror.com"
+
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/init.log"
 # stdout/stderr 进 tee 时变为管道，菜单与 read -p 易不刷到终端；同时写 log 与 /dev/tty
@@ -112,7 +116,8 @@ usage() {
   --docker-mirrors=URL,.. Docker 镜像源（逗号分隔）
   --alpine-mirror=HOST    PHP 系统源主机名（Debian/Alpine，如 mirrors.cloud.aliyuncs.com）
   --node-version=VER     Node.js 主版本（fnm，默认 22）
-  --node-mirror=URL      Node 二进制镜像 [https://npmmirror.com/mirrors/node]
+  --node-mirror=URL      Node 二进制镜像 [${FNM_NODE_DIST_MIRROR_DEFAULT}]
+  --npm-registry=URL     npm registry [${NPM_REGISTRY_DEFAULT}；空或 - = 官方]
   --php-version=VER       PHP 主版本，对应 dunglas/frankenphp:phpVER（8.2–8.5）
   --php-ext=EXT,...       PHP 扩展（逗号分隔）
   --caddy-image=IMG       Caddy 镜像 (如 caddy:2-alpine)
@@ -137,6 +142,7 @@ usage() {
   $0 status                             # 查看状态
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install node --node-version=22
+  $0 install node --npm-registry=-
   $0 install pm2
   # PM2 网关栈（无 php）：caddy 反代 + 宿主机 PM2；postgres/redis 按需另装
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
@@ -181,6 +187,10 @@ main() {
       --php-version=*)    PHP_VERSION="${arg#*=}" ;;
       --node-version=*)   NODE_VERSION="${arg#*=}" ;;
       --node-mirror=*)    FNM_NODE_DIST_MIRROR="${arg#*=}" ;;
+      --npm-registry=*)
+        local _npm_reg="${arg#*=}"
+        [[ "$_npm_reg" = "-" ]] && NPM_REGISTRY="" || NPM_REGISTRY="${_npm_reg%/}"
+        ;;
       --php-ext=*)        PHP_EXTENSIONS="${arg#*=}" ;;
       --caddy-image=*)    CADDY_IMAGE="${arg#*=}" ;;
       --nginx-image=*)    CADDY_IMAGE="${arg#*=}" ;;

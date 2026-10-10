@@ -14,6 +14,10 @@ is_node_ok() {
   devops_bash_c 'command -v node &>/dev/null'
 }
 
+_node_dist_mirror() {
+  printf '%s' "${FNM_NODE_DIST_MIRROR:-${FNM_NODE_DIST_MIRROR_DEFAULT:-https://npmmirror.com/mirrors/node}}"
+}
+
 collect_node_version() {
   local idx
   menu_select "Node.js 主版本（当前: ${NODE_VERSION:-22}）" \
@@ -36,12 +40,51 @@ collect_node_version() {
   esac
 }
 
+_collect_npm_registry_custom() {
+  while true; do
+    prompt "npm registry（https://...；- 用官方）" "${NPM_REGISTRY:--}"
+    NPM_REGISTRY=$PROMPT_RESULT
+    if [[ "$NPM_REGISTRY" = "-" ]]; then NPM_REGISTRY=""; return 0; fi
+    if [[ "$NPM_REGISTRY" =~ ^https?://[^[:space:]]+$ ]]; then
+      NPM_REGISTRY="${NPM_REGISTRY%/}"; return 0
+    fi
+    warn "无效 URL，请重新输入（http/https 开头）"
+    interactive_tty_ok || die "无效 npm registry: ${NPM_REGISTRY}"
+  done
+}
+
+collect_npm_registry() {
+  local idx
+  menu_select "npm registry（当前: ${NPM_REGISTRY:-官方}）" \
+    "npmmirror（推荐国内）" \
+    "官方 registry.npmjs.org" \
+    "自定义"
+  idx=$MENU_SELECT_RESULT
+  case "$idx" in
+    0) NPM_REGISTRY="https://registry.npmmirror.com" ;;
+    1) NPM_REGISTRY="" ;;
+    2) _collect_npm_registry_custom ;;
+  esac
+}
+
+apply_npm_registry() {
+  local q
+  if [[ -z "${NPM_REGISTRY:-}" ]]; then
+    info "npm registry → 官方"
+    devops_bash_c "npm config delete registry 2>/dev/null || true" || true
+  else
+    info "npm registry → ${NPM_REGISTRY}"
+    q=$(printf '%q' "$NPM_REGISTRY")
+    _node_run_devops "npm config set registry ${q} 2>/dev/null || true"
+  fi
+}
+
 _node_shell_block() {
   local shell="${1:-bash}"
   cat <<EOF
 # >>> node init.sh >>>
 export FNM_DIR="${FNM_DATA_DIR_REL}"
-export FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
+export FNM_NODE_DIST_MIRROR="$(_node_dist_mirror)"
 export PATH="${FNM_BIN_DIR}:\${HOME}/.local/share/fnm/aliases/default/bin:\${PATH}"
 mkdir -p "\${HOME}/.local/share/fnm" "\${HOME}/.local/state/fnm_multishells" 2>/dev/null || true
 command -v fnm >/dev/null 2>&1 && eval "\$(fnm env --shell ${shell})"
@@ -132,7 +175,7 @@ install_node() {
   hr; info "安装 Node.js（fnm）"; echo ""
 
   NODE_VERSION="${NODE_VERSION:-22}"
-  FNM_NODE_DIST_MIRROR="${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
+  FNM_NODE_DIST_MIRROR="$(_node_dist_mirror)"
 
   if ! id "${DEVOPS_USER}" &>/dev/null; then
     warn "用户 ${DEVOPS_USER} 不存在，先创建 devops 用户"
@@ -152,7 +195,7 @@ install_node() {
 
   info "安装 Node.js ${NODE_VERSION}（用户 ${DEVOPS_USER}）..."
   _node_run_devops "fnm install ${NODE_VERSION} && fnm default ${NODE_VERSION}"
-  _node_run_devops "npm config set registry https://registry.npmmirror.com 2>/dev/null || true"
+  apply_npm_registry
   ok "Node.js: $(devops_bash_c 'node -v' 2>/dev/null || echo '?')"
 
   : > "$NODE_MARKER"

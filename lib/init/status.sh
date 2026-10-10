@@ -89,7 +89,8 @@ show_status() {
   is_docker_ok && printf "  %-20s %s\n" "Docker 镜像源" "${DOCKER_MIRRORS_STR:-官方}"
   if is_node_ok; then
     printf "  %-20s %s\n" "Node.js 版本" "${NODE_VERSION:-22}"
-    printf "  %-20s %s\n" "Node 镜像源" "${FNM_NODE_DIST_MIRROR:-https://npmmirror.com/mirrors/node}"
+    printf "  %-20s %s\n" "Node 镜像源" "${FNM_NODE_DIST_MIRROR:-${FNM_NODE_DIST_MIRROR_DEFAULT:-https://npmmirror.com/mirrors/node}}"
+    printf "  %-20s %s\n" "npm registry" "${NPM_REGISTRY:-官方}"
   fi
   has_service "acme" && printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
   echo ""
