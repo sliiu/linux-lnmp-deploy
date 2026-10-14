@@ -211,6 +211,7 @@ issue_ssl() {
   case "${site_type:-$(_site_type_for_domain "$domain")}" in
     laravel) gen_caddy_laravel "$domain" ;;
     pm2) gen_caddy_pm2 "$domain" ;;
+    spring) gen_caddy_spring "$domain" ;;
     proxy) gen_caddy_proxy "$domain" ;;
     *) gen_caddy_frontend "$domain" "${frontend_root:-}" ;;
   esac

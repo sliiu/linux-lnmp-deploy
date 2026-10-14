@@ -394,6 +394,12 @@ fix_site_readable_for_nginx() {
   chmod a+rx "${WWW_ROOT}" 2>/dev/null || true
   local base="${WWW_ROOT}/${domain}"
   [[ -d "$base" ]] || { info "  [跳过] 站点目录不存在: ${base}"; return 0; }
+
+  if [[ "$site_type" = "spring" ]]; then
+    info "  [跳过] Spring 站点由容器提供，不调整 Web 文档根权限"
+    return 0
+  fi
+
   chmod a+rx "$base" 2>/dev/null || true
 
   if [[ "$site_type" = "laravel" ]]; then

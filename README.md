@@ -51,9 +51,9 @@ sudo git -C /opt/alibaba-cloud-ecs-deployment pull --ff-only
 
 - `**bootstrap.sh**`：克隆/更新仓库到 `**INSTALL_DIR**` 后 `**exec**` 运行 `**init.sh**` 或 `**deploy-site.sh**`（参数透传）。
 - `**init.sh**`：以 **root** 安装/配置 BBR、防火墙、Docker、LNMP 容器、SSH、用户与可选等保加固；
-写入 `/etc/lnmp-env.conf`；可选安装 **PM2 环境**（fnm + Node.js + pm2，见下文「PM2 环境」）、**saferm**（见下文「saferm」）。实现按领域拆在 `**lib/init/*.sh`**（如 `**config**`、`**lnmp**`、`**docker**`、`**pm2**`、`**saferm**` 等），由 `**init.sh**` 统一加载。
+写入 `/etc/lnmp-env.conf`；可选安装 **PM2 环境**（fnm + Node.js + pm2，见下文「PM2 环境」）、**Java 运行时**（Spring 用的容器镜像，见下文「Java 运行时」）、**saferm**（见下文「saferm」）。实现按领域拆在 `**lib/init/*.sh`**（如 `**config**`、`**lnmp**`、`**docker**`、`**pm2**`、`**java**`、`**saferm**` 等），由 `**init.sh**` 统一加载。
 - `**deploy-site.sh**`：以 **root** 在已有 LNMP 栈上 **新增/更新/删除/列举/状态/SSL** 站点：Nginx、可选 Git、SSL
-（acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、静态前端、**PM2 Node.js 应用**（Nginx 反代宿主机进程）、**proxy** 反代、**Webhook** 自动部署与 **rollback**。子命令实现在 `**lib/deploy/*.sh`**，由 `**deploy-site.sh**` 加载 `**lib/common.sh**` 与各 cmd 模块。
+（acme.sh）、Laravel（含可选多 PHP 版本、SSE 路径规则）、静态前端、**PM2 Node.js 应用**（Caddy 反代宿主机进程）、**Spring Boot**（与 Caddy 同一 Docker 网络上的容器，Caddy 反代）、**proxy** 反代、**Webhook** 自动部署与 **rollback**。子命令实现在 `**lib/deploy/*.sh`**，由 `**deploy-site.sh**` 加载 `**lib/common.sh**` 与各 cmd 模块。
 
 `**lib/common.sh**`：`die`、菜单、确认等共用函数，供两个入口脚本共用。
 
@@ -63,7 +63,7 @@ sudo git -C /opt/alibaba-cloud-ecs-deployment pull --ff-only
 
 - **执行用户**：两个脚本均须 **root**。
 - **顺序**：先在本机完成 `init.sh`（至少 Docker + LNMP 相关容器、devops 用户），再执行
-`deploy-site.sh`。部署 `**--type=pm2**` 站点前还须 `**init.sh install pm2**`（或交互向导勾选 PM2）。
+`deploy-site.sh`。部署 `**--type=pm2**` 站点前还须 `**init.sh install pm2**`（或交互向导勾选 PM2）。部署 `**--type=spring**` 站点前还须 `**init.sh install java**`。
 - **数据目录**：默认 `/data/docker-lnmp`（站点代码在 `www/<域名>/`）。`deploy-site.sh` 会
 source `/etc/lnmp-env.conf`：`CONTAINER_WWW` 由 `init.sh` 写入该文件；若需改主机上的数据根目录，
 须**自行**在配置中加入 `LNMP_DATA_DIR=...`（`init.sh` 当前不会写入该项），并保证与现有
@@ -88,7 +88,7 @@ DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`ini
 与扩展、ACME 邮箱、`**ACME_SSL_DNS_DEFAULT**`（`deploy-site` 交互默认 SSL 模式）、SSH 端口与 root
 策略、LNMP 组件列表等。
 - 可选模块：**SSH 加固**、**等保三权用户**、**BBR**、**Oh-My-Zsh**、**Firewalld**、
-**Docker**、**LNMP（docker-compose）**、**PM2 环境**（fnm + Node.js + pm2，供 `deploy-site --type=pm2`）、
+**Docker**、**LNMP（docker-compose）**、**PM2 环境**（fnm + Node.js + pm2，供 `deploy-site --type=pm2`）、**Java 运行时**（容器镜像，供 `deploy-site --type=spring`）、
 **wheel 管理员**、**devops 用户**（将 `DEVOPS_USER`
 加入组 `**devops`**，sudoers 为 `%devops NOPASSWD: /usr/local/bin/deploy-site.sh`）、
 **saferm**（安全删除脚本，见「saferm」一节）。
@@ -162,6 +162,32 @@ sudo ./init.sh uninstall pm2
 - **镜像**：Node 二进制默认从 `FNM_NODE_DIST_MIRROR` 拉取；npm 走 `NPM_REGISTRY`（空 = 官方，安装时 `npm config set/delete` 写入 devops `~/.npmrc`）。出厂默认在 `init.sh` 顶部的 `FNM_NODE_DIST_MIRROR_DEFAULT` / `NPM_REGISTRY_DEFAULT`（国内均为 npmmirror）；CLI `--node-mirror` / `--npm-registry`（`-` 或空 = 官方）与交互「更新配置」可覆盖。
 - **状态**：`sudo ./init.sh status` 显示 Node / pm2 版本、Node 镜像源、npm registry；交互菜单 **「查看状态」** 同理。
 - **GitHub**：下载 fnm 可走 `**--gh-proxy=**`（与 zsh / lnmp 相同）。
+
+### Java 运行时（init.sh）
+
+为 **Spring 站点**（`deploy-site.sh --type=spring`）拉取构建和运行用的容器镜像。不在宿主机安装 JDK、Maven 或 Gradle。逻辑在 `**lib/init/java.sh**`。需要已经装好 **Docker**。
+
+**安装 / 卸载**：
+
+```bash
+sudo ./init.sh install java
+sudo ./init.sh uninstall java
+```
+
+默认镜像（写入 `/etc/lnmp-env.conf`，可用同名参数覆盖）：
+
+- `JAVA_IMAGE`：`eclipse-temurin:21-jre`（运行）
+- `JAVA_JDK_IMAGE`：`eclipse-temurin:21-jdk`（wrapper 构建）
+- `MAVEN_IMAGE`：`maven:3.9.11-eclipse-temurin-21`（有 `pom.xml` 但没有 `mvnw`）
+- `GRADLE_IMAGE`：`gradle:8.14.3-jdk21`（有 Gradle 构建文件但没有 `gradlew`）
+
+```bash
+sudo ./init.sh install java --java-image=eclipse-temurin:21-jre
+```
+
+- **全新安装**：多选里 Java 运行时默认不勾。回车仍是 Docker + FrankenPHP。没有单独的「Spring 栈」预设。勾选 Java 且本机还没有 Docker 时，会补上 Docker。
+- **状态**：`sudo ./init.sh status` 用 `docker image inspect` 显示这四张镜像是否已在本机。
+- **卸载**：删掉 Spring 容器（`lnmp.role=spring` 或名称 `lnmp-spring-*`），清掉配置里的镜像名和 `/etc/java-init.done`。若以前装过宿主机 JDK，会删掉 `/opt/java`、`/opt/maven`、`/opt/gradle`，并停掉带 `# lnmp-spring-site` 标记的旧 systemd 单元。不 `docker rmi`，不删站点代码。
 
 ### saferm（安全删除）
 
@@ -298,6 +324,18 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 - **update**：`git pull`（若有 `.git`）→ 依赖安装 → build → `pm2 reload`；可 `**--pm2-port**` / `**--pm2-cmd**` / `**--pm2-build**` 更新行为。
   - **remove**：删除 PM2 进程及 `**.pm2-port**`、`**.pm2-cmd**`、`**.site-type**` 等元数据。
   - **无数据库 / PHP / crontab**：PM2 站点跳过 Laravel 的 DB、composer、Horizon 等步骤。
+- **spring**：Spring Boot 是 **一个容器**，和 `lnmp-caddy` 在同一个 Docker 网络上。Caddy 反代到容器名和容器内端口。不是 systemd，也不是 `proxy` 站点。逻辑在 `**lib/deploy/spring.sh**`。
+  - **前提**：已执行 `**init.sh install java**`，且 **lnmp-caddy** 在跑。没有 Java 运行时标记或镜像时直接报错。
+  - **端口**：容器内 `SERVER_PORT` 默认 **8080**。每个站点都可以是 8080，因为各有自己的网络命名空间。`**--spring-port**` 只改这个容器内端口（留空或 `-` 仍是 8080），写入 `**conf.d/<域名>.spring-port**`。同时设置 `SERVER_ADDRESS=0.0.0.0`。**不**把该端口映射到宿主机，也**不**在 firewalld 里放行。
+  - **容器名**：`lnmp-spring-<域名中的点换成横线>`（如 `api.example.com` → `lnmp-spring-api-example-com`）。标签 `lnmp.site`、`lnmp.role=spring`。
+  - **Jar**：`**--spring-jar=**`（相对站点目录）优先。否则在 `target/*.jar`、`build/libs/*.jar` 和站点根的 `*.jar` 里找，排除 `*-plain.jar`、`*-sources.jar`、`*-javadoc.jar`、`*-tests.jar`。恰好一个就用它；零个或多个则退出，要求传 `--spring-jar=`。运行容器把站点目录只读挂到 `/app`，执行 `java -jar`。
+  - **构建**：`**--spring-build=y|n**`。省略时，有 `pom.xml` 或 `build.gradle` / `build.gradle.kts` 则为 y，否则 n。有 `gradlew` 且有 Gradle 构建文件时，在 `JAVA_JDK_IMAGE` 里执行 `./gradlew bootJar -x test`（两边都有时优先 Gradle）。否则有 `mvnw` 时在同一 JDK 镜像里执行 `./mvnw -B package -DskipTests`；只有 `pom.xml` 时用 `MAVEN_IMAGE` 的 `mvn`。只有 Gradle 构建文件、没有 wrapper 时，用 `GRADLE_IMAGE` 执行 `gradle --no-daemon bootJar -x test`。构建容器以 devops 的 uid:gid 运行，缓存放在数据目录的 `cache/maven` 与 `cache/gradle`。Maven Central 走阿里云镜像。宿主机不安装这些工具。
+  - **Profile / JVM**：默认 `SPRING_PROFILES_ACTIVE=prod`。`**--spring-profiles=**` 可改；留空或 `-` 表示不设置。`**--spring-java-opts=**` 加在 `java -jar` 前面，默认空，不设堆大小。`**--env=KEY=VALUE**` 写入 root、权限 600 的 env 文件，交给 `docker run --env-file`。
+  - **数据库**：不建库，不改 `application.yml` / `application.properties`，也不把 3306 / 5432 / 6379 映射到宿主机。应用容器和 MySQL / Postgres / Redis 在同一 Docker 网络上，配置里若写了主机名 `mysql`、`postgres`、`redis`，可以连到这些容器。
+  - **update**：有 `.git` 则 pull；`spring-build=y` 时在构建容器里重新打包；然后删掉旧容器再建一个，并刷新 Caddy。
+  - **remove**：`docker rm -f` 该容器，删 Spring 元数据和 Caddy 站点。不删镜像。若还留着旧的 systemd 单元，一并停掉并删除。
+  - **list / status**：显示容器内端口，以及容器是否在跑。失败时提示 `docker logs lnmp-spring-<名称>`。
+  - **Webhook**：不走 PM2 / 前端的 release 压缩包。`**--webhook=tag**` 的 git 更新会在容器里重新构建，并重建应用容器。
 - **Git**：`**--git=` 留空或省略**跳过 clone/pull；`**--git-branch`** 指定分支/标签（clone 使用
 `--single-branch`；已有仓库时 fetch + checkout + pull）。`**list**`：有 `.git`、或有 `artisan`、
 或站点目录非空则状态为「已部署」。
@@ -332,12 +370,12 @@ sudo chmod +x /usr/local/bin/deploy-site.sh
 - `**add**`：新站点；无参数时进入交互。
 - `**update**`：要求 `**www/<域名>/` 目录已存在**。若存在 `**.git`**：`git pull`（可选
 `**--git-branch**` / `**--git-ref**`）；若无 `.git`：跳过 Git 并提示。Laravel：**composer install**、可选 **migrate**、
-**optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**；**pm2**：依赖安装、build、**pm2 reload** 并刷新 Nginx 反代。自动化可加 `**--run-migrate=y|n`**（及同类 y/n）避免交互。`**--webhook`** / `**--webhook-only**` 可写/只写 webhook 配置（交互 **update 不再追问**是否启用 webhook）。
+**optimize**、有 Horizon 配置则重启；前端：检查静态目录、**nginx reload**；**pm2**：依赖安装、build、**pm2 reload** 并刷新 Nginx 反代；**spring**：按构建标记在容器里重新打包、重建应用容器并刷新 Caddy。自动化可加 `**--run-migrate=y|n`**（及同类 y/n）避免交互。`**--webhook`** / `**--webhook-only**` 可写/只写 webhook 配置（交互 **update 不再追问**是否启用 webhook）。
 - `**webhook**`：`enable` / `disable` / `setup` / `list` 等。`setup` 已有 `listener.env` 时第一项为 **保持当前**（仍可改异常通知 URL）；首次默认 **Nginx 反代**，路径 `/hooks`，bind 时 **0.0.0.0:9080**。Release 未指定附件名则取第一个 asset。
 - `**rollback**`：回退到 webhook 部署前快照；确认默认 **N**。
-- `**remove**`：删除 Nginx 配置、SSL 目录、**.sse-prefixes**、crontab/Horizon、**PM2 进程**与 `**.pm2-port**` 等、可选删除代码目录。
-- `**list`**：列出 `conf.d` 下站点及类型、SSL、Cron、部署状态等；PM2 站点显示监听端口。
-- `**status**`：`**--domain=<域名>**` 检查该站证书、容器、**PM2 进程**、日志等；`**--all**` 遍历 `conf.d` 全部站点（概要）。
+- `**remove**`：删除 Nginx 配置、SSL 目录、**.sse-prefixes**、crontab/Horizon、**PM2 进程**与 `**.pm2-port**`、**Spring 容器**与 `**.spring-***` 等、可选删除代码目录。不删 Java 镜像。
+- `**list`**：列出 `conf.d` 下站点及类型、SSL、Cron、部署状态等；PM2 显示宿主机端口，Spring 显示容器内端口和容器是否在跑。
+- `**status**`：`**--domain=<域名>**` 检查该站证书、容器、**PM2 进程**或 **Spring 容器**、日志等；`**--all**` 遍历 `conf.d` 全部站点（概要）。
 - `**ssl**`：对已有站点重新签发/续期证书。
 - **（无参数）**：数字菜单（列表 / 部署 / 更新 / Webhook / 回退 / 状态 / SSL / 移除）。做完一项直接回主菜单。
 
@@ -421,10 +459,37 @@ sudo /usr/local/bin/deploy-site.sh update --domain=api.example.com --pm2-build=y
 su - devops -c 'pm2 logs lnmp-api-example-com'
 ```
 
+Spring Boot 站点示例：
+
+```bash
+# 1. 拉取 Java 镜像（每台机器一次；需要 Docker，不在宿主机装 JDK）
+sudo ./init.sh install java
+
+# 2. 部署站点（有 pom.xml 或 build.gradle 时默认在容器里构建）
+sudo /usr/local/bin/deploy-site.sh add \
+  --domain=api.example.com \
+  --git=git@github.com:org/demo.git \
+  --git-branch=main \
+  --type=spring
+
+# 容器内端口、指定 jar、跳过构建
+# sudo ... add --domain=api.example.com --type=spring --git=... --spring-port=8080
+# sudo ... add --domain=api.example.com --type=spring --git=... --spring-build=n --spring-jar=app.jar
+# sudo ... add --domain=api.example.com --type=spring --git=... --spring-profiles=prod --env=DB_PASSWORD=secret
+
+sudo /usr/local/bin/deploy-site.sh update --domain=api.example.com --spring-build=y
+
+# 查看日志
+docker logs lnmp-spring-api-example-com
+```
+
+Spring 容器和 Caddy、MySQL、Postgres、Redis 在同一个 Docker 网络上。3306 / 5432 / 6379 **仍然不映射到宿主机**。应用配置里如果写了主机名 `mysql`、`postgres` 或 `redis`，可以从这个容器连过去。脚本不会建库，也不会改 `application.yml` / `application.properties`。
+
 ### 主要参数（add/ssl 等）
 
-- `**--domain**`、`**--git**`（可空=跳过 Git）、`**--git-branch**`、`--type=laravel|frontend|pm2|proxy`
+- `**--domain**`、`**--git**`（可空=跳过 Git）、`**--git-branch**`、`--type=laravel|frontend|pm2|spring|proxy`
 - **PM2**：`**--pm2-port**`（留空或 `-` = 自动分配）、`**--pm2-cmd**`、`**--pm2-build=y|n**`（默认 y）
+- **Spring**：`**--spring-port**`（容器内端口，留空或 `-` = 8080，不映射宿主机）、`**--spring-jar**`、`**--spring-build=y|n**`、`**--spring-profiles**`（默认 prod，`-` = 不设置）、`**--spring-java-opts**`
 - `**--php-version**`：仅当 init 已为该主版本配置 `**EXTRA_PHP_VERSIONS**`（或该版本即为默认 `**lnmp-php**`）时有效（见上文）。
 - **SSE**：`**--sse-prefixes=**`、环境变量 `**LARAVEL_SSE_PREFIXES**`
 - `**status**`：`**--all**` 或 `**--domain**`
@@ -467,9 +532,9 @@ su - devops -c 'pm2 logs lnmp-api-example-com'
 1. 控制台用 root 或密钥登录 ECS，按「快速使用」一节执行 `bootstrap.sh` 或 `git clone` 仓库到
   `/opt/alibaba-cloud-ecs-deployment`。
 2. `cd /opt/alibaba-cloud-ecs-deployment && sudo bash init.sh`（若已是 root 可省略 `sudo`），完成
-  Docker、LNMP、devops、SSH、防火墙、ACME 邮箱等；**Node.js 站点**另勾选或执行 `install pm2`。
+  Docker、LNMP、devops、SSH、防火墙、ACME 邮箱等；**Node.js 站点**另勾选或执行 `install pm2`；**Spring 站点**另执行 `install java`。
 3. 若使用 Git：为 devops 配置 SSH 公钥，保证能 clone/pull 私有仓库。
-4. `sudo bash deploy-site.sh add`（或带全参数）添加站点（Laravel / frontend / **pm2** / **proxy**）；浏览器访问 `https://域名` 验证。
+4. `sudo bash deploy-site.sh add`（或带全参数）添加站点（Laravel / frontend / **pm2** / **spring** / **proxy**）；浏览器访问 `https://域名` 验证。
   `**deploy-site.sh` 移到其它目录执行时须有同级 `**lib/**`（或与「安装到系统路径」一节相同做法）；否则依赖 curl/wget 从 `**_LIB_RAW_BASE**` 拉取缺失文件。
 
 ---

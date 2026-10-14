@@ -12,6 +12,9 @@ _webhook_save_on_add() {
     release|tag) ;;
     *) die "无效 --webhook=${mode}（release | tag）" ;;
   esac
+  if [[ "$mode" = "release" && "${SITE_TYPE:-}" = "spring" ]]; then
+    die "Spring 站点不支持 webhook release 产物包，请使用 --webhook=tag（git 更新会重新构建并重启）"
+  fi
   [[ "$mode" != "release" || -n "$WEBHOOK_RELEASE_NAME" ]] \
     || die "静态站点 release 模式需 --webhook-release-name="
   local fe="" sec

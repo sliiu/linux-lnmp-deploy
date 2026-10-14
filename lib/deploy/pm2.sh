@@ -48,7 +48,7 @@ _site_type_for_domain() {
   if [[ -f "$f" ]]; then
     t="$(head -n1 "$f" 2>/dev/null | tr -d '[:space:]')"
     case "$t" in
-      laravel|frontend|pm2|proxy) printf '%s' "$t"; return 0 ;;
+      laravel|frontend|pm2|proxy|spring) printf '%s' "$t"; return 0 ;;
     esac
   fi
   [[ -f "${WWW_ROOT}/${domain}/artisan" ]] && { printf 'laravel'; return 0; }

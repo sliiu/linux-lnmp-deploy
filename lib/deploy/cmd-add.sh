@@ -199,6 +199,9 @@ DB_PWD_FROM_CLI=0
 CREATE_DB="" RUN_MIGRATE="" RUN_SEED="" ADD_CRONTAB="" NEED_HORIZON=""
 FRONTEND_ROOT=""
 SITE_PM2_PORT="" SITE_PM2_PORT_CLI=0 SITE_PM2_CMD="" SITE_PM2_CMD_CLI=0 PM2_BUILD=""
+SITE_SPRING_PORT="" SITE_SPRING_PORT_CLI=0 SITE_SPRING_JAR="" SITE_SPRING_JAR_CLI=0
+SPRING_BUILD="" SITE_SPRING_PROFILES="" SITE_SPRING_PROFILES_CLI=0
+SITE_SPRING_JAVA_OPTS="" SITE_SPRING_JAVA_OPTS_CLI=0
 SITE_PROXY_PASS="" SITE_PROXY_PASS_CLI=0
 SSL_DNS="" CF_TOKEN="" FORCE_SSL="" SSL_STAGING=0
 ALI_KEY="" ALI_SECRET="" DP_ID="" DP_KEY="" GD_KEY="" GD_SECRET=""
@@ -254,6 +257,9 @@ reset_menu_deploy_state() {
   NEED_HORIZON=""
   FRONTEND_ROOT=""
   SITE_PM2_PORT="" SITE_PM2_PORT_CLI=0 SITE_PM2_CMD="" SITE_PM2_CMD_CLI=0 PM2_BUILD=""
+  SITE_SPRING_PORT="" SITE_SPRING_PORT_CLI=0 SITE_SPRING_JAR="" SITE_SPRING_JAR_CLI=0
+  SPRING_BUILD="" SITE_SPRING_PROFILES="" SITE_SPRING_PROFILES_CLI=0
+  SITE_SPRING_JAVA_OPTS="" SITE_SPRING_JAVA_OPTS_CLI=0
   SITE_PROXY_PASS="" SITE_PROXY_PASS_CLI=0
   SSL_DNS=""
   CF_TOKEN=""
@@ -402,6 +408,44 @@ parse_args() {
       --pm2-cmd)         shift; SITE_PM2_CMD="$1"; SITE_PM2_CMD_CLI=1 ;;
       --pm2-build=*)     PM2_BUILD="${1#*=}" ;;
       --pm2-build)       shift; PM2_BUILD="$1" ;;
+      --spring-port=*)   SITE_SPRING_PORT="${1#*=}"; SITE_SPRING_PORT_CLI=1 ;;
+      --spring-port)
+        SITE_SPRING_PORT_CLI=1
+        if [[ $# -ge 2 && -n "$2" && "$2" != --* ]]; then
+          shift; SITE_SPRING_PORT="$1"
+        else
+          SITE_SPRING_PORT=""
+        fi
+        ;;
+      --spring-jar=*)    SITE_SPRING_JAR="${1#*=}"; SITE_SPRING_JAR_CLI=1 ;;
+      --spring-jar)
+        SITE_SPRING_JAR_CLI=1
+        if [[ $# -ge 2 && -n "$2" && "$2" != --* ]]; then
+          shift; SITE_SPRING_JAR="$1"
+        else
+          SITE_SPRING_JAR=""
+        fi
+        ;;
+      --spring-build=*)  SPRING_BUILD="${1#*=}" ;;
+      --spring-build)    shift; SPRING_BUILD="$1" ;;
+      --spring-profiles=*) SITE_SPRING_PROFILES="${1#*=}"; SITE_SPRING_PROFILES_CLI=1 ;;
+      --spring-profiles)
+        SITE_SPRING_PROFILES_CLI=1
+        if [[ $# -ge 2 && "$2" != --* ]]; then
+          shift; SITE_SPRING_PROFILES="$1"
+        else
+          SITE_SPRING_PROFILES=""
+        fi
+        ;;
+      --spring-java-opts=*) SITE_SPRING_JAVA_OPTS="${1#*=}"; SITE_SPRING_JAVA_OPTS_CLI=1 ;;
+      --spring-java-opts)
+        SITE_SPRING_JAVA_OPTS_CLI=1
+        if [[ $# -ge 2 && "$2" != --* ]]; then
+          shift; SITE_SPRING_JAVA_OPTS="$1"
+        else
+          SITE_SPRING_JAVA_OPTS=""
+        fi
+        ;;
       --proxy-pass=*)    SITE_PROXY_PASS="${1#*=}"; SITE_PROXY_PASS_CLI=1 ;;
       --proxy-pass)      shift; SITE_PROXY_PASS="$1"; SITE_PROXY_PASS_CLI=1 ;;
       --webhook=*)       WEBHOOK_MODE="${1#*=}"; WEBHOOK_ENABLE=1 ;;
@@ -794,18 +838,20 @@ collect_interactive() {
       "laravel (PHP 后端)" \
       "frontend (静态/SPA)" \
       "pm2 (Node.js 应用)" \
+      "spring (Spring Boot)" \
       "proxy (Caddy 反代)"
     _st_i=$MENU_SELECT_RESULT
     case "$_st_i" in
       1) SITE_TYPE="frontend" ;;
       2) SITE_TYPE="pm2" ;;
-      3) SITE_TYPE="proxy" ;;
+      3) SITE_TYPE="spring" ;;
+      4) SITE_TYPE="proxy" ;;
       *) SITE_TYPE="laravel" ;;
     esac
   fi
   SITE_TYPE=${SITE_TYPE:-laravel}
   case "$SITE_TYPE" in
-    laravel|frontend|pm2|proxy) ;;
+    laravel|frontend|pm2|spring|proxy) ;;
     *) SITE_TYPE="laravel" ;;
   esac
 
@@ -915,6 +961,30 @@ collect_interactive() {
       if [[ -z "$PM2_BUILD" ]]; then
         confirm "部署时执行构建（npm/pnpm/yarn build）？" "y" && PM2_BUILD=y || PM2_BUILD=n
       fi
+    elif [[ "$SITE_TYPE" = "spring" ]]; then
+      [[ "$SITE_SPRING_PORT" = "auto" || "$SITE_SPRING_PORT" = "-" ]] && SITE_SPRING_PORT=""
+      if [[ "${SITE_SPRING_PORT_CLI:-0}" -ne 1 && -z "$SITE_SPRING_PORT" ]]; then
+        prompt "容器内端口 SERVER_PORT（回车=8080，不映射到宿主机）" "8080"
+        SITE_SPRING_PORT=$PROMPT_RESULT
+        [[ -n "$SITE_SPRING_PORT" ]] && SITE_SPRING_PORT_CLI=1
+      fi
+      if [[ "${SITE_SPRING_JAR_CLI:-0}" -ne 1 && -z "$SITE_SPRING_JAR" ]]; then
+        prompt "Jar 路径（相对站点目录，回车=自动）" ""
+        SITE_SPRING_JAR=$PROMPT_RESULT
+        [[ -n "$SITE_SPRING_JAR" ]] && SITE_SPRING_JAR_CLI=1
+      fi
+      if [[ -z "$SPRING_BUILD" ]]; then
+        local _sb_def="y"
+        if [[ -d "${WWW_ROOT}/${DOMAIN}" ]] && ! _spring_has_build_file "$DOMAIN"; then
+          _sb_def="n"
+        fi
+        confirm "部署时构建 jar（有 pom.xml / build.gradle 时）？" "$_sb_def" && SPRING_BUILD=y || SPRING_BUILD=n
+      fi
+      if [[ "${SITE_SPRING_PROFILES_CLI:-0}" -ne 1 ]]; then
+        prompt "SPRING_PROFILES_ACTIVE（- = 不设置）" "prod"
+        SITE_SPRING_PROFILES=$PROMPT_RESULT
+        SITE_SPRING_PROFILES_CLI=1
+      fi
     elif [[ "$SITE_TYPE" = "frontend" && "${WEBHOOK_MODE:-}" != "release" && -z "$FRONTEND_ROOT" ]]; then
       prompt "前端子目录（回车=自动 dist 优先）" ""
       FRONTEND_ROOT=$PROMPT_RESULT
@@ -952,6 +1022,13 @@ _require_deploy_containers() {
 
 cmd_add() {
   collect_interactive || return 0
+
+  if [[ "$SITE_TYPE" = "spring" ]]; then
+    if [[ "${WEBHOOK_MODE:-}" = "release" ]]; then
+      die "Spring 站点不支持 webhook release 产物包，请使用 --webhook=tag（git 更新会重新构建并重启）"
+    fi
+    ensure_java_runtime
+  fi
 
   _require_deploy_containers "$SITE_TYPE" || return 0
 
@@ -1004,6 +1081,16 @@ cmd_add() {
       printf "  %-18s %s\n" "PM2 端口" "${SITE_PM2_PORT:-自动分配}"
       printf "  %-18s %s\n" "PM2 命令" "${SITE_PM2_CMD:-自动检测}"
       printf "  %-18s %s\n" "构建" "${PM2_BUILD:-y}"
+    elif [[ "$SITE_TYPE" = "spring" ]]; then
+      printf "  %-18s %s\n" "端口" "${SITE_SPRING_PORT:-8080}（容器内）"
+      printf "  %-18s %s\n" "Jar" "${SITE_SPRING_JAR:-自动}"
+      printf "  %-18s %s\n" "构建" "${SPRING_BUILD:-有构建文件则构建}"
+      if [[ "${SITE_SPRING_PROFILES_CLI:-0}" -eq 1 && ( -z "${SITE_SPRING_PROFILES}" || "${SITE_SPRING_PROFILES}" = "-" ) ]]; then
+        printf "  %-18s %s\n" "Profile" "不设置"
+      else
+        printf "  %-18s %s\n" "Profile" "${SITE_SPRING_PROFILES:-prod}"
+      fi
+      [[ ${#CUSTOM_ENV[@]} -gt 0 ]] && printf "  %-18s %s\n" "自定义 ENV" "${#CUSTOM_ENV[@]} 项"
     elif [[ "$SITE_TYPE" = "proxy" ]]; then
       :
     else
@@ -1037,6 +1124,9 @@ cmd_add() {
   elif [[ "$SITE_TYPE" = "pm2" ]]; then
     info "PM2 站点：Caddy 反代在代码部署与 PM2 启动后生成"
     write_site_type_file "$DOMAIN" "pm2"
+  elif [[ "$SITE_TYPE" = "spring" ]]; then
+    info "Spring 站点：Caddy 反代在代码部署与 JVM 启动后生成"
+    write_site_type_file "$DOMAIN" "spring"
   elif [[ "$SITE_TYPE" = "proxy" ]]; then
     mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
     chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}" 2>/dev/null || true
@@ -1109,6 +1199,13 @@ cmd_add() {
     gen_nginx_pm2 "$DOMAIN"
     _nginx_reload_or_die
     ok "Caddy 反代已生成（→ $(_docker_host_gateway):$(pm2_port_for_site "$DOMAIN")）"
+  elif [[ "$SITE_TYPE" = "spring" ]]; then
+    mkdir -p "${WWW_ROOT}/${DOMAIN}/.well-known/acme-challenge"
+    chown -R "${DEVOPS_USER}:${DEVOPS_USER}" "${WWW_ROOT}/${DOMAIN}/.well-known" 2>/dev/null || true
+    setup_spring "$DOMAIN"
+    gen_nginx_spring "$DOMAIN"
+    _nginx_reload_or_die
+    ok "Caddy 反代已生成（→ $(_docker_host_gateway):$(spring_port_for_site "$DOMAIN")）"
   fi
 
   if [[ "${WEBHOOK_RELEASE_ADD_DONE:-0}" -ne 1 ]]; then
@@ -1174,6 +1271,23 @@ cmd_add() {
     info "目录: ${WWW_ROOT}/${DOMAIN}"
     info "PM2: $(pm2_app_name "$DOMAIN")  端口: $(pm2_port_for_site "$DOMAIN")"
     info "日志: su - ${DEVOPS_USER} -c 'pm2 logs $(pm2_app_name "$DOMAIN")'"
+    if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
+      info "请执行: $0 webhook setup（若尚未安装监听）"
+    fi
+    hr
+  elif [[ "$SITE_TYPE" = "spring" ]]; then
+    echo ""
+    hr; info "[4/6] 跳过（Spring 不建库、不改应用配置）"
+    hr; info "[5/6] 跳过（Spring 无 PHP）"
+    hr; info "[6/6] 跳过（Spring 无 crontab）"
+    echo ""
+    hr
+    ok "Spring 站点部署完成"
+    info "访问: https://${DOMAIN}"
+    info "目录: ${WWW_ROOT}/${DOMAIN}"
+    info "容器: $(spring_container_name "$DOMAIN")  端口: $(spring_listen_port "$DOMAIN")（容器内，不映射到宿主机）"
+    info "日志: docker logs $(spring_container_name "$DOMAIN")"
+    info "容器与 Caddy 在同一 Docker 网络。应用若已配置主机名 mysql / postgres / redis，可以连到这些容器。脚本不建库，也不改 application.yml / application.properties"
     if [[ "${WEBHOOK_ENABLE:-0}" -eq 1 || -n "${WEBHOOK_MODE:-}" ]]; then
       info "请执行: $0 webhook setup（若尚未安装监听）"
     fi
@@ -1362,6 +1476,10 @@ cmd_update() {
       warn "站点目录尚无 package.json / ecosystem 配置，跳过 PM2"
     fi
     gen_nginx_pm2 "$DOMAIN"
+    _caddy_reload_soft "Caddy 已 reload"
+  elif [[ "$site_type" = "spring" ]]; then
+    reload_spring_site "$DOMAIN"
+    gen_nginx_spring "$DOMAIN"
     _caddy_reload_soft "Caddy 已 reload"
   elif [[ "$site_type" = "proxy" ]]; then
     if [[ "${SITE_PROXY_PASS_CLI:-0}" -ne 1 && "${YES:-0}" -ne 1 ]]; then

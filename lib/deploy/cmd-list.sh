@@ -55,6 +55,7 @@ _status_print_hints() {
     && issues+=("HTTPS 无响应：检查 443 与 Caddy 自动 HTTPS / tls 文件")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "laravel" ]] && issues+=("502：多为 FrankenPHP 异常，查看 docker logs $(_web_container)")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "pm2" ]] && issues+=("502：多为 PM2 进程未运行或端口不匹配，检查 pm2 status 与 ${NGINX_CONF}/${d}.pm2-port")
+  [[ "$code_https" = "502" ]] && [[ "$site_type" = "spring" ]] && issues+=("502：多为 Spring 容器未运行或端口不匹配。查看: docker logs $(spring_container_name "$d")")
   [[ "$code_https" = "502" ]] && [[ "$site_type" = "proxy" ]] && issues+=("502：上游不可达，检查 ${NGINX_CONF}/${d}.proxy-pass 与目标服务")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "frontend" ]] && issues+=("404：确认构建产物在 ${WWW_ROOT}/${d}${fe_sub:+/}${fe_sub} 且含 index.html")
   [[ "$code_https" = "404" ]] && [[ "$site_type" = "laravel" ]] && issues+=("404：确认 ${WWW_ROOT}/${d}/public 存在且含 index.php")
@@ -182,6 +183,19 @@ cmd_status() {
       fi
     elif [[ "$site_type" = "proxy" ]]; then
       info "反代上游: $(proxy_pass_for_site "$dom")"
+    elif [[ "$site_type" = "spring" ]]; then
+      local _sport _scname _sactive _sjar
+      _sport="$(spring_listen_port "$dom")"
+      _scname="$(spring_container_name "$dom")"
+      _sjar="$(spring_jar_for_site "$dom" 2>/dev/null || echo '?')"
+      info "Spring 容器: ${_scname}  端口: ${_sport}（容器内）  jar: ${_sjar}"
+      _sactive="$(spring_container_state "$dom")"
+      if [[ "$_sactive" = "running" ]]; then
+        ok "Spring 容器运行中（${_sactive}）"
+      else
+        warn "✗ Spring 容器未运行（${_sactive}）。查看: docker logs ${_scname}"
+        status_exit_code=1
+      fi
     else
       [[ -f "${doc_host}/index.html" ]] && ok "前端 index.html: ${doc_host}/index.html" || warn "缺少 index.html（文档根: ${doc_host}）"
     fi
@@ -225,7 +239,7 @@ cmd_status() {
       _status_laravel_fpm_tail_hints "$dom"
     fi
 
-    if container_ok "$(_web_container)" && [[ "$site_type" != "proxy" && "$site_type" != "pm2" ]]; then
+    if container_ok "$(_web_container)" && [[ "$site_type" != "proxy" && "$site_type" != "pm2" && "$site_type" != "spring" ]]; then
       echo ""
       info "容器内可读性:"
       if [[ "$site_type" = "laravel" ]]; then
@@ -272,7 +286,7 @@ cmd_status() {
       warn "状态检查发现问题（见上方 ✗ 标记），需要人工修复"
       return 1
     else
-      die "状态检查失败（见上方 ✗ 标记）：证书过期或 PM2 进程未运行"
+      die "状态检查失败（见上方 ✗ 标记）：证书过期、PM2 进程未运行或 Spring 容器未运行"
     fi
   fi
 }
@@ -321,6 +335,9 @@ cmd_list() {
       pm2_p="$(pm2_port_for_site "$name" 2>/dev/null || echo '-')"
       lv_v="-"
       php_v="-"
+    elif [[ "$type" = "spring" ]]; then
+      lv_v="-"
+      php_v="-"
     elif [[ "$type" = "proxy" ]]; then
       lv_v="-"
       php_v="-"
@@ -328,6 +345,12 @@ cmd_list() {
     if [[ "$type" = "pm2" ]]; then
       printf "  %-30s 类型:%-10s 端口:%-6s 状态:%-8s SSL:%-4s Cron:%-4s\n" \
         "$name" "$type" "$pm2_p" "$status" "$ssl" "$cron"
+    elif [[ "$type" = "spring" ]]; then
+      local spring_p spring_state
+      spring_p="$(spring_listen_port "$name")"
+      spring_state="$(spring_container_state "$name")"
+      printf "  %-30s 类型:%-10s 端口:%-6s 容器:%-10s 状态:%-8s SSL:%-4s\n" \
+        "$name" "$type" "$spring_p" "$spring_state" "$status" "$ssl"
     elif [[ "$type" = "proxy" ]]; then
       printf "  %-30s 类型:%-10s 上游:%-40s 状态:%-8s SSL:%-4s\n" \
         "$name" "$type" "$(proxy_pass_for_site "$name")" "$status" "$ssl"

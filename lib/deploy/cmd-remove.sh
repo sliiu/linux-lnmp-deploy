@@ -9,11 +9,18 @@ cmd_remove() {
 
   [[ "${YES:-0}" -eq 0 ]] && ! confirm "确认删除 ${DOMAIN}？所有配置和数据将被移除" "n" && { info "已取消"; return; }
 
+  stop_spring_site "$DOMAIN"
   rm -f "${NGINX_CONF}/${DOMAIN}.sse-prefixes" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.php-version" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.site-type" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.pm2-port" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.pm2-cmd" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.spring-port" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.spring-jar" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.spring-build" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.spring-profiles" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.spring-java-opts" 2>/dev/null || true
+  rm -f "${NGINX_CONF}/${DOMAIN}.spring-env" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.proxy-pass" 2>/dev/null || true
   rm -f "${NGINX_CONF}/${DOMAIN}.webhook" 2>/dev/null || true
   stop_pm2_site "$DOMAIN"
