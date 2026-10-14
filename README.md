@@ -72,8 +72,9 @@ source `/etc/lnmp-env.conf`：`CONTAINER_WWW` 由 `init.sh` 写入该文件；�
 **id_ed25519** 或 **id_rsa** 能访问远程；`**--git` 留空或省略**则跳过 clone/pull，请事先把代码放到
 `www/<域名>/`。`**update`**：有 `.git` 才 pull，无则跳过 Git、仍可做 composer / migrate 等（Laravel）
 或 reload Nginx（前端）。
-- **域名**：**webroot** 校验需域名指向本机且 **80** 可达；**DNS 校验** 时域名解析可在任意
-DNS 商，只需在对应云开通 API 权限（见 deploy-site 一节）。`init.sh` 可将
+- **域名**：**webroot**（HTTP-01）需域名指向本机且 **80** 可达。**DNS-01**（`dns_cf`、`dns_ali` 等）
+不要求站点主机名已有 A 记录：只需该区域的 API 凭证，由 DNS API 写入 `_acme-challenge` TXT，A 记录可稍后添加
+（见 deploy-site 一节）。`init.sh` 可将
 `**ACME_SSL_DNS_DEFAULT`** 写入 `/etc/lnmp-env.conf`，作为 `deploy-site.sh` 交互时的默认
 `--dns`（不含密钥）。
 
@@ -342,8 +343,9 @@ sudo ./init.sh account resync-allow  # 按 lnmp-env 重建 AllowUsers（覆盖�
 
 #### SSL：`--dns` 与主流 DNS（acme.sh）
 
-- `**webroot**`：HTTP-01，需本机 80；无额外密钥参数（默认）。
-- `**dns_cf**`（Cloudflare）：`--cf-token` → `CF_Token`。
+- `**webroot**`：HTTP-01，需域名指向本机且本机 80 可达；无额外密钥参数（默认）。
+- **DNS-01**（下面的 `dns_*`）：不要求域名解析到本机。acme.sh 用 API 写入 `_acme-challenge.<域名>` TXT；没有 A 记录也可以签发，A 记录可以之后再加。
+- `**dns_cf**`（Cloudflare）：`--cf-token` → `CF_Token`。Token 传给 `acme.sh --dns dns_cf`，由 Cloudflare API 创建挑战 TXT。
 - `**dns_ali**`（阿里云解析）：`--ali-key` / `--ali-secret` → `Ali_Key` / `Ali_Secret`。
 - `**dns_dp**`（DNSPod 国际版 API）：`--dp-id` / `--dp-key` → `DP_Id` / `DP_Key`。
 - `**dns_gd**`（GoDaddy）：`--gd-key` / `--gd-secret` → `GD_Key` / `GD_Secret`。

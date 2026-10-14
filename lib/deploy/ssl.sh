@@ -117,14 +117,22 @@ _collect_ssl_dns_creds_interactive() {
 
 _ssl_validate_dns_ready() {
   local domain="$1" mode="$2"
-  if [[ "$mode" = "webroot" ]]; then
+  # DNS-01 用 DNS API 写 _acme-challenge TXT，不要求站点主机名已有 A/AAAA。
+  # 本地 dig 得到 NXDOMAIN / 空结果是常态（记录可以签发后再加），不能在这里中止。
+  if _is_dns_mode "$mode"; then
+    if [[ "$mode" = "dns_cf" ]]; then
+      info "dns_cf：${domain} 没有 A 记录也不阻断签发。acme.sh 会用 Cloudflare API（CF_Token）写入 _acme-challenge.${domain} 的 TXT。"
+    else
+      info "DNS-01（${mode}）：${domain} 没有 A/AAAA 记录也不阻断签发。挑战 TXT 由 DNS API 写入。"
+    fi
     return 0
   fi
-  info "检查域名 ${domain} 的 DNS 解析..."
+
+  info "检查域名 ${domain} 的 DNS 解析（HTTP-01 / webroot）..."
   local resolved
   resolved="$(dig +short "$domain" A 2>/dev/null | head -n1 || nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -v '#' | head -n1 || true)"
   if [[ -z "$resolved" ]]; then
-    die "DNS 解析失败（NXDOMAIN）：域名 ${domain} 未解析或 DNS 尚未生效。DNS-01 模式需要域名正确解析。请等待 DNS 传播后重试，或改用 --dns=webroot（需本机 80 可达）"
+    die "DNS 解析失败（NXDOMAIN）：域名 ${domain} 未解析到本机。HTTP-01 / webroot 需要域名指向本机且 80 端口公网可达。请添加 A 记录并等待生效，或改用 DNS-01（如 --dns=dns_cf；TXT 由 DNS API 写入，不要求 A 记录）。"
   fi
   ok "域名 ${domain} 解析正常: ${resolved}"
 }
@@ -167,7 +175,7 @@ issue_ssl() {
     if [[ $acme_exit -ne 0 && $acme_exit -ne 2 ]]; then
       local err_hint=""
       if echo "$acme_output" | grep -qi "NXDOMAIN"; then
-        err_hint="域名 DNS 未解析或未生效（NXDOMAIN）。请确认域名指向本机 IP，并等待 DNS 传播（通常 5-30 分钟）后重试。检查: dig ${domain}"
+        err_hint="ACME 未查到挑战 TXT（NXDOMAIN）。DNS-01 不要求 ${domain} 有 A 记录；请确认区域托管在该 DNS 服务商、API 凭证可写 _acme-challenge.${domain}，并等待 TXT 生效后重试。dns_cf 的 TXT 由 Cloudflare API 写入。"
       elif echo "$acme_output" | grep -qi "rate limit\|too many\|429"; then
         err_hint="触发 Let's Encrypt 速率限制（同一域名 7 天内正式证书约 5 张上限）。请等到日志中 'retry after' 时间后再试，或临时使用 --ssl-staging 测试。https://letsencrypt.org/docs/rate-limits/"
       elif echo "$acme_output" | grep -qi "timeout\|timed out"; then
