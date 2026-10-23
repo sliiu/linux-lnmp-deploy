@@ -60,6 +60,7 @@ _source_lib lib/deploy/db.sh
 _source_lib lib/deploy/perms.sh
 _source_lib lib/deploy/nginx.sh
 _source_lib lib/deploy/pm2.sh
+_source_lib lib/deploy/spring.sh
 _source_lib lib/deploy/ssl.sh
 _source_lib lib/deploy/git.sh
 _source_lib lib/deploy/webhook.sh

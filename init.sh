@@ -10,6 +10,10 @@ CYBERSEC_MARKER="/etc/cybersecurity-init.done"
 # 出厂默认（/etc/lnmp-env.conf 与 CLI 会覆盖；NPM_REGISTRY 空 = 官方）
 FNM_NODE_DIST_MIRROR_DEFAULT="https://npmmirror.com/mirrors/node"
 NPM_REGISTRY_DEFAULT="https://registry.npmmirror.com"
+JAVA_IMAGE_DEFAULT="eclipse-temurin:21-jre"
+JAVA_JDK_IMAGE_DEFAULT="eclipse-temurin:21-jdk"
+MAVEN_IMAGE_DEFAULT="maven:3.9.11-eclipse-temurin-21"
+GRADLE_IMAGE_DEFAULT="gradle:8.14.3-jdk21"
 
 mkdir -p "${DATA_DIR}/logs" 2>/dev/null || true
 LOG_FILE="${DATA_DIR}/logs/init.log"
@@ -69,6 +73,7 @@ _source_lib lib/init/accounts.sh
 _source_lib lib/init/lnmp.sh
 _source_lib lib/init/node.sh
 _source_lib lib/init/pm2.sh
+_source_lib lib/init/java.sh
 _source_lib lib/init/status.sh
 _source_lib lib/init/interactive.sh
 _source_lib lib/init/saferm.sh
@@ -106,6 +111,7 @@ usage() {
   phpmyadmin  phpMyAdmin 容器
   node        Node.js（fnm，devops 用户）
   pm2         PM2（依赖 Node.js，未安装时联动安装）
+  java        Java 运行时（Spring 构建/运行镜像，需 Docker）
   wheel       Wheel 管理员
   cyber       等保加固
   devops      Devops 部署用户
@@ -118,6 +124,10 @@ usage() {
   --node-version=VER     Node.js 主版本（fnm，默认 22）
   --node-mirror=URL      Node 二进制镜像 [${FNM_NODE_DIST_MIRROR_DEFAULT}]
   --npm-registry=URL     npm registry [${NPM_REGISTRY_DEFAULT}；空或 - = 官方]
+  --java-image=IMG       Spring 运行镜像 [${JAVA_IMAGE_DEFAULT}]
+  --java-jdk-image=IMG   Spring 构建 JDK 镜像 [${JAVA_JDK_IMAGE_DEFAULT}]
+  --maven-image=IMG      无 mvnw 时的 Maven 镜像 [${MAVEN_IMAGE_DEFAULT}]
+  --gradle-image=IMG     无 gradlew 时的 Gradle 镜像 [${GRADLE_IMAGE_DEFAULT}]
   --php-version=VER       PHP 主版本，对应 dunglas/frankenphp:phpVER（8.2–8.5）
   --php-ext=EXT,...       PHP 扩展（逗号分隔）
   --caddy-image=IMG       Caddy 镜像 (如 caddy:2-alpine)
@@ -144,6 +154,8 @@ usage() {
   $0 install node --node-version=22
   $0 install node --npm-registry=-
   $0 install pm2
+  $0 install java
+  $0 install java --java-image=eclipse-temurin:21-jre
   # PM2 网关栈（无 php）：caddy 反代 + 宿主机 PM2；postgres/redis 按需另装
   $0 install docker --docker-mirrors=https://docker.m.daocloud.io
   $0 install devops
@@ -187,6 +199,10 @@ main() {
       --php-version=*)    PHP_VERSION="${arg#*=}" ;;
       --node-version=*)   NODE_VERSION="${arg#*=}" ;;
       --node-mirror=*)    FNM_NODE_DIST_MIRROR="${arg#*=}" ;;
+      --java-image=*)     JAVA_IMAGE="${arg#*=}" ;;
+      --java-jdk-image=*) JAVA_JDK_IMAGE="${arg#*=}" ;;
+      --maven-image=*)    MAVEN_IMAGE="${arg#*=}" ;;
+      --gradle-image=*)   GRADLE_IMAGE="${arg#*=}" ;;
       --npm-registry=*)
         local _npm_reg="${arg#*=}"
         [[ "$_npm_reg" = "-" ]] && NPM_REGISTRY="" || NPM_REGISTRY="${_npm_reg%/}"
@@ -248,6 +264,7 @@ main() {
         phpmyadmin) LNMP_SERVICES="${LNMP_SERVICES},phpmyadmin"; install_lnmp "phpmyadmin" ;;
         node)     install_node ;;
         pm2)      install_pm2 ;;
+        java)     install_java ;;
         wheel)    setup_wheel_user ;;
         cyber)    setup_cyber_users ;;
         devops)   setup_devops_user ;;
@@ -294,6 +311,7 @@ main() {
         phpmyadmin) uninstall_lnmp "phpmyadmin" ;;
         node)     uninstall_node ;;
         pm2)      uninstall_pm2 ;;
+        java)     uninstall_java ;;
         saferm)   uninstall_saferm ;;
         *)        die "未知组件: $target" ;;
       esac

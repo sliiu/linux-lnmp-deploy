@@ -78,7 +78,7 @@ deploy_code() {
   fi
   local _dc_fe=""
   [[ "$_dc_st" = "frontend" ]] && _dc_fe=$(effective_frontend_subdir "$domain")
-  if [[ "$_dc_st" != "pm2" ]]; then
+  if [[ "$_dc_st" != "pm2" && "$_dc_st" != "spring" ]]; then
     fix_site_readable_for_nginx "$domain" "$_dc_st" "$_dc_fe"
   fi
 }

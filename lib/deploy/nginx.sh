@@ -271,6 +271,30 @@ CADDY
 
 gen_nginx_pm2() { gen_caddy_pm2 "$@"; }
 
+gen_caddy_spring() {
+  local domain="$1" port="${2:-}" cname
+  [[ -n "$port" ]] || port="$(spring_listen_port "$domain")"
+  [[ "$port" =~ ^[0-9]+$ ]] || die "gen_caddy_spring: 无效端口（${domain}）"
+  cname="$(spring_container_name "$domain")"
+  local body
+  body=$(cat <<CADDY
+	request_body {
+		max_size 110MB
+	}
+	reverse_proxy ${cname}:${port} {
+		flush_interval -1
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+CADDY
+)
+  _caddy_write_site "$domain" "$body"
+}
+
+gen_nginx_spring() { gen_caddy_spring "$@"; }
+
 _normalize_proxy_pass() {
   local u="${1:-}"
   u="${u#"${u%%[![:space:]]*}"}"

@@ -287,18 +287,28 @@ _webhook_backup_site() {
   hf="$(_webhook_history_file "$domain")"
   mkdir -p "$bid" "$(dirname "$hf")"
 
-  if [[ -f "${site_dir}/artisan" ]]; then
-    local ref=""
+  local st_now ref=""
+  st_now="$(_site_type_for_domain "$domain")"
+  if [[ "$st_now" = "spring" || -f "${site_dir}/artisan" ]]; then
     if [[ -d "${site_dir}/.git" ]]; then
       ref="$(su - "${DEVOPS_USER}" -c "cd '${site_dir}' && git rev-parse HEAD 2>/dev/null" || true)"
     fi
     meta="${bid}/meta.conf"
-    cat > "$meta" <<EOF
+    if [[ "$st_now" = "spring" ]]; then
+      cat > "$meta" <<EOF
+mode=${mode}
+version=${version}
+git_ref=${ref}
+site_type=spring
+EOF
+    else
+      cat > "$meta" <<EOF
 mode=${mode}
 version=${version}
 git_ref=${ref}
 site_type=laravel
 EOF
+    fi
   else
     meta="${bid}/meta.conf"
     cat > "$meta" <<EOF
@@ -349,9 +359,9 @@ _webhook_restore_backup() {
   [[ -f "$meta" ]] || die "缺少 meta.conf"
 
   st="$(_webhook_read_kv "$meta" site_type)"
-  if [[ "$st" = "laravel" ]]; then
+  if [[ "$st" = "laravel" || "$st" = "spring" ]]; then
     local ref; ref="$(_webhook_read_kv "$meta" git_ref)"
-    [[ -n "$ref" ]] || die "Laravel 备份无 git_ref"
+    [[ -n "$ref" ]] || die "备份无 git_ref"
     [[ -d "${site_dir}/.git" ]] || die "站点无 .git，无法回退 git ref"
     _git_fetch_checkout "$site_dir" "$ref"
     DOMAIN="$domain"
@@ -812,6 +822,10 @@ PY
 
 _webhook_deploy_release() {
   local domain="$1" body_file="$2" release_name="${3:-}" release_tag="${4:-}" download_url="${5:-}"
+  if [[ "$(_site_type_for_domain "$domain")" = "spring" ]]; then
+    warn "站点 ${domain} 为 Spring 站点，跳过 release 压缩包（请用 git tag webhook 或 deploy-site update）"
+    return 1
+  fi
   local site_dir="${WWW_ROOT}/${domain}" wf asset_hint token tmp arch ver
   local mirror asset_file dl_urls=() proxied
   wf="$(site_webhook_file "$domain")"

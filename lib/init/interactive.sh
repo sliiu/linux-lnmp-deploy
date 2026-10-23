@@ -564,6 +564,7 @@ _interactive_full_install() {
     "FrankenPHP 栈 (php，含 Caddy；库/缓存可选)" \
     "Node.js (fnm)" \
     "PM2 (依赖 Node.js，deploy-site 用)" \
+    "Java 运行时（容器镜像，deploy-site --type=spring）" \
     "SSH 安全策略 (改端口/禁 root)" \
     "Firewalld (防火墙)" \
     "BBR (TCP 拥塞)" \
@@ -576,12 +577,12 @@ _interactive_full_install() {
     return
   fi
 
-  local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_node=0 sel_pm2=0 sel_wheel=0 sel_saferm=0
+  local sel_ssh=0 sel_cyber=0 sel_bbr=0 sel_zsh=0 sel_fire=0 sel_docker=0 sel_lnmp=0 sel_node=0 sel_pm2=0 sel_java=0 sel_wheel=0 sel_saferm=0
   for idx in $sel; do
     case "$idx" in
       0) sel_cyber=1 ;; 1) sel_docker=1 ;; 2) sel_lnmp=1 ;; 3) sel_node=1 ;;
-      4) sel_pm2=1 ;; 5) sel_ssh=1 ;;  6) sel_fire=1 ;;  7) sel_bbr=1 ;;
-      8) sel_zsh=1 ;; 9) sel_wheel=1 ;; 10) sel_saferm=1 ;;
+      4) sel_pm2=1 ;; 5) sel_java=1 ;; 6) sel_ssh=1 ;;  7) sel_fire=1 ;;  8) sel_bbr=1 ;;
+      9) sel_zsh=1 ;; 10) sel_wheel=1 ;; 11) sel_saferm=1 ;;
     esac
   done
 
@@ -592,6 +593,10 @@ _interactive_full_install() {
   if [[ $sel_pm2 -eq 1 && $sel_node -eq 0 ]] && ! is_node_ok; then
     info "已自动补充 Node.js（PM2 依赖）"
     sel_node=1
+  fi
+  if [[ $sel_java -eq 1 && $sel_docker -eq 0 ]] && ! is_docker_ok; then
+    info "已自动补充 Docker（Java 运行时是容器镜像）"
+    sel_docker=1
   fi
 
   # ── 收集顺序：等保加固(cyber) → 账号 → 网络/源 → 基础设施(docker) → 应用(lnmp) → 系统加固(ssh) ──
@@ -709,6 +714,7 @@ _interactive_full_install() {
     printf "  %-20s %s\n" "npm registry" "${NPM_REGISTRY:-官方}"
   fi
   if [[ $sel_pm2 -eq 1 ]]; then printf "  %-20s %s\n" "PM2" "安装"; fi
+  if [[ $sel_java -eq 1 ]]; then printf "  %-20s %s\n" "Java 运行时" "容器镜像"; fi
   if [[ $sel_saferm -eq 1 ]]; then printf "  %-20s %s\n" "saferm" "安装"; fi
   echo ""
 
@@ -727,6 +733,7 @@ _interactive_full_install() {
   if [[ $sel_lnmp -eq 1 ]]; then install_lnmp; fi
   if [[ $sel_node -eq 1 ]]; then install_node; fi
   if [[ $sel_pm2 -eq 1 ]]; then install_pm2; fi
+  if [[ $sel_java -eq 1 ]]; then install_java; fi
   if [[ $sel_zsh -eq 1 ]]; then install_zsh; fi
   if [[ $sel_ssh -eq 1 ]]; then install_ssh; fi
   if [[ $sel_saferm -eq 1 ]]; then install_saferm; fi
@@ -753,6 +760,7 @@ _interactive_install_one() {
       "Docker" \
       "Node.js (fnm)" \
       "PM2 (联动 Node.js)" \
+      "Java 运行时（容器镜像）" \
       "Devops 用户" \
       "Wheel 管理员" \
       "SSH 安全策略" \
@@ -806,15 +814,16 @@ _interactive_install_one() {
       10) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT
           if ! is_node_ok; then collect_github_proxy; collect_node_version; collect_npm_registry; fi
           install_pm2 ;;
-      11) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
-      12) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
-      13) collect_ssh_config; install_ssh ;;
-      14) install_firewall ;;
-      15) install_bbr ;;
-      16) collect_github_proxy; install_zsh ;;
-      17) install_saferm ;;
-      18) setup_cyber_users ;;
-      19) return 0 ;;
+      11) install_java ;;
+      12) prompt "devops 用户名" "${DEVOPS_USER:-devops}"; DEVOPS_USER=$PROMPT_RESULT; setup_devops_user ;;
+      13) prompt "wheel 管理员用户名" "${WHEEL_USER:-admin}"; WHEEL_USER=$PROMPT_RESULT; setup_wheel_user ;;
+      14) collect_ssh_config; install_ssh ;;
+      15) install_firewall ;;
+      16) install_bbr ;;
+      17) collect_github_proxy; install_zsh ;;
+      18) install_saferm ;;
+      19) setup_cyber_users ;;
+      20) return 0 ;;
     esac
     conf_save
     echo ""
@@ -836,10 +845,10 @@ _interactive_uninstall_one() {
 
     _labels+=(
       "LNMP - mysql" "LNMP - postgresql" "LNMP - redis" "LNMP - caddy" "LNMP - acme" "LNMP - phpMyAdmin"
-      "LNMP (全部)" "Docker" "PM2" "Node.js (fnm)" "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
+      "LNMP (全部)" "Docker" "PM2" "Node.js (fnm)" "Java 运行时（容器镜像）" "SSH (恢复默认)" "Firewalld" "BBR" "Oh-My-Zsh" "saferm"
       "返回主菜单"
     )
-    _actions+=(mysql postgres redis caddy acme phpmyadmin all docker pm2 node ssh firewall bbr zsh saferm back)
+    _actions+=(mysql postgres redis caddy acme phpmyadmin all docker pm2 node java ssh firewall bbr zsh saferm back)
 
     menu_select "选择要卸载的组件（高危操作前会二次确认）" "${_labels[@]}"
     idx=$MENU_SELECT_RESULT
@@ -862,6 +871,7 @@ _interactive_uninstall_one() {
       docker)     _danger_msg="将卸载 Docker（不删除 /var/lib/docker）；若已装 LNMP 会一并卸载" ;;
       pm2)        _danger_msg="将卸载 PM2（保留 Node.js / fnm）" ;;
       node)       _danger_msg="将卸载 Node.js / fnm（若已装 PM2 会一并卸载）" ;;
+      java)       _danger_msg="将删除 Spring 容器，并清掉宿主机上残留的 /opt/java、/opt/maven、/opt/gradle（不删除镜像，不删除站点代码）" ;;
       ssh)        _danger_msg="将恢复 sshd 默认（root/22 端口）" ;;
       firewall)   _danger_msg="将停止并禁用 firewalld" ;;
       bbr)        _danger_msg="将关闭 BBR" ;;
@@ -878,6 +888,7 @@ _interactive_uninstall_one() {
       docker)   uninstall_docker ;;
       pm2)      uninstall_pm2 ;;
       node)     uninstall_node ;;
+      java)     uninstall_java ;;
       ssh)      uninstall_ssh ;;
       firewall) uninstall_firewall ;;
       bbr)      uninstall_bbr ;;

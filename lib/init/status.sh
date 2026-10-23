@@ -6,6 +6,19 @@ _php_actual_suffix() {
   [[ -n "$v" ]] && printf '，实际 %s' "$v"
 }
 
+_java_status_image() {
+  local label="$1" img="$2"
+  if [[ -z "$img" ]]; then
+    printf "  %-20s %s\n" "$label" "未配置"
+    return 0
+  fi
+  if java_image_present "$img"; then
+    printf "  %-20s %s\n" "$label" "已拉取 ${img}"
+  else
+    printf "  %-20s %s\n" "$label" "未拉取 ${img}"
+  fi
+}
+
 show_status() {
   echo ""
   hr
@@ -57,6 +70,13 @@ show_status() {
     _s="未安装"
   fi
   printf "  %-20s %s\n" "PM2" "$_s"
+
+  if is_java_ok; then
+    _s="已安装"
+  else
+    _s="未安装"
+  fi
+  printf "  %-20s %s\n" "Java 运行时" "$_s"
 
   _s=$(is_cybersec_ok && echo "已加固" || echo "未配置")
   printf "  %-20s %s\n" "等保" "$_s"
@@ -115,6 +135,10 @@ show_status() {
     printf "  %-20s %s\n" "Node 镜像源" "${FNM_NODE_DIST_MIRROR:-${FNM_NODE_DIST_MIRROR_DEFAULT:-https://npmmirror.com/mirrors/node}}"
     printf "  %-20s %s\n" "npm registry" "${NPM_REGISTRY:-官方}"
   fi
+  _java_status_image "运行镜像" "${JAVA_IMAGE:-}"
+  _java_status_image "构建 JDK" "${JAVA_JDK_IMAGE:-}"
+  _java_status_image "Maven 镜像" "${MAVEN_IMAGE:-}"
+  _java_status_image "Gradle 镜像" "${GRADLE_IMAGE:-}"
   has_service "acme" && printf "  %-20s %s\n" "ACME SSL 默认" "${ACME_SSL_DNS_DEFAULT:-webroot}"
   echo ""
 }

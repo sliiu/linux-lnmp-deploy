@@ -71,10 +71,15 @@ usage() {
   --webhook-no-incremental  同 --webhook-incremental=n
   --rollback-to=版本|序号  rollback 目标（版本号或 history 序号）
   --rollback-index=N    rollback 序号（同 --rollback-to 数字形式）
-  --type=laravel|frontend|pm2|proxy  站点类型 [默认: laravel]
+  --type=laravel|frontend|pm2|spring|proxy  站点类型 [默认: laravel]
   --pm2-port=端口       PM2 监听端口（留空或 - = 自动分配）[默认: 3000 起]
   --pm2-cmd=命令        PM2 启动命令（留空=自动检测 ecosystem / npm start）
   --pm2-build=y|n       PM2 部署时是否执行 build [y]
+  --spring-port=端口    Spring 容器内 SERVER_PORT（留空或 - = 8080；不映射到宿主机，不写入防火墙）
+  --spring-jar=路径     可执行 jar，相对站点目录（留空=自动；多个候选时必须指定）
+  --spring-build=y|n    部署时是否构建。省略时：有 pom.xml 或 build.gradle(.kts) 则 y，否则 n
+  --spring-profiles=名  SPRING_PROFILES_ACTIVE [默认 prod]；留空或 - = 不设置该变量
+  --spring-java-opts=   追加到 java 命令的 JVM 参数（默认空，不设堆）
   --proxy-pass=URL      proxy 类型：反代上游（如 http://127.0.0.1:8080；localhost 自动改 Docker 网关）
   --php-version=主版本   站点 PHP 版本（如 8.2 / 8.3），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
                        写入 ${NGINX_CONF}/<域名>.php-version；Caddy / composer / artisan / cron / horizon 自动路由到对应容器
@@ -128,6 +133,8 @@ usage() {
   $0 add --domain=x.com --git=   # 或省略 --git，配合事先放入 ${DATA_DIR:-/data/docker-lnmp}/www/x.com
   $0 add --domain=legacy.com --git=... --php-version=7.4   # 该站使用 lnmp-php74
   $0 add --domain=api.example.com --type=pm2 --git=git@github.com:org/node-api.git --pm2-port=3000
+  $0 add --domain=api.example.com --type=spring --git=git@github.com:org/demo.git --spring-port=8080
+  $0 add --domain=api.example.com --type=spring --git=... --spring-build=n --spring-jar=app.jar --spring-profiles=prod
   $0 add --domain=app.example.com --type=proxy --proxy-pass=http://127.0.0.1:8080
   $0 add --domain=api.example.com --type=laravel --db-connection=pgsql --db-name=app --db-password=secret
   $0 update --domain=api.example.com --pm2-build=y
