@@ -50,9 +50,6 @@ _write_caddy_global() {
     cat > "${DATA_DIR}/caddy/Caddyfile" <<CADDY
 {
 ${_email}	frankenphp
-	servers {
-		protocols h1 h2 h3
-	}
 }
 
 import /etc/caddy/sites/*.caddy
@@ -60,10 +57,7 @@ CADDY
   else
     cat > "${DATA_DIR}/caddy/Caddyfile" <<CADDY
 {
-${_email}	servers {
-		protocols h1 h2 h3
-	}
-}
+${_email}}
 
 import /etc/caddy/sites/*.caddy
 CADDY

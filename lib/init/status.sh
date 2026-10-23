@@ -1,4 +1,11 @@
 # shellcheck shell=bash
+_php_actual_suffix() {
+  local v
+  container_ok "$1" || return 0
+  v=$(docker exec "$1" php -r 'echo PHP_VERSION;' 2>/dev/null) || true
+  [[ -n "$v" ]] && printf '，实际 %s' "$v"
+}
+
 show_status() {
   echo ""
   hr
@@ -13,7 +20,22 @@ show_status() {
   _s=$(is_firewall_on && echo "运行中" || echo "未安装")
   printf "  %-20s %s\n" "Firewalld" "$_s"
 
-  _s=$(is_docker_ok && echo "已安装 ($(docker -v 2>/dev/null | awk '{print $3}' | tr -d ','))" || echo "未安装")
+  if is_docker_ok; then
+    local _cli _eng
+    _cli=$(docker version -f '{{.Client.Version}}' 2>/dev/null || true)
+    _eng=$(docker version -f '{{.Server.Version}}' 2>/dev/null || true)
+    if [[ -n "$_eng" && -n "$_cli" && "$_eng" != "$_cli" ]]; then
+      _s="已安装 (engine ${_eng} / client ${_cli})"
+    elif [[ -n "$_eng" ]]; then
+      _s="已安装 (engine ${_eng})"
+    elif [[ -n "$_cli" ]]; then
+      _s="已安装 (${_cli})"
+    else
+      _s="已安装"
+    fi
+  else
+    _s="未安装"
+  fi
   printf "  %-20s %s\n" "Docker" "$_s"
 
   _s=$(is_zsh_ok && echo "已安装" || echo "未安装")
@@ -64,7 +86,8 @@ show_status() {
   while IFS= read -r _ev; do
     [[ -z "$_ev" ]] && continue
     _ec="$(_php_container_name "$_ev")"
-    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_ec}$"; then _s="运行中 (PHP ${_ev})"
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -q "^${_ec}$"; then
+      _s="运行中 (PHP ${_ev}$(_php_actual_suffix "$_ec"))"
     elif docker ps -a --format '{{.Names}}' 2>/dev/null | grep -q "^${_ec}$"; then _s="已停止 (PHP ${_ev})"
     else _s="未部署 (PHP ${_ev})"; fi
     printf "  %-20s %s\n" "${_ec}" "$_s"
@@ -81,7 +104,7 @@ show_status() {
     printf "  %-20s %s\n" "phpMyAdmin 监听" "${PHPMYADMIN_BIND:-127.0.0.1}:${PHPMYADMIN_PORT:-8080}"
   fi
   if has_service "php"; then
-    printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}"
+    printf "  %-20s %s\n" "PHP 版本（默认）" "${PHP_VERSION:-未配置}$(_php_actual_suffix lnmp-php)"
     printf "  %-20s %s\n" "PHP 版本（额外）" "${EXTRA_PHP_VERSIONS:-无}"
     printf "  %-20s %s\n" "PHP 系统源" "${ALPINE_MIRROR:-官方}"
   fi
