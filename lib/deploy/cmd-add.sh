@@ -1,5 +1,18 @@
 # shellcheck shell=bash
 
+# 显式指定了非本机容器名的 REDIS_HOST，视为第三方 Redis。不探测是否连通。
+_redis_is_external() {
+  [[ "${REDIS_HOST_FROM_CLI:-0}" -eq 1 && -n "${REDIS_HOST}" && "${REDIS_HOST}" != "redis" ]]
+}
+
+# 本机 lnmp-redis 在跑，或已指定第三方地址
+_redis_queue_available() {
+  if _redis_is_external; then
+    return 0
+  fi
+  container_ok "lnmp-redis"
+}
+
 setup_laravel() {
   local domain="$1"
   local site_dir="${WWW_ROOT}/${domain}"
@@ -11,11 +24,13 @@ setup_laravel() {
   fi
 
   local queue_conn="redis" session_drv="redis" cache_drv="redis"
-  if ! container_ok "lnmp-redis"; then
+  if ! _redis_queue_available; then
     queue_conn="sync"
     session_drv="file"
     cache_drv="file"
-    warn "lnmp-redis 未运行，队列 sync、session/cache 使用 file"
+    warn "无可用 Redis（本机 lnmp-redis 未运行，也未指定第三方 --redis-host），队列 sync、session/cache 使用 file"
+  elif _redis_is_external; then
+    info "使用第三方 Redis: ${REDIS_HOST}:${REDIS_PORT:-6379}（不探测连通性）"
   fi
 
   local lv; lv="$(_laravel_min_for_site "$domain")"
@@ -193,6 +208,7 @@ DOMAIN="" GIT_REPO="" GIT_BRANCH="" GIT_REF="" SITE_TYPE="" SITE_TYPE_CLI=0
 SITE_PHP_VERSION="" SITE_PHP_VERSION_CLI=0
 SITE_SSE_PREFIXES="" SITE_SSE_PREFIXES_CLI=0
 APP_NAME="" REDIS_HOST="" REDIS_PORT="" REDIS_PASSWORD=""
+REDIS_HOST_FROM_CLI=0
 REDIS_PASSWORD_FROM_CLI=0
 NEED_DB="" DB_CONNECTION="" DB_HOST="" DB_NAME="" DB_PWD="" DB_USERNAME="" DB_PORT=""
 DB_PWD_FROM_CLI=0
@@ -241,6 +257,7 @@ reset_menu_deploy_state() {
   REDIS_HOST=""
   REDIS_PORT=""
   REDIS_PASSWORD=""
+  REDIS_HOST_FROM_CLI=0
   REDIS_PASSWORD_FROM_CLI=0
   NEED_DB=""
   DB_CONNECTION=""
@@ -341,8 +358,8 @@ parse_args() {
         ;;
       --app-name=*)      APP_NAME="${1#*=}" ;;
       --app-name)        shift; APP_NAME="$1" ;;
-      --redis-host=*)    REDIS_HOST="${1#*=}" ;;
-      --redis-host)      shift; REDIS_HOST="$1" ;;
+      --redis-host=*)    REDIS_HOST="${1#*=}"; REDIS_HOST_FROM_CLI=1 ;;
+      --redis-host)      shift; REDIS_HOST="$1"; REDIS_HOST_FROM_CLI=1 ;;
       --redis-port=*)    REDIS_PORT="${1#*=}" ;;
       --redis-port)      shift; REDIS_PORT="$1" ;;
       --redis-password=*)
@@ -675,6 +692,35 @@ _collect_db_actions_interactive() {
   esac
 }
 
+# 本机没有 lnmp-redis 且未在命令行指定地址时，问一句要不要接第三方
+_collect_redis_interactive() {
+  if container_ok "lnmp-redis" || _redis_is_external; then
+    return 0
+  fi
+  local _i
+  menu_select "本机没有 lnmp-redis" \
+    "不用 Redis（队列 sync，不启用 Horizon）" \
+    "使用第三方 Redis"
+  _i=$MENU_SELECT_RESULT
+  [[ "$_i" -eq 1 ]] || return 0
+  while true; do
+    prompt_required "第三方 REDIS_HOST（PHP 容器须能访问，如 172.17.0.1 或公网地址）"
+    REDIS_HOST=$PROMPT_RESULT
+    [[ "$REDIS_HOST" != "redis" ]] && break
+    menu_fail "第三方地址不能是 redis（那是本机容器名，而 lnmp-redis 未运行）" || return 1
+  done
+  REDIS_HOST_FROM_CLI=1
+  if [[ -z "$REDIS_PORT" ]]; then
+    prompt "REDIS_PORT" "6379"
+    REDIS_PORT=$PROMPT_RESULT
+  fi
+  if [[ "${REDIS_PASSWORD_FROM_CLI:-0}" -ne 1 ]]; then
+    prompt "REDIS_PASSWORD（回车=无密码）" ""
+    REDIS_PASSWORD=$PROMPT_RESULT
+    REDIS_PASSWORD_FROM_CLI=1
+  fi
+}
+
 # 队列后台（cron / Horizon）合并为一次决策；据 PHP 版本作可行性提示
 _collect_queue_supervisor_interactive() {
   if [[ -n "${ADD_CRONTAB}${NEED_HORIZON}" ]]; then
@@ -925,6 +971,7 @@ collect_interactive() {
       _collect_db_actions_interactive
     fi
 
+    _collect_redis_interactive
     REDIS_HOST="${REDIS_HOST:-redis}"
     REDIS_PORT="${REDIS_PORT:-6379}"
     _collect_queue_supervisor_interactive

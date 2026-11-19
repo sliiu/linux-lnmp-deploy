@@ -496,7 +496,7 @@ Spring 容器和 Caddy、MySQL、Postgres、Redis 在同一个 Docker 网络上�
 - **SSE**：`**--sse-prefixes=**`、环境变量 `**LARAVEL_SSE_PREFIXES**`
 - `**status**`：`**--all**` 或 `**--domain**`
 - Laravel：`**--app-name**`、`**--db-connection=mysql|pgsql**`、`**--db-host**`、`**--db-port**`、`**--db-user**`、
-`**--redis-host**`、`**--redis-port**`、`**--redis-password**`、
+`**--redis-host**`、`**--redis-port**`、`**--redis-password**`（本机没有 `lnmp-redis` 时，`--redis-host` 填非 `redis` 的地址即接第三方；PHP 容器须能访问，脚本不探测连通性。都不指定则队列降为 `sync`，不启用 Horizon）、
 `**--need-db**`（默认 y）、`**--db-name**`、`**--db-password**`、
 `**--create-db**`、`**--run-migrate**`、`**--run-seed**`（默认 y）、`**--add-crontab**`、
 `**--need-horizon**`（默认 y）
