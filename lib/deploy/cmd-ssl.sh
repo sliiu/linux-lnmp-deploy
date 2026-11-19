@@ -84,7 +84,7 @@ usage() {
   --php-version=主版本   站点 PHP 版本（如 8.2 / 8.3），需在 init.sh 的 EXTRA_PHP_VERSIONS 中已声明；留空或 - = 走默认 lnmp-php
                        写入 ${NGINX_CONF}/<域名>.php-version；Caddy / composer / artisan / cron / horizon 自动路由到对应容器
   --app-name=名称       APP_NAME [Laravel]
-  --redis-host=         REDIS_HOST [redis]
+  --redis-host=         REDIS_HOST [redis]；本机 lnmp-redis 未运行时，指定非 redis 的地址即用第三方（不探测连通性）
   --redis-port=         REDIS_PORT [6379]
   --redis-password=     REDIS_PASSWORD；留空: --redis-password= 或 --redis-password 下一参数为另一选项
   --need-db=y|n         是否配置数据库 [y]
